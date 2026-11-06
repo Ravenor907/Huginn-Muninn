@@ -127,7 +127,7 @@ object VideoSend {
             catch (e: OutOfMemoryError) { Sent(false, "This phone ran out of memory making the copy.") }
             change { m -> if (r.ok) m - t else m + (t to Job(uri, failed = r.said)) }
             if (r.ok) { dropCameraClip(uri); next(t) }
-            app.chat.notices.tryEmit(r.said)
+            if (r.said.isNotEmpty()) app.chat.notices.tryEmit(r.said)
         }
         return true
     }
@@ -210,6 +210,19 @@ object VideoSend {
             return Sent(false, "Nobody here can get this video now. Their app is older: ask them to update.")
         val ms = info.ms
         val dir = VideoPick.dir(context)
+        // As small as a photo (one message over the relays, up to a minute) and everyone's app plays video messages: it goes
+        // into the chat at once, like a photo, at its own quality. Its copy still has location and camera details taken out.
+        if (ms <= More.VIDEO_MAX_MS && info.bytes in 1..Videos.SEND_MAX.toLong() && people.keys.all { chat.hasM2(it) }) {
+            val f = File(dir, "msg-" + System.nanoTime() + ".mp4")
+            val bad = VideoPick.fullCopy(context, uri, info, f, original = true) { step("Getting it ready", it) }
+            val bytes = if (bad == null) try { f.readBytes() } catch (_: Exception) { null } else null
+            f.delete()
+            if (bytes != null && Videos.fits(bytes.size) && More.isVideo(bytes)) {
+                step("Sending", 1f)
+                val why = if (t.group) chat.sendGroupVideo(t.g, t.ch, bytes, ms) else chat.sendVideo(t.peer, bytes, ms)
+                if (why == null) return Sent(true, "")
+            }
+        }
         val newApp = { k: String -> people[k]?.newPath == true }
         val shortEnough = ms <= GroupVideo.RELAY_MAX_MS + GroupVideo.SLACK_MS
         val notes = ArrayList<String>()

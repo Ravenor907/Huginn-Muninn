@@ -130,7 +130,7 @@ Item {
         }
         if ((plan.full || 0) + (plan.relay || 0) === 0) { offerFile("Send this video", plan.summary || ""); return }
         const r = Chat.sendPickedVideo(w, path, !!plan.inFull) || ({})
-        Ui.say(r.said || "", !r.ok)
+        if (r.said) Ui.say(r.said, !r.ok)
         next()
     }
     function sendClips(paths) {

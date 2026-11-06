@@ -290,6 +290,15 @@ QVariantMap Chat::sendPickedVideo(const QString &where, const QString &path, boo
         return result(false, QStringLiteral("Nobody here can get this video now. Their app is older: ask them to update."));
     QString g, ch;
     const bool group = groupOf(where, &g, &ch);
+    // As small as a photo (one message over the relays, up to a minute) and everyone's app plays video messages: it goes
+    // into the chat at once, like a photo, at its own quality, cleaned of location and camera details.
+    if (p.info.ms <= MoreWire::kVideoMaxMs && QFileInfo(path).size() > 0 && QFileInfo(path).size() <= Photos::kVideoSendBytes
+        && std::all_of(members.cbegin(), members.cend(), [this](const GroupVideo::Member &m) { return hasM2(m.k); })) {
+        QFile f(path);
+        const QByteArray clean = f.open(QIODevice::ReadOnly) ? GroupVideo::scrubbed(f.read(Photos::kVideoSendBytes + 1)) : QByteArray();
+        if (!clean.isEmpty() && clean.size() <= Photos::kVideoSendBytes && sendVideo(where, clean, qMax(1, p.info.ms)).isEmpty())
+            return result(true, QString());
+    }
     if (!group && !relay.isEmpty() && !hasM2(where)) {
         probeCaps(where);
         return result(false, nameOf(where) + QStringLiteral(" needs a newer Huginn or Muninn to get videos."));
