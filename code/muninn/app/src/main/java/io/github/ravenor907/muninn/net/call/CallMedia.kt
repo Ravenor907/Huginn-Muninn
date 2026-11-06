@@ -464,7 +464,7 @@ class CallMedia(
         // destination gets the packet once (the relay once per relayed address, not once per relay path).
         // Labs, Voice over two paths: voice also on the relay while it's allocated, next to Wi-Fi or Direct (the receiver
         // keeps the first copy). Off by default.
-        val dual = twoPaths && !peerTv && only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
+        val dual = twoPaths && !anyTv && only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
         val rest = only == null && freeFresh(now) && !dual
         for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest, alsoRelay = dual)) when (dst.kind) {
             // Group video goes peer to peer only, never through the relay (it stays on voice there).
@@ -560,12 +560,16 @@ class CallMedia(
      * The peer is a Kids' TV this phone manages: a TV box's weak decoder gets the light camera from the start
      * (VideoWire.light). Known only here, so nothing new goes on the wire.
      */
-    private val peerTv: Boolean by lazy {
-        try {
-            io.github.ravenor907.muninn.tv.TvParent.isManaged(peerKey) ||
-                // Any TV, not only one this phone looks after: its app says so with its version ("Muninn 1.48 · Android TV").
-                (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.chat?.contacts?.get(peerKey)?.app
-                    ?.let { io.github.ravenor907.muninn.net.AppVer.parse(it)?.platform == "Android TV" } == true
+    private val peerTv: Boolean by lazy { try { io.github.ravenor907.muninn.tv.TvParent.isManaged(peerKey) } catch (e: Throwable) { false } }
+
+    /**
+     * Any TV, not only one this phone looks after (its app says so with its version, "Muninn 1.48 · Android TV"). Only
+     * for Labs' voice over two paths, never toward a TV; the camera's size still follows [peerTv], as Huginn's does.
+     */
+    private val anyTv: Boolean by lazy {
+        peerTv || try {
+            (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.chat?.contacts?.get(peerKey)?.app
+                ?.let { io.github.ravenor907.muninn.net.AppVer.parse(it)?.platform == "Android TV" } == true
         } catch (e: Throwable) { false }
     }
 
