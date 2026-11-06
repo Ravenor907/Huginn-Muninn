@@ -74,7 +74,7 @@
     },
     {
      "id": "m4.4",
-     "text": "Settings, Files, Send media: Most private (Tor) shows Tor on the card. Automatic never does for Family."
+     "text": "Settings, Files, Send media: Automatic or Fastest only. Tor shows on a card only with Ultra privacy on."
     },
     {
      "id": "m4.5",
@@ -92,7 +92,7 @@
    "checks": [
     {
      "id": "m5.1",
-     "text": "Read a message in Female, switch to Male without closing the app: he reads the words, right away, with no download."
+     "text": "Read a message aloud: one voice, Female, reads the words clearly. A phone or PC that had Male frees its space."
     },
     {
      "id": "m5.2",

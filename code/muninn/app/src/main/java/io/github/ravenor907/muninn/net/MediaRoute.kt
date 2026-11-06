@@ -7,17 +7,17 @@ import java.time.ZoneOffset
  * How photos, videos and files travel (Settings › Files › Send media, and each chat's own choice), and what the call relay
  * may carry. Family and trusted contacts get the fewest limits: whatever they send arrives by itself at full quality,
  * straight to them when that works, otherwise through the call relay, encrypted end to end (cap f5, protocol.md 32).
- * Tor only when it's chosen, Ultra privacy is on, or for someone outside Family and trusted contacts, who has no other way
- * (the card says so). Plain Kotlin, so the tests check it; Huginn's filelink.cpp follows the same rules.
+ * Tor only with Ultra privacy on. Plain Kotlin, so the tests check it; Huginn's filelink.cpp follows the same rules.
  */
 object MediaRoute {
     /** Their app can carry a file over a call relay allocation. Said after the first 48 caps (see Proto06.CAPS). */
     const val CAP = "f5"
     const val AUTO = "auto"
     const val FASTEST = "fastest"
+    /** No longer offered (Tor is Ultra privacy's alone): a saved "tor" reads as Automatic. */
     const val TOR = "tor"
-    val CHOICES = listOf(AUTO, FASTEST, TOR)
-    fun label(c: String) = when (c) { FASTEST -> "Fastest"; TOR -> "Most private (Tor)"; else -> "Automatic" }
+    val CHOICES = listOf(AUTO, FASTEST)
+    fun label(c: String) = when (c) { FASTEST -> "Fastest"; else -> "Automatic" }
     fun clean(c: String?) = if (c in CHOICES) c!! else AUTO
 
     /** A chat's own choice if it has one, else the one in Settings. */
@@ -33,8 +33,8 @@ object MediaRoute {
      */
     fun relayMay(choice: String, ultra: Boolean, family: Boolean, peerCan: Boolean) = !ultra && choice != TOR && family && peerCan
 
-    /** Tor may carry it: chosen, Ultra privacy, or the call relay can't (outside Family and trusted, an older app, a used-up month). */
-    fun torMay(choice: String, ultra: Boolean, relay: Boolean) = ultra || choice == TOR || !relay
+    /** Tor carries files only with Ultra privacy on. */
+    fun torMay(ultra: Boolean) = ultra
 
     /** How long the direct way gets before the relay is tried. */
     fun punchMs(choice: String, relay: Boolean) = if (relay && choice == FASTEST) FASTEST_PUNCH_MS else FileLink.PUNCH_MS

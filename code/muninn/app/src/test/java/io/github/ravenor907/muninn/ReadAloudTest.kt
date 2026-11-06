@@ -45,10 +45,10 @@ class ReadAloudTest {
         val h = ReadAloudText.hashes("# comment\n$a64  voice-female-1.tar\nnothex  voice-male-1.tar\n${"b".repeat(64)} one-space.tar\n")
         assertEquals(mapOf("voice-female-1.tar" to a64), h)
         assertEquals("voice-female-1.tar", ReadAloudText.fileFor("f"))
-        assertEquals("voice-male-1.tar", ReadAloudText.fileFor("m"))
+        assertEquals("voice-female-1.tar", ReadAloudText.fileFor("m"))   // Male is retired
         assertEquals("voice-female-1.tar", ReadAloudText.fileFor("x"))
         assertEquals("f", ReadAloudText.voiceOf(null))
-        assertEquals("m", ReadAloudText.voiceOf("m"))
+        assertEquals("f", ReadAloudText.voiceOf("m"))
         // The file both apps build in parses.
         val shared = File("../../shared/voices.sha256").takeIf { it.isFile } ?: File("../shared/voices.sha256")
         if (shared.isFile) ReadAloudText.hashes(shared.readText()).values.forEach { assertTrue(Regex("[0-9a-f]{64}").matches(it)) }
@@ -175,12 +175,13 @@ class ReadAloudTest {
         assertEquals(0f, ReadAloudText.qtRate(100f), 1e-6f)
         assertEquals(0.6f, ReadAloudText.qtRate(150f), 1e-6f)
         assertEquals(-0.4f, ReadAloudText.qtRate(80f), 1e-6f)
-        // Settings' picks: Female, Male or Device; the device's own never reaches a Kids' Device.
+        // Settings' picks: Female or Device (Male is retired); the device's own never reaches a Kids' Device.
         assertEquals("d", ReadAloudText.choiceOf("d"))
         assertEquals("f", ReadAloudText.choiceOf("x"))
         assertEquals("f", ReadAloudText.voiceOf("d"))
         assertFalse("d" in ReadAloudText.VOICES)
-        assertEquals(listOf("f", "m", "d"), ReadAloudText.CHOICES.map { it.first })
+        assertEquals(listOf("f", "d"), ReadAloudText.CHOICES.map { it.first })
+        assertEquals("f", ReadAloudText.choiceOf("m"))
     }
 
     @Test fun kidSpeedField() {

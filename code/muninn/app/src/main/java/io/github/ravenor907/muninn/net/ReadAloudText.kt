@@ -10,9 +10,10 @@ import java.io.InputStream
  * voice's tar safely.
  */
 object ReadAloudText {
-    /** The voices: Female (Alba, the default) and Male (northern English). */
+    /** The voice: Female (Alba). Male is retired: "m" is still taken from older apps and configs, and reads as Female. */
     const val FEMALE = "f"
     const val MALE = "m"
+    /** What older apps and configs may say (never refused, so an older parent's config still goes through). */
     val VOICES = listOf(FEMALE, MALE)
     /** The longest piece spoken at once. */
     const val MAX_PIECE = 400
@@ -28,12 +29,13 @@ object ReadAloudText {
     /** The device's own voice, picked in Settings (never a natural voice, nothing downloads). Never sent to a Kids' Device. */
     const val DEVICE = "d"
     /** Settings' three choices, in order. */
-    val CHOICES = listOf(FEMALE to "Female", MALE to "Male", DEVICE to "Device")
+    val CHOICES = listOf(FEMALE to "Female", DEVICE to "Device")
 
-    /** "f" or "m"; anything else is Female. */
-    fun voiceOf(v: String?): String = if (v == MALE) MALE else FEMALE
+    /** Always Female (Male is retired). */
+    @Suppress("UNUSED_PARAMETER")
+    fun voiceOf(v: String?): String = FEMALE
 
-    /** Settings' pick: "f", "m" or "d"; anything else is Female. */
+    /** Settings' pick: "f" or "d"; anything else is Female. */
     fun choiceOf(v: String?): String = if (v == DEVICE) DEVICE else voiceOf(v)
 
     // ---- Read aloud speed (1.43): how fast words are spoken, 70% to 130% of the voice's usual pace, 100% until moved.
@@ -109,10 +111,12 @@ object ReadAloudText {
     const val SPEECH_FOLDER = "speech"
 
     /** The release file for [voice]. */
-    fun fileFor(voice: String): String = if (voice == MALE) "voice-male-1.tar" else "voice-female-1.tar"
+    @Suppress("UNUSED_PARAMETER")
+    fun fileFor(voice: String): String = "voice-female-1.tar"
 
     /** The voice's folder, with its release, so a later voices-2 never mixes with these files. */
-    fun folderFor(voice: String): String = if (voice == MALE) "male-1" else "female-1"
+    @Suppress("UNUSED_PARAMETER")
+    fun folderFor(voice: String): String = "female-1"
 
     private val LINK = Regex("""(?:https?://|www\.)\S+""", RegexOption.IGNORE_CASE)
     private val MARKS = Regex("[*~`|]+")

@@ -13,7 +13,9 @@ class MediaRouteTest {
     @Test
     fun aChatsOwnChoiceComesFirst() {
         assertEquals(MediaRoute.AUTO, MediaRoute.chosen(null, null))
-        assertEquals(MediaRoute.TOR, MediaRoute.chosen(null, MediaRoute.TOR))
+        // Tor is no longer a choice: a saved one reads as Automatic.
+        assertEquals(MediaRoute.AUTO, MediaRoute.chosen(null, MediaRoute.TOR))
+        assertEquals(MediaRoute.AUTO, MediaRoute.chosen(MediaRoute.TOR, null))
         assertEquals(MediaRoute.FASTEST, MediaRoute.chosen(MediaRoute.FASTEST, MediaRoute.TOR))
         assertEquals(MediaRoute.AUTO, MediaRoute.chosen("nonsense", "nonsense"))
     }
@@ -28,13 +30,9 @@ class MediaRouteTest {
     }
 
     @Test
-    fun torIsNeverPickedSilentlyForFamily() {
-        assertFalse(MediaRoute.torMay(MediaRoute.AUTO, false, true))
-        assertFalse(MediaRoute.torMay(MediaRoute.FASTEST, false, true))
-        assertTrue(MediaRoute.torMay(MediaRoute.TOR, false, true))
-        assertTrue(MediaRoute.torMay(MediaRoute.AUTO, true, true))
-        // Someone outside Family and trusted contacts has no other way over the internet; the card says Tor.
-        assertTrue(MediaRoute.torMay(MediaRoute.AUTO, false, false))
+    fun torIsUltraPrivacyOnly() {
+        assertFalse(MediaRoute.torMay(false))
+        assertTrue(MediaRoute.torMay(true))
         assertFalse(MediaRoute.directMay(MediaRoute.TOR, false))
         assertFalse(MediaRoute.directMay(MediaRoute.AUTO, true))
     }

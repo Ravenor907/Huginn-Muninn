@@ -50,7 +50,8 @@ const char *kDownload = "https://github.com/Ravenor907/Huginn-Muninn/releases/do
 // A plain agent with no app name or version, as the updater sends.
 const char *kAgent = "Mozilla/5.0";
 // The voice's folder name, with its release, so a later voices-2 never mixes with these files.
-QString folderFor(const QString &voice) { return voice == QLatin1String("m") ? QStringLiteral("male-1") : QStringLiteral("female-1"); }
+// One natural voice (Female); the retired Male's "m" reads as Female.
+QString folderFor(const QString &) { return QStringLiteral("female-1"); }
 // Room for the download, unpacking and the rest of the disk.
 constexpr qint64 kRoom = 300LL * 1024 * 1024;
 
@@ -620,7 +621,8 @@ ReadAloud::Tune ReadAloud::tuneFor(const QString &id)
 
 QString ReadAloud::tuneOf(const QString &voice) const
 {
-    const QString v = voice == QLatin1String("m") ? QStringLiteral("m") : QStringLiteral("f");
+    Q_UNUSED(voice)
+    const QString v = QStringLiteral("f");
     return QString::fromLatin1(tuneFor(Settings::store().value(QStringLiteral("readAloud/tune/") + v).toString()).id);
 }
 
@@ -643,7 +645,7 @@ QString ReadAloud::tuningText(const QString &id) const
 QString ReadAloud::tryTuning(const QString &id)
 {
     if (useDevice())
-        return QStringLiteral("Pick Female or Male in Read aloud first.");
+        return QStringLiteral("Pick Female in Read aloud first.");
     if (!natural())
         return QStringLiteral("Natural voices aren't ready yet.");
     if (!ready()) {
@@ -676,7 +678,7 @@ QString ReadAloud::summary() const
     if (!isOn())
         return QStringLiteral("Off");
     const QString name = useDevice() || !natural() ? QStringLiteral("Device")
-        : naturalVoice() == QLatin1String("m") ? QStringLiteral("Male") : QStringLiteral("Female");
+        : QStringLiteral("Female");
     const QString pace = speedText(speed());
     if (name != QLatin1String("Device") && ready() && pace == QLatin1String("100%"))
         return name + QStringLiteral(" voice, ready");
@@ -701,7 +703,7 @@ bool ReadAloud::deviceCan() const
 
 void ReadAloud::recoverUnpacked()
 {
-    for (const QString &v : {QStringLiteral("f"), QStringLiteral("m")}) {
+    for (const QString &v : {QStringLiteral("f")}) {
         const QString dir = voiceDir(v);
         if (QFileInfo::exists(dir + QStringLiteral(".new/.unpacked")) && !QFileInfo::exists(dir + QStringLiteral("/model.onnx")))
             placeUnpacked(dir);
@@ -710,8 +712,7 @@ void ReadAloud::recoverUnpacked()
 
 QString ReadAloud::naturalVoice() const
 {
-    return Settings::store().value(QStringLiteral("readAloud/voice"), QStringLiteral("f")).toString() == QLatin1String("m")
-        ? QStringLiteral("m") : QStringLiteral("f");
+    return QStringLiteral("f");   // Male is retired
 }
 
 QString ReadAloud::voice() const
@@ -721,7 +722,7 @@ QString ReadAloud::voice() const
 
 void ReadAloud::setVoice(const QString &v)
 {
-    const QString pick = v == QLatin1String("m") ? QStringLiteral("m") : v == QLatin1String("d") ? QStringLiteral("d") : QStringLiteral("f");
+    const QString pick = v == QLatin1String("d") ? QStringLiteral("d") : QStringLiteral("f");
     if (pick == voice())
         return;
     Settings::store().setValue(QStringLiteral("readAloud/voice"), pick);
@@ -1304,9 +1305,9 @@ void ReadAloud::releaseEngine(std::function<void()> then)
 void ReadAloud::cleanOther()
 {
     releaseEngine([this] {
-        // Both natural voices stay, so a switch never downloads anything again; only leftovers go. A download under way
-        // (its part and its unpack folder) stays.
-        const QStringList keep{folderFor(QStringLiteral("f")), folderFor(QStringLiteral("m")), QStringLiteral("speech")};
+        // The one natural voice stays; the retired Male voice and leftovers go. A download under way (its part and its
+        // unpack folder) stays.
+        const QStringList keep{folderFor(QStringLiteral("f")), QStringLiteral("speech")};
         const QDir d(voicesDir());
         for (const QString &e : d.entryList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
             if (keep.contains(e) || (!m_downloading.isEmpty() && (e.startsWith(fileFor(m_downloading)) || e.startsWith(folderFor(m_downloading)))))
@@ -1798,7 +1799,8 @@ QHash<QString, QString> ReadAloud::hashes(const QByteArray &text)
 
 QString ReadAloud::fileFor(const QString &voice)
 {
-    return voice == QLatin1String("m") ? QStringLiteral("voice-male-1.tar") : QStringLiteral("voice-female-1.tar");
+    Q_UNUSED(voice)
+    return QStringLiteral("voice-female-1.tar");
 }
 
 bool ReadAloud::safeName(const QString &name)
@@ -2022,7 +2024,7 @@ bool ReadAloud::selfTest()
     const QHash<QString, QString> h = hashes(QStringLiteral("# comment\n%1  voice-female-1.tar\nnothex  voice-male-1.tar\n%2 one-space.tar\n")
                                                  .arg(a64, QString(64, QLatin1Char('b'))).toUtf8());
     check("hashes read", h.size() == 1 && h.value(QStringLiteral("voice-female-1.tar")) == a64);
-    check("voice files", fileFor(QStringLiteral("f")) == QLatin1String("voice-female-1.tar") && fileFor(QStringLiteral("m")) == QLatin1String("voice-male-1.tar")
+    check("voice files", fileFor(QStringLiteral("f")) == QLatin1String("voice-female-1.tar") && fileFor(QStringLiteral("m")) == QLatin1String("voice-female-1.tar")
                              && fileFor(QStringLiteral("x")) == QLatin1String("voice-female-1.tar"));
     QFile built(QStringLiteral(":/huginn/voices.sha256"));
     check("voices.sha256 is built in", built.open(QIODevice::ReadOnly));

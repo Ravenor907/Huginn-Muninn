@@ -96,6 +96,7 @@ GroupVideo::Member Chat::videoMember(const QString &key, bool group) const
     // Family and trusted, with an app that can go through the call relay: full quality, whatever the length and the network,
     // until the relay's month is used up or Data saver says otherwise.
     m.family = m_files && m_files->relayPlan(key, QString()) && !m_files->relayOver() && !Settings::dataSaverOn();
+    m.reach = m.family || (m_files && m_files->reachNote(key).isEmpty());
     return m;
 }
 
@@ -388,13 +389,13 @@ QVariantMap Chat::sendPickedVideo(const QString &where, const QString &path, boo
         if (!fullNow.isEmpty())
             parts << QStringLiteral("full size to %1").arg(fullNow.size());
         if (!smallNow.isEmpty())
-            parts << QStringLiteral("a 720p copy over Tor to %1").arg(smallNow.size());
+            parts << QStringLiteral("a 720p copy to %1").arg(smallNow.size());
         if (!relayNow.isEmpty())
             parts << QStringLiteral("a smaller copy to %1 with older apps").arg(relayNow.size());
         if (!group && !fullNow.isEmpty())
             Q_EMIT self->notice(QStringLiteral("Sending the video full size."));
         else if (!group && !smallNow.isEmpty())
-            Q_EMIT self->notice(QStringLiteral("Sending a 720p copy of the video over Tor. It can take a while."));
+            Q_EMIT self->notice(QStringLiteral("Sending a 720p copy of the video."));
         else if (!group)
             Q_EMIT self->notice(QStringLiteral("Sending the video. Its pieces go a few a second, so it can take a few minutes."));
         else

@@ -358,7 +358,7 @@ Rectangle {
             { group: "Backup", kind: "button", key: "restore", title: "Restore from a backup", note: "Any backup file from Huginn or Muninn", label: "Restore", enabled: Vault.exists && !Vault.busy },
             { group: "Files", kind: "button", key: "saveFolder", title: "Save files to", note: Transfer.saveName + "/Huginn", label: "Change" },
             { group: "Files", kind: "segmented", key: "mediaRoute", title: "Send media", note: Chat.relayNote() || "Family and trusted: full quality",
-              options: [{ value: "auto", label: "Automatic" }, { value: "fastest", label: "Fastest" }, { value: "tor", label: "Most private (Tor)" }] },
+              options: [{ value: "auto", label: "Automatic" }, { value: "fastest", label: "Fastest" }] },
             { group: "Files", kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Use Downloads again", label: "Reset" },
             { group: "Files", kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" }
         ], [
@@ -383,7 +383,7 @@ Rectangle {
             { kind: "info", title: "Made by Ravenor907", note: "GPL-3.0. Fonts: SIL Open Font License" },
             // Read aloud's voices and speech engine (code/shared/licenses/natural-voices.txt).
             { group: "Credits and licenses", kind: "info", title: "Natural voices",
-              note: "Alba (CC BY 4.0) and Northern English Male (CC BY-SA 4.0), Piper voices by Michael Hansen" },
+              note: "Alba (CC BY 4.0), a Piper voice by Michael Hansen" },
             { group: "Credits and licenses", kind: "info", title: "Speech engine",
               note: "sherpa-onnx (Apache-2.0), ONNX Runtime (MIT) and eSpeak NG (GPL-3.0). License texts: " + (System.portable ? "lib/licenses beside Huginn.exe" : "share/licenses in the app") },
             // Ultra privacy's Tor (code/shared/licenses/Tor-BSD-3-Clause.txt).
@@ -439,7 +439,7 @@ Rectangle {
         const name = typeof ReadAloud.naturalName === "function" ? String(ReadAloud.naturalName() || "") : ""
         return [
             { group: "Try a preset", kind: "info", title: name !== "" ? name + " voice" : "Natural voice",
-              note: ReadAloud.voice === "d" ? "Pick Female or Male in Read aloud to tune it" : "Reads stanza 3 and what it means" },
+              note: ReadAloud.voice === "d" ? "Pick Female in Read aloud to tune it" : "Reads stanza 3 and what it means" },
             { group: "Try a preset", kind: "segmented", key: "tuneTry", tune: true, title: "Preset", value: page.tuneNow, options: opts },
             { group: "Try a preset", kind: "button", key: "tuneHear", title: "Hear it", note: String(ReadAloud.tuningText(page.tuneNow) || ""), label: "Play" },
             { group: "Try a preset", kind: "button", key: "tuneUse", title: "Use this", note: page.tuneNow === page.tuneInUse ? "In use" : "",
@@ -1197,7 +1197,7 @@ Rectangle {
         if (r.aloud && r.key === "voice" && v !== ReadAloud.voice && ReadAloud.hasFiles) {
             // A voice is already in: switching downloads the other one (about 65 MB) and deletes this one, so ask
             // first (one stray Left or Right on the controller shouldn't start it).
-            Ui.sure("Switch to the " + (v === "m" ? "male" : "female") + " voice?",
+            Ui.sure("Switch to the natural voice?",
                     "Huginn downloads it (about 65 MB), then deletes the voice it has now.", "Switch", () => { ReadAloud.voice = v })
             return
         }

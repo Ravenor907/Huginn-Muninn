@@ -135,7 +135,7 @@ internal fun readAloudRowValue(): String {
         if (!ReadAloud.isOn(ctx)) "Off"
         else {
             val v = ReadAloud.ownVoice(ctx)
-            val name = if (v == ReadAloudText.DEVICE || !ReadAloud.natural(ctx)) "Device" else if (v == ReadAloudText.MALE) "Male" else "Female"
+            val name = if (v == ReadAloudText.DEVICE || !ReadAloud.natural(ctx)) "Device" else "Female"
             val speed = ReadAloudText.speedText(ReadAloud.ownSpeed(ctx))
             if (name != "Device" && ReadAloud.ready(ctx) && speed == "100%") "$name voice, ready" else "$name voice, $speed"
         }
@@ -145,7 +145,7 @@ internal fun readAloudRowValue(): String {
 /** About › More: the natural voices and the speech engine, with their licenses (code/shared/licenses/natural-voices.txt). */
 @Composable
 internal fun VoiceCredits() {
-    Text("Natural voices: Alba (CC BY 4.0) and Northern English Male (CC BY-SA 4.0), Piper voices by Michael Hansen.",
+    Text("Natural voice: Alba (CC BY 4.0), a Piper voice by Michael Hansen.",
         style = Type.small, modifier = Modifier.padding(top = 10.dp))
     Text("Licenses: speech engine sherpa-onnx (Apache-2.0) with ONNX Runtime (MIT) and eSpeak NG (GPL-3.0). " +
         "Each voice's model card comes with its download.", style = Type.small, modifier = Modifier.padding(top = 6.dp, bottom = 6.dp))

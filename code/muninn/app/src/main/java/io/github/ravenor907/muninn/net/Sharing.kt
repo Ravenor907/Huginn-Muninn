@@ -106,7 +106,7 @@ object Sharing {
         "rules" -> "Refused by the group's file rules."
         "space" -> "Not enough space on their device."
         "no" -> "They declined."
-        "tor" -> "They take files over Tor only. Set this chat's Send media to Most private."
+        "tor" -> "They have Ultra privacy on. It can come on the same Wi-Fi, or over Tor with Ultra privacy on here too."
         else -> "They declined, or direct files are off on their side (Trusted direct, or Ultra privacy)."
     }
 }

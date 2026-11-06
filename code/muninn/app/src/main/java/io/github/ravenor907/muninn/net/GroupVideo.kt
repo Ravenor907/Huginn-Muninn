@@ -213,16 +213,17 @@ object GroupVideo {
      * Trusted direct on for each other (and allowed now: never under this phone's Ultra privacy). [files]: their
      * app takes straight files here (f1, and f2 in a group). [v3]: their app takes a video offer. [kid]: a kids' device
      * (never full size: the 720p copy, or the relay copy on an older app). [relayOnly]: their app asked for nothing
-     * straight. [newPath]: their app has [NEW_PATH_CAP] (files and the 720p copy over Tor; no relay video).
+     * straight. [newPath]: their app has [NEW_PATH_CAP] (files and the 720p copy through FileLink; no relay video).
+     * [reach]: FileLink has a way to them now (the same Wi-Fi, trusted direct, the call relay, or Tor under Ultra privacy).
      */
     data class Member(val k: String, val sameWifi: Boolean, val trusted: Boolean, val files: Boolean, val v3: Boolean,
                       val kid: Boolean = false, val relayOnly: Boolean = false, val newPath: Boolean = false,
                       /** Family or trusted, and the call relay can carry it when direct doesn't work: full quality, no length limit. */
-                      val family: Boolean = false)
+                      val family: Boolean = false, val reach: Boolean = true)
 
     /** Full size, direct (FileLink with "vid"). */
     const val FULL = "full"
-    /** The 720p copy through FileLink (Tor when there's no direct path). New apps only. */
+    /** The 720p copy through FileLink. New apps only. */
     const val SMALL = "small"
     /** The old relay copy, paced. Older apps only. */
     const val RELAY = "relay"
@@ -242,7 +243,7 @@ object GroupVideo {
     fun delivery(m: Member, unmetered: Boolean, ms: Int): String = when {
         fullOk(m) && m.family -> FULL
         fullOk(m) && direct(m, unmetered) && (m.newPath || ms <= OLD_FULL_MAX_MS + SLACK_MS) -> FULL
-        m.newPath && m.v3 -> if (ms <= SMALL_MAX_MS + SLACK_MS) SMALL else NONE
+        m.newPath && m.v3 && m.reach -> if (ms <= SMALL_MAX_MS + SLACK_MS) SMALL else NONE
         ms <= RELAY_MAX_MS + SLACK_MS -> RELAY
         else -> NONE
     }
@@ -266,9 +267,9 @@ object GroupVideo {
         val none = of(NONE)
         return listOfNotNull(
             full.takeIf { it.isNotEmpty() }?.let { "Full quality to ${names(it)}." },
-            small.takeIf { it.isNotEmpty() }?.let { "A 720p copy to ${names(it)} over Tor (slower)." },
+            small.takeIf { it.isNotEmpty() }?.let { "A 720p copy to ${names(it)}." },
             relay.takeIf { it.isNotEmpty() }?.let { "A smaller copy (720p, up to 20 seconds) to ${names(it)}, whose app is older." },
-            none.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: their app is older. Ask them to update." },
+            none.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: no way to reach them with this one now. Try on the same Wi-Fi." },
         ).joinToString(" ").ifEmpty { "Nobody else is here yet." }
     }
 
@@ -335,7 +336,7 @@ object GroupVideo {
         failed -> "$name: didn't go. Tap Retry on its card, or send it again"
         how == FULL -> "$name: full size (see its card)"
         how == SMALL -> "$name: 720p copy (see its card)"
-        how == NONE -> "$name: not sent (their app is older)"
+        how == NONE -> "$name: not sent (no way to reach them now)"
         total <= 0 || sent >= total -> "$name: smaller copy, sent"
         else -> "$name: smaller copy, ${sent * 100 / total}% sent"
     }

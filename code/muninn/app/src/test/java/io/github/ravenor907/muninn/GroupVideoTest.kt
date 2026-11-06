@@ -123,10 +123,13 @@ class GroupVideoTest {
         assertEquals(GroupVideo.FULL, GroupVideo.delivery(wifi, unmetered = false, ms = 10_000))
         assertEquals(GroupVideo.FULL, GroupVideo.delivery(wifi, unmetered = false, ms = 45 * min))
         assertEquals(GroupVideo.FULL, GroupVideo.delivery(trusted, unmetered = true, ms = 45 * min))
-        // Not direct (or trusted over mobile data): the 720p copy over Tor, up to 5 minutes, never the relays.
+        // Not direct (or trusted over mobile data): the 720p copy through FileLink, up to 5 minutes, never the relays.
         assertEquals(GroupVideo.SMALL, GroupVideo.delivery(trusted, unmetered = false, ms = 10_000))
         assertEquals(GroupVideo.SMALL, GroupVideo.delivery(far, unmetered = true, ms = 5 * min))
         assertEquals(GroupVideo.NONE, GroupVideo.delivery(far, unmetered = true, ms = 6 * min))
+        // No way to them now (Tor is Ultra privacy's alone): the short relay copy, else nothing.
+        assertEquals(GroupVideo.RELAY, GroupVideo.delivery(far.copy(reach = false), unmetered = true, ms = 15_000))
+        assertEquals(GroupVideo.NONE, GroupVideo.delivery(far.copy(reach = false), unmetered = true, ms = min))
         // A kids' device gets the 720p path, even close by.
         assertEquals(GroupVideo.SMALL, GroupVideo.delivery(kid, unmetered = true, ms = 10_000))
         // Older apps: full size up to a minute when direct, the relay copy up to 20 s, else nothing.
@@ -140,7 +143,7 @@ class GroupVideoTest {
         val plan = GroupVideo.plan(listOf(wifi, trusted, far, oldFar), unmetered = false, ms = 15_000)
         assertEquals(mapOf("a" to GroupVideo.FULL, "b" to GroupVideo.SMALL, "c" to GroupVideo.SMALL, "h" to GroupVideo.RELAY), plan)
         val said = GroupVideo.summary(plan) { it.uppercase() }
-        assertTrue(said, said.contains("Full quality to A") && said.contains("720p copy to B and C over Tor") && said.contains("to H, whose app is older"))
+        assertTrue(said, said.contains("Full quality to A") && said.contains("720p copy to B and C.") && said.contains("to H, whose app is older"))
         assertEquals("Nobody else is here yet.", GroupVideo.summary(emptyMap()) { it })
         assertEquals("A, B and 3 more", GroupVideo.names(listOf("A", "B", "C", "D", "E")))
         // Never cut: over 5 minutes asks only when someone isn't direct; bigger than 720p asks only when someone gets a copy.

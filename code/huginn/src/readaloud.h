@@ -120,7 +120,7 @@ public:
     // "A: noise 0.667, width 0.8", for the owner to report.
     Q_INVOKABLE QString tuningText(const QString &id) const;
     // The natural voice's name for the tuning page: "Female" or "Male".
-    Q_INVOKABLE QString naturalName() const { return naturalVoice() == QLatin1String("m") ? QStringLiteral("Male") : QStringLiteral("Female"); }
+    Q_INVOKABLE QString naturalName() const { return QStringLiteral("Female"); }
     // main.cpp: true while nothing may be read (the lock is up, the screen lock shows, a call is on). speak() checks it.
     void setBlocker(std::function<bool()> blocked) { m_blocked = std::move(blocked); }
 

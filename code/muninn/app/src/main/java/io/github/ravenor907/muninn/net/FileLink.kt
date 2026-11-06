@@ -754,7 +754,7 @@ object FileLink {
         if (h.lanAddress(peer) != null && h.hasF2(peer)) return ""
         if (!h.online()) return NO_PATH
         val direct = h.trusted(peer) && UltraPrivacy.directAllowed
-        return if (direct || h.torAllowed() || relayPlan(peer, "")) "" else NO_PATH
+        return if (direct || (!UltraPrivacy.directAllowed && h.torAllowed()) || relayPlan(peer, "")) "" else NO_PATH
     }
 
     /** Cap f5: the call relay may carry a file to [peer] now. */
@@ -802,8 +802,8 @@ object FileLink {
         val peerCan = h.hasF5(peer)
         val trust = h.trusted(peer) && MediaRoute.directMay(choice, ultra)
         val relay = MediaRoute.relayMay(choice, ultra, family, peerCan) && !h.relayStopped()
-        // Tor only by choice while the relay can carry it; an older app (or a used-up month) still gets Tor.
-        val tor = f4 && h.torAllowed() && MediaRoute.torMay(choice, ultra, relay)
+        // Tor only with Ultra privacy on.
+        val tor = f4 && h.torAllowed() && MediaRoute.torMay(ultra)
         if (lan == null && !trust && !tor && !relay) return "no path"
         val lanOnly = !trust
         if (id in stopped) { file.delete(); return null }   // Cancel while it was being made ready

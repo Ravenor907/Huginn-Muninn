@@ -3572,10 +3572,10 @@ Huginn keeps the first 48 and doesn't know the rest, which is the right answer f
 
 - Automatic: the same Wi-Fi, then Trusted direct, then the call relay.
 - Fastest: the same, with 3 s for the direct way instead of 20 s.
-- Most private (Tor): the same Wi-Fi, then Tor. Nothing goes direct or through the relay.
 
-With Ultra privacy on, or when both sides' apps can't do better, the rules of section 30 stand. Someone outside Family and
-trusted contacts has no direct or relay way, so Tor stays their route over the internet, and the card says so.
+Tor carries files only with Ultra privacy on (section 30's rules then stand). A saved "Most private" (`tor`) from an
+older app reads as Automatic. Someone outside Family and trusted contacts, with Ultra privacy off, gets the same Wi-Fi or
+Trusted direct; small files and short videos still go through the message relays.
 
 **On the wire.** An offer that may use the relay carries `"rl": 1`. Either side, once the direct way failed or went quiet
 for 6 s, makes a TURN allocation (as a call does, section 5.6) and sends a sealed `file` message
@@ -3594,9 +3594,9 @@ on from what arrived. Stopped by hand, declined or refused, it doesn't.
 **Video.** To Family and trusted contacts a video goes as the full copy, at any length and on any network (Data saver on a
 metered network still asks). Past the month's limit (relay.md, "Relayed media") they get the 720p copy, through the relay.
 
-**This side's say.** A receiver with Ultra privacy on, or Most private chosen for that chat, takes no `rl`. It declines with
-`"why":"tor"`, and the sender's card says to choose Most private for that chat. A sender that offered `rl` serves no Tor, so
-the receiver never waits for one. Tor is never picked silently for Family or trusted contacts.
+**This side's say.** A receiver with Ultra privacy on takes no `rl`. It declines with `"why":"tor"`, and the sender's card
+says it can come on the same Wi-Fi, or over Tor with Ultra privacy on there too. A sender that offered `rl` serves no Tor,
+so the receiver never waits for one.
 
 **Already here.** A receiver answers an offer for a file it took whole from that person in the last 7 days with
 `{"t":"done","id":<file id>}`, so a send that lost its last packets isn't sent twice.

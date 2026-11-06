@@ -58,7 +58,7 @@ Item {
     implicitWidth: Theme.px(420)
 
     function voiceOptions() {
-        return natural ? [{ value: "f", label: "Female" }, { value: "m", label: "Male" }, { value: "d", label: "Device" }]
+        return natural ? [{ value: "f", label: "Female" }, { value: "d", label: "Device" }]
                        : [{ value: "d", label: "Device" }]
     }
     function pickVoice(v) {
@@ -66,7 +66,7 @@ Item {
         // A natural voice is already kept and this one isn't: switching downloads it (about 65 MB) and deletes the
         // one kept, so ask.
         if (v !== "d" && hasFiles && !(device && ready && v === "f")) {
-            Ui.sure("Switch to the " + (v === "m" ? "male" : "female") + " voice?",
+            Ui.sure("Switch to the natural voice?",
                     "Huginn downloads it (about 65 MB), then deletes the voice it has now.", "Switch", () => { ReadAloud.voice = v })
             return
         }

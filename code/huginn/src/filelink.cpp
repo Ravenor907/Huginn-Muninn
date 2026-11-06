@@ -329,9 +329,9 @@ bool FileLink::relayMay(const QString &choice, bool ultra, bool family, bool pee
     return !ultra && choice != QLatin1String("tor") && family && peerCan;
 }
 
-bool FileLink::torMay(const QString &choice, bool ultra, bool family)
+bool FileLink::torMay(bool ultra)
 {
-    return ultra || choice == QLatin1String("tor") || !family;
+    return ultra;   // Tor carries files only with Ultra privacy on
 }
 
 bool FileLink::relayPlan(const QString &peer, const QString &group) const
@@ -453,7 +453,8 @@ QString FileLink::reachNote(const QString &peer) const
     if (online && !online())
         return noPathText();
     const bool direct = trusted && trusted(peer) && UltraPrivacy::directAllowed();
-    return direct || !torAllowed || torAllowed() || relayPlan(peer, QString()) ? QString() : noPathText();
+    const bool tor = !UltraPrivacy::directAllowed() && (!torAllowed || torAllowed());
+    return direct || tor || relayPlan(peer, QString()) ? QString() : noPathText();
 }
 
 QString FileLink::torWarning(const QString &peer, double size) const
@@ -1098,7 +1099,7 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     const bool trust = trusted && trusted(peer) && !ultra && choice != QLatin1String("tor");
     const bool sameWifi = !lanOf(peer).isEmpty() && hasF2 && hasF2(peer);
     const bool viaRelay = relayMay(choice, ultra, family, peerCan) && !testLocal && !relayStopped();
-    const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal && torMay(choice, ultra, viaRelay);  // Tor still there when the relay can't carry it
+    const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal && torMay(ultra);
     if (!sameWifi && !trust && !tor && !viaRelay) {
         addFailed(peer, name, fi.size(), noPathText() + QStringLiteral(". Try again when you're on the same Wi-Fi or online."), path, false, QString(), group);
         return QString();

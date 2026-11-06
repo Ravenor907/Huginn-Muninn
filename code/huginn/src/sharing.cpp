@@ -275,7 +275,7 @@ QString Sharing::declineText(const QString &why)
     if (why == QLatin1String("no"))
         return QStringLiteral("They declined.");
     if (why == QLatin1String("tor"))
-        return QStringLiteral("They take files over Tor only. Set this chat's Send media to Most private.");
+        return QStringLiteral("They have Ultra privacy on. It can come on the same Wi-Fi, or over Tor with Ultra privacy on here too.");
     return QStringLiteral("They declined, or direct files are off on their side (Trusted direct, or Ultra privacy).");
 }
 

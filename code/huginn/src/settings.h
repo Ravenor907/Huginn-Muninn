@@ -234,12 +234,12 @@ public:
     static bool messageSoundOn() { return saved(QStringLiteral("messageSound"), true).toBool(); }
     // Labs: each voice packet on the relay as well as a direct path. Off until someone turns it on.
     bool voiceTwoPaths() const { return value("voiceTwoPaths", false).toBool(); }
-    // Send media: Automatic, Fastest or Most private (Tor).
+    // Send media: Automatic or Fastest (Tor is Ultra privacy's alone; a saved "tor" reads as Automatic).
     QString mediaRoute() const { return mediaRouteNow(); }
     static QString mediaRouteNow()
     {
         const QString v = saved(QStringLiteral("mediaRoute"), QStringLiteral("auto")).toString();
-        return v == QLatin1String("fastest") || v == QLatin1String("tor") ? v : QStringLiteral("auto");
+        return v == QLatin1String("fastest") ? v : QStringLiteral("auto");
     }
     static bool voiceTwoPathsOn() { return saved(QStringLiteral("voiceTwoPaths"), false).toBool(); }
     QString micDevice() const { return value("micDevice", "").toString(); }

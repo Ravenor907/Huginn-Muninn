@@ -83,5 +83,5 @@ object KidVoice {
     fun allReadSpeed(others: List<Set<String>?>): Boolean = others.all { it != null && SPEED_CAP in it }
 
     /** The device page's two choices. */
-    val CHOICES = listOf(ReadAloudText.FEMALE to "Female", ReadAloudText.MALE to "Male")
+    val CHOICES = listOf(ReadAloudText.FEMALE to "Female")
 }

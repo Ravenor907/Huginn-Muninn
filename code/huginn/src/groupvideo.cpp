@@ -277,7 +277,7 @@ QString delivery(const Member &m, bool unmetered, int ms)
         return QStringLiteral("full");
     if (fullOk(m) && direct(m, unmetered) && (m.newPath || ms <= kOldFullMaxMs + kSlackMs))
         return QStringLiteral("full");
-    if (m.newPath && m.v3)
+    if (m.newPath && m.v3 && m.reach)
         return ms <= kSmallMaxMs + kSlackMs ? QStringLiteral("small") : QStringLiteral("none");
     return ms <= kRelayMaxMs + kSlackMs ? QStringLiteral("relay") : QStringLiteral("none");
 }
@@ -326,11 +326,11 @@ QString summary(const QHash<QString, QString> &plan, const std::function<QString
     if (!full.isEmpty())
         out << QStringLiteral("Full quality to %1.").arg(names(full));
     if (!small.isEmpty())
-        out << QStringLiteral("A 720p copy to %1 over Tor (slower).").arg(names(small));
+        out << QStringLiteral("A 720p copy to %1.").arg(names(small));
     if (!relay.isEmpty())
         out << QStringLiteral("A smaller copy (720p, up to 20 seconds) to %1, whose app is older.").arg(names(relay));
     if (!none.isEmpty())
-        out << QStringLiteral("Not to %1: their app is older. Ask them to update.").arg(names(none));
+        out << QStringLiteral("Not to %1: no way to reach them with this one now. Try on the same Wi-Fi.").arg(names(none));
     return out.isEmpty() ? QStringLiteral("Nobody else is here yet.") : out.join(QLatin1Char(' '));
 }
 
@@ -754,7 +754,7 @@ bool selfTest()
               && p.value(QStringLiteral("c")) == QLatin1String("small") && p.value(QStringLiteral("h")) == QLatin1String("relay") && p.size() == 4,
           "plan: each member their best path");
     const QString said = summary(p, [](const QString &k) { return k.toUpper(); });
-    check(said.contains(QLatin1String("Full quality to A")) && said.contains(QLatin1String("720p copy to B and C over Tor"))
+    check(said.contains(QLatin1String("Full quality to A")) && said.contains(QLatin1String("720p copy to B and C."))
               && said.contains(QLatin1String("to H, whose app is older")),
           "summary");
     check(tooLong(6 * min, plan({wifi, far}, true, 6 * min)) && !tooLong(6 * min, plan({wifi, trusted}, true, 6 * min))

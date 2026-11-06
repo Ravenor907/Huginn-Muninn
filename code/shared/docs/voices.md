@@ -1,13 +1,13 @@
 # Natural voices
 
-Read aloud (every message, quick messages, Daily Hávamál) speaks with a natural voice: Female (Alba, the default) or
-Male (northern English), picked in Settings, or by a parent on a Kids' Device's page. The speech engine (sherpa-onnx
+Read aloud (every message, quick messages, Daily Hávamál) speaks with one natural voice: Female (Alba). Male (northern English) is retired: an older app's or config's "m"
+reads as Female, and its files are deleted. The speech engine (sherpa-onnx
 1.13.8) is built into Huginn and Muninn. Only the chosen voice's data is downloaded, once, from this project's
 **voices-1** release, and kept across updates. Until it's ready, the device's own voice reads (only a voice that works
 offline; never one that sends the text away).
 
 Settings › Look › Accessibility › Read aloud (1.42) has its own page: a switch to turn Read aloud off (it hides from
-every menu), the voice (Female, Male, or **Device**: the device's own voice, and nothing is downloaded), and the
+every menu), the voice (Female, or **Device**: the device's own voice, and nothing is downloaded), and the
 **speed**, 50% to 150% on a smooth slider (80% until changed), with "Hear a sample".
 
 ## What the owner does (once)
@@ -26,7 +26,7 @@ with the device's own voice where there is one (Read aloud is hidden where nothi
 
 ## How it works
 
-- **Files.** `voice-female-1.tar` and `voice-male-1.tar` (about 60 to 65 MB each): `model.onnx`, `tokens.txt`,
+- **Files.** `voice-female-1.tar` (about 60 MB; `voice-male-1.tar` stays published for older apps): `model.onnx`, `tokens.txt`,
   `MODEL_CARD` and `espeak-ng-data` (English only), repacked unchanged from sherpa-onnx's `tts-models` release, plus
   `natural-voices.txt`. Never replaced in place: a fixed voice goes out as voices-2 with new names and new lines.
 - **Checked.** Each download's SHA-256 must match its line in `code/shared/voices.sha256`, built into the apps. No line,

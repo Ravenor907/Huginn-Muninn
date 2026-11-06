@@ -885,14 +885,14 @@ QString Chat::mediaRoute(const QString &chat) const
 {
     // Each person's own choice is kept with them, in the vault.
     const QString own = m_contacts.value(chat).value(QStringLiteral("mediaRoute")).toString();
-    return own.isEmpty() ? Settings::mediaRouteNow() : own;
+    return own == QLatin1String("auto") || own == QLatin1String("fastest") ? own : Settings::mediaRouteNow();
 }
 
 QString Chat::mediaRouteLabel(const QString &key) const
 {
     const QString own = m_contacts.value(key).value(QStringLiteral("mediaRoute")).toString();
     return own == QLatin1String("auto") ? QStringLiteral("Automatic") : own == QLatin1String("fastest") ? QStringLiteral("Fastest")
-        : own == QLatin1String("tor") ? QStringLiteral("Most private (Tor)") : QStringLiteral("As in Settings");
+        : QStringLiteral("As in Settings");
 }
 
 void Chat::cycleMediaRoute(const QString &key)
@@ -904,8 +904,6 @@ void Chat::cycleMediaRoute(const QString &key)
         m_contacts[key].insert(k, QStringLiteral("auto"));
     else if (own == QLatin1String("auto"))
         m_contacts[key].insert(k, QStringLiteral("fastest"));
-    else if (own == QLatin1String("fastest"))
-        m_contacts[key].insert(k, QStringLiteral("tor"));
     else
         m_contacts[key].remove(k);
     saveContacts();

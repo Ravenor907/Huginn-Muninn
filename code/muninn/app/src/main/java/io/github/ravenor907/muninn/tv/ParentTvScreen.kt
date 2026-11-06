@@ -1053,13 +1053,13 @@ private fun KidLookPart(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
 
 /** The Read aloud row's value: the voice and, once picked, the speed ("Female, 90%"). */
 private fun kidVoiceSummary(t: ManagedTv): String {
-    val voice = KidVoice.CHOICES.firstOrNull { it.first == t.voice.ifEmpty { io.github.ravenor907.muninn.net.ReadAloudText.FEMALE } }?.second ?: ""
+    val voice = KidVoice.CHOICES.firstOrNull { it.first == t.voice.ifEmpty { io.github.ravenor907.muninn.net.ReadAloudText.FEMALE } }?.second ?: "Female"
     return listOfNotNull(voice.takeIf { it.isNotEmpty() }, t.speed?.let { io.github.ravenor907.muninn.net.ReadAloudText.speedText(io.github.ravenor907.muninn.net.ReadAloudText.kidSpeed(it)) }).joinToString(", ")
 }
 
 /**
  * Look › Read aloud on the Kids' Device page. k15: the voice the device reads aloud with (messages, quick messages,
- * Daily Hávamál): Female or Male, then its speed (1.42, [KidSpeedPart]). The device downloads only that natural voice,
+ * Daily Hávamál): one natural voice now (a choice row shows only while there's more than one), then its speed (1.42, [KidSpeedPart]). The device downloads only that natural voice,
  * once; until it's in, its own voice reads.
  */
 @Composable
@@ -1072,9 +1072,9 @@ private fun KidVoicePart(app: Muninn, t: ManagedTv) {
     // Round 19: no natural voice in this release yet (its download can't be checked): no promise of one.
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val natural = remember { naturalShipped(ctx) }
-    Text("Voice", style = Type.big.copy(fontSize = 16.sp, color = if (k15) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 10.dp))
     if (!deviceK15) Note(UPDATE_FIRST) else if (blocked != null) Note(blocked)
-    ChoiceRow(KidVoice.CHOICES.size, Modifier.padding(vertical = 6.dp)) { i, m ->
+    if (KidVoice.CHOICES.size > 1) Text("Voice", style = Type.big.copy(fontSize = 16.sp, color = if (k15) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 10.dp))
+    if (KidVoice.CHOICES.size > 1) ChoiceRow(KidVoice.CHOICES.size, Modifier.padding(vertical = 6.dp)) { i, m ->
         val (v, name) = KidVoice.CHOICES[i]
         // None picked yet: the device reads with Female, the usual voice.
         val on = t.voice == v || (t.voice.isEmpty() && v == io.github.ravenor907.muninn.net.ReadAloudText.FEMALE)

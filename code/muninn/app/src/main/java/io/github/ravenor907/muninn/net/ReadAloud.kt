@@ -747,13 +747,11 @@ object ReadAloud {
     }
 
     /**
-     * Phones and tablets keep both natural voices, so a switch never downloads anything again. A TV is short of room: only
-     * the voice in use stays there. Leftovers from another voice release go everywhere. A download's part and its unpack
-     * folder stay.
+     * Only the one natural voice stays (the retired Male voice and leftovers from another voice release go). A download's
+     * part and its unpack folder stay.
      */
     private fun cleanOther(app: Context) = synchronized(filesLock) {
-        val keep = (if (io.github.ravenor907.muninn.tv.KidMode.isTv(app)) listOf(ReadAloudText.folderFor(voice(app)))
-            else listOf(ReadAloudText.folderFor(ReadAloudText.FEMALE), ReadAloudText.folderFor(ReadAloudText.MALE))) + ReadAloudText.SPEECH_FOLDER
+        val keep = listOf(ReadAloudText.folderFor(ReadAloudText.FEMALE), ReadAloudText.SPEECH_FOLDER)
         voicesDir(app).listFiles()?.forEach { f ->
             if (f.name !in keep && f.name != "reading" && !f.name.endsWith(".part") && !f.name.endsWith(".new")) f.deleteRecursively()
         }

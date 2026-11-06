@@ -148,7 +148,8 @@ object VideoSend {
         // network, until the relay's month is used up or Data saver says otherwise.
         val family = h != null && FileLink.mayAlways(h.badge(k)) && MediaRoute.relayMay(h.routeFor(k, g), !UltraPrivacy.directAllowed, true, h.hasF5(k)) &&
             h.mayDownload() && !h.relayOver()
-        it.copy(trusted = it.trusted && UltraPrivacy.directAllowed, newPath = GroupVideo.NEW_PATH_CAP in chat.capsOf(k) || h?.hasF4(k) == true, family = family)
+        it.copy(trusted = it.trusted && UltraPrivacy.directAllowed, newPath = GroupVideo.NEW_PATH_CAP in chat.capsOf(k) || h?.hasF4(k) == true, family = family,
+            reach = family || FileLink.reachNote(k).isEmpty())
     }
 
     /** Everyone it would go to, as seen now. [me]: my chat key (left out). */
@@ -307,13 +308,13 @@ object VideoSend {
         smallFile?.delete()
         val parts = listOfNotNull(
             fullNow.size.takeIf { it > 0 && bigFile != null }?.let { "full quality to $it" },
-            small.size.takeIf { it > 0 && smallFile != null }?.let { "a 720p copy over Tor to $it" },
+            small.size.takeIf { it > 0 && smallFile != null }?.let { "a 720p copy to $it" },
             relay.size.takeIf { it > 0 && clip != null }?.let { "a smaller copy to $it with older apps" },
         )
         val head = when {
             parts.isEmpty() -> "That video didn't send."
             !t.group && fullNow.isNotEmpty() -> "Sending full quality."
-            !t.group && small.isNotEmpty() -> "Sending a 720p copy over Tor. It can take a while."
+            !t.group && small.isNotEmpty() -> "Sending a 720p copy."
             !t.group -> "Sending. Its pieces go a few a second, so it can take a few minutes."
             else -> "Sending: " + parts.joinToString(", ") + "."
         }

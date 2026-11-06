@@ -83,7 +83,7 @@ public:
     static constexpr qint64 kRelayLimitBytes = 800 * 1000000000LL;
     static bool relayOk(const QJsonObject &p);
     static bool relayMay(const QString &choice, bool ultra, bool family, bool peerCan);
-    static bool torMay(const QString &choice, bool ultra, bool relay);
+    static bool torMay(bool ultra);
     static constexpr qint64 kRelayStopBytes = 950 * 1000000000LL;   // the relay carries no more files this month past this
     static constexpr int kAutoRetryMax = 50;
     bool relayStopped() const;
