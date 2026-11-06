@@ -15,6 +15,7 @@
 #include "stun.h"
 #include "turnclient.h"
 #include "../ultraprivacy.h"
+#include "../settings.h"
 
 #ifdef HUGINN_HAVE_VOICE
 #include "tv_voice.h"
@@ -1163,6 +1164,13 @@ void dualVoiceChecks()
     const QString a1 = rx.open(p10, &got), a2 = rx.open(p10, &got), b1 = rx.open(p11, &got), b2 = rx.open(p11, &got);
     check(a1.isEmpty() && a2 == QLatin1String("duplicate") && b1.isEmpty() && b2 == QLatin1String("duplicate") && got.payload == QByteArray("def"),
           "two-path voice: the first copy plays, the second is a duplicate");
+    // The other order: the later packet's copy lands first, and both of the earlier one's still count once.
+    CallCrypto::Keyring kc(root);
+    CallCrypto::Receiver rx2(&kc, CallCrypto::O2A, tag);
+    const QString c1 = rx2.open(p11, &got), c2 = rx2.open(p10, &got), c3 = rx2.open(p10, &got), c4 = rx2.open(p11, &got);
+    check(c1.isEmpty() && c2.isEmpty() && c3 == QLatin1String("duplicate") && c4 == QLatin1String("duplicate"),
+          "two-path voice: either order plays each packet once");
+    check(!Settings::voiceTwoPathsOn(), "voice over two paths is off until turned on");
 }
 
 bool CallSelfTest::run(const QString &vectorsPath)

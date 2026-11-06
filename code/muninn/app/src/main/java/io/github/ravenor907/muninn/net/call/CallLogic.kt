@@ -366,7 +366,7 @@ object CallLogic {
             .sortedWith(compareBy({ when (it.kind) { Kind.WIFI -> 0; Kind.DIRECT -> 1; else -> 2 } }, { if (it.rttMs < 0) Long.MAX_VALUE else it.rttMs }))
             .distinctBy { if (it.kind == Kind.RELAY) "relay" else "${it.kind}|${it.addr}" }
             .take(max)
-        // 1.45 (voice over two paths): the relay too, past [max], when it's one of the targets.
+        // Voice over two paths (Labs): the relay too, past [max], when it's one of the targets.
         if (alsoRelay && chosen.none { it.kind == Kind.RELAY }) targets.firstOrNull { it.kind == Kind.RELAY }?.let { chosen = chosen + it }
         val out = LinkedHashSet<Dest>()
         for (p in chosen) when (p.kind) {
@@ -378,12 +378,15 @@ object CallLogic {
     }
 
     /**
-     * 1.45, voice over two paths: a voice packet goes on the relay as well as Wi-Fi or Direct, so a lost packet on one
-     * path is covered by its copy on the other. Only voice (video stays on one path), only with a relay allocation
-     * already there, never in Ultra privacy. The receiver's replay window (5.4, by seq) plays the first copy and drops
-     * the other, as it always has for copies on parallel paths, so no protocol change and no peer version is needed.
+     * Voice over two paths (Labs, off by default): a voice packet goes on the relay as well as Wi-Fi or Direct, so a lost
+     * packet on one path is covered by its copy on the other. Only voice (video stays on one path), only with a relay
+     * allocation already there, never in Ultra privacy. The receiver's replay window (5.4, by seq) plays the first copy and
+     * drops the other, as it always has for copies on parallel paths, so no protocol change and no peer version is needed.
      */
     fun dualVoice(audio: Boolean, relayAllocated: Boolean, ultra: Boolean): Boolean = audio && relayAllocated && !ultra
+
+    /** The setting's key (Settings › Labs › Voice over two paths). */
+    const val TWO_PATHS = "voiceTwoPaths"
 
     /**
      * Read errors from a call's microphone (not quiet sound, not digital zeros: a TV's microphone may gate to exact zeros

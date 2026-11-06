@@ -52,4 +52,60 @@ class DualVoiceTest {
         val opened = rx.open(CallCrypto.seal(keys, true, tag, CallCrypto.AUDIO, 12, 240, byteArrayOf(7)))
         assertEquals(CallCrypto.AUDIO, opened.type)
     }
+
+    // ---- the receiver on every path combination: the real replay window and jitter buffer, 2 minutes of voice
+
+    private class Way(val base: Int, val spread: Int, val lossPct: Int, val goneFrom: Long = -1, val goneTo: Long = -1)
+
+    /** How much of the voice was heard (played or rebuilt): [ways] carry every packet, in whichever order they land. */
+    private fun heard(vararg ways: Way): Double {
+        val r = java.util.Random(7)
+        val keys = io.github.ravenor907.muninn.net.call.CallCrypto.Keys(ByteArray(32) { 1 })
+        val tag = byteArrayOf(9, 9)
+        val rx = io.github.ravenor907.muninn.net.call.CallCrypto.Receiver(keys, true, tag)
+        var now = 1_000_000L
+        val t0 = now
+        val jb = io.github.ravenor907.muninn.net.call.Jitter({ now })
+        class Arrival(val at: Long, val p: ByteArray)
+        val q = java.util.PriorityQueue<Arrival>(compareBy { it.at })
+        var seq = 0L
+        var good = 0; var all = 0
+        var t = now; var play = now
+        val end = now + 120_000L
+        while (t < end) {
+            val p = io.github.ravenor907.muninn.net.call.CallCrypto.seal(keys, true, tag, io.github.ravenor907.muninn.net.call.CallCrypto.AUDIO, seq++, t - t0, ByteArray(60))
+            for (w in ways) {
+                if (r.nextInt(100) < w.lossPct || (t - t0) in w.goneFrom until w.goneTo) continue
+                q.add(Arrival(t + w.base + r.nextInt(w.spread + 1), p))
+            }
+            t += 20
+            while (play < t) {
+                while (q.isNotEmpty() && q.peek().at <= play) {
+                    val a = q.poll(); now = a.at
+                    try { val o = rx.open(a.p); jb.put(o.ts, o.payload) } catch (_: io.github.ravenor907.muninn.net.call.CallCrypto.Dropped) {}
+                }
+                now = play
+                when (jb.next()) {
+                    is io.github.ravenor907.muninn.net.call.Play.Packet, is io.github.ravenor907.muninn.net.call.Play.Fec -> good++
+                    else -> {}
+                }
+                all++; play += 20
+            }
+        }
+        return 100.0 * good / all
+    }
+
+    @Test
+    fun soundOnEveryPathCombinationInEitherOrder() {
+        val relay = Way(80, 30, 1); val direct = Way(30, 15, 1)
+        assertTrue("relay only", heard(relay) > 98)
+        assertTrue("direct only", heard(direct) > 98)
+        assertTrue("direct first", heard(direct, relay) > 99)
+        assertTrue("relay first", heard(Way(120, 15, 1), Way(40, 10, 1)) > 99)
+        assertTrue("either order", heard(Way(50, 40, 1), Way(50, 40, 1)) > 99)
+        // A copy far behind the first never disturbs what's playing.
+        assertTrue("far apart", heard(Way(30, 10, 0), Way(430, 50, 0)) > 99)
+        // One path going quiet for 3 s: the other carries on.
+        assertTrue("one goes quiet", heard(Way(30, 15, 0, 60_000, 63_000), Way(100, 30, 0)) > 98)
+    }
 }

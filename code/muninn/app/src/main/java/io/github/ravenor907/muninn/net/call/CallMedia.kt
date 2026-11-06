@@ -429,6 +429,10 @@ class CallMedia(
 
     fun anyLive(): Boolean { val now = System.currentTimeMillis(); return paths.any { it.live(now) } }
 
+    /** Labs, Voice over two paths, read once per call. Never on a Kids' TV, which has no Labs. */
+    private val twoPaths = try { context.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).getBoolean(CallLogic.TWO_PATHS, false) &&
+        !io.github.ravenor907.muninn.tv.KidMode.isTv(context) } catch (_: Exception) { false }
+
     /** A free path (Wi-Fi or Direct) answered a ping within 750 ms (so it works both ways): the relay rests (5.8.3). */
     fun freeFresh(now: Long = System.currentTimeMillis()) =
         paths.any { (it.kind == CallLogic.Kind.WIFI || it.kind == CallLogic.Kind.DIRECT) && it.lastPong > 0 && now - it.lastPong < CallLogic.FRESH_MS }
@@ -448,13 +452,16 @@ class CallMedia(
         val targets = only?.let { listOf(it) } ?: paths.filter { it.live(now) }.ifEmpty { if (video) emptyList() else paths.filter { it.kind != CallLogic.Kind.DIRECT || directOn } }
         // Up to 3 UDP paths (Wi-Fi first, then Direct, then the lowest round trip) plus Bluetooth; each distinct
         // destination gets the packet once (the relay once per relayed address, not once per relay path).
-        // 1.45: voice also on the relay while it's allocated, next to Wi-Fi or Direct (the receiver keeps the first copy).
-        val dual = DUAL_VOICE && only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
+        // Labs, Voice over two paths: voice also on the relay while it's allocated, next to Wi-Fi or Direct (the receiver
+        // keeps the first copy). Off by default.
+        val dual = twoPaths && only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
         val rest = only == null && freeFresh(now) && !dual
         for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest, alsoRelay = dual)) when (dst.kind) {
             // Group video goes peer to peer only, never through the relay (it stays on voice there).
             CallLogic.Kind.RELAY -> if (!(video && videoNoRelay)) turn?.let { t ->
-                t.send(dst.addr, p)
+                // A copy next to a free path never waits on the relay: over TCP or TLS a slow write would hold up this
+                // lock, and so the free path, the pings and the sound coming in.
+                if (dual && targets.any { it.kind != CallLogic.Kind.RELAY }) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
                 // Pings and pongs keep a standby relay alive; only what else it carries counts as the relay in use.
                 if (only == null) relayUsedAt = now
             }
@@ -670,9 +677,6 @@ class CallMedia(
     companion object {
         /** Calls holding the phone in call mode now; read aloud puts the mode back to normal when this is 0. */
         @JvmField val liveCalls = java.util.concurrent.atomic.AtomicInteger(0)
-        /** Voice over two paths (1.45): off. With a direct path and the relay both up (a phone calling a TV on home
-         *  Wi-Fi) the copies left the call silent both ways; phone to phone on cellular, relay only, never sent copies. */
-        const val DUAL_VOICE = false
     }
     private var oldMode = AudioManager.MODE_NORMAL
     @Volatile private var counted = false

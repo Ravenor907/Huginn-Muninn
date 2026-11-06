@@ -413,6 +413,7 @@ Rectangle {
               options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
             { kind: "button", key: "goStable", hide: Settings.updateChannel !== "beta" && System.version.indexOf("beta") < 0,
               title: "Go back to stable", note: "Installs the latest stable", label: "Go back", enabled: !Updater.busy },
+            { kind: "toggle", key: "voiceTwoPaths", title: "Voice over two paths", note: "Sends voice on two routes in calls. Uses the relay more" },
             { kind: "button", key: "perf", title: "Performance check", note: "Lag and size", label: "Open" },
             { kind: "button", key: "voiceTuning", hide: Settings.updateChannel !== "beta", title: "Voice tuning", note: "Presets for the natural voices", label: "Open" },
             { kind: "button", key: "practice", title: "Replay first setup", note: "Practice. Nothing is saved", label: "Start" }

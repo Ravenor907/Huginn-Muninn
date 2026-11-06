@@ -28,6 +28,7 @@ CallMedia::CallMedia(const QByteArray &root, const QByteArray &tag, bool offerer
       m_rx(&m_keys, offerer ? CallCrypto::A2O : CallCrypto::O2A, tag)
 {
     m_clock.start();
+    m_twoPaths = Settings::voiceTwoPathsOn();
     m_tick.setInterval(25);
     m_tick.setTimerType(Qt::PreciseTimer);
     connect(&m_tick, &QTimer::timeout, this, &CallMedia::tick);
@@ -217,9 +218,9 @@ void CallMedia::sendOn(Path p, const QByteArray &pkt)
 void CallMedia::sendMedia(const QByteArray &pkt, bool video)
 {
     // Free paths first: while Wi-Fi or Direct carries the call, the relay only gets pings (5.8.3).
-    // 1.45, voice over two paths: voice goes on the relay too while it's allocated (never video, never in Ultra
-    // privacy). The receiver's replay window plays the first copy and drops the other (5.4), as for any parallel path.
-    const bool dual = false && dualVoice(!video, m_turn && m_turn->ready(), UltraPrivacy::on());
+    // Voice over two paths (Labs, off by default): voice goes on the relay too while it's allocated (never video, never in
+    // Ultra privacy). The receiver's replay window plays the first copy and drops the other (5.4), as for any parallel path.
+    const bool dual = m_twoPaths && dualVoice(!video, m_turn && m_turn->ready(), UltraPrivacy::on());
     const bool rest = freeFresh() && !dual;
     for (int i = 0; i < kPaths; ++i) {
         const Path p = Path(i);

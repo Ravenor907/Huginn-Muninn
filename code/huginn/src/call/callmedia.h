@@ -209,6 +209,7 @@ private:
     qint64 m_pingSentAt = 0;
     int m_rtt = 0;
     Stats m_stats;
+    bool m_twoPaths = false;   // Labs, Voice over two paths, read once per call
     // Receiver report: what came in since the last one.
     qint64 m_lastReport = 0;
     qint64 m_lastSlot = -1;

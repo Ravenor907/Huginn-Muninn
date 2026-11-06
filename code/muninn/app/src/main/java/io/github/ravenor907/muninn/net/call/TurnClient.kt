@@ -199,6 +199,25 @@ class TurnClient(
         } catch (e: Exception) { false }
     }
 
+    private val soon = java.util.concurrent.ArrayBlockingQueue<Pair<InetSocketAddress, ByteArray>>(SOON_MAX)
+    @Volatile private var soonThread: Thread? = null
+
+    /**
+     * Like [send], on a thread of its own, so a slow relay link never holds up the caller. Only the newest [SOON_MAX]
+     * packets wait: voice that's late is no use.
+     */
+    fun sendSoon(peer: InetSocketAddress, data: ByteArray) {
+        if (closed) return
+        while (!soon.offer(peer to data)) soon.poll()
+        if (soonThread == null) synchronized(soon) {
+            if (soonThread == null) soonThread = Thread({
+                while (!closed) try {
+                    soon.poll(1, TimeUnit.SECONDS)?.let { (to, b) -> send(to, b) }
+                } catch (_: InterruptedException) { return@Thread }
+            }, "muninn-turn-copy").apply { isDaemon = true; start() }
+        }
+    }
+
     private fun request(method: Int, attrs: List<Stun.Attr>, auth: Boolean) = requestWith(method, auth) { attrs }
 
     /** One transaction, with stale-nonce retries. [attrs] gets the transaction id (XOR addresses need it). */
@@ -281,6 +300,9 @@ class TurnClient(
     }
 
     companion object {
+        /** Packets waiting in [sendSoon], about 0.3 s of voice. */
+        private const val SOON_MAX = 16
+
         /** "turn:host:port?transport=udp", "turns:host:443?transport=tcp". Null for anything else. */
         fun parseUrl(u: String): Server? {
             val tls = u.startsWith("turns:")

@@ -151,7 +151,16 @@ internal fun LabsPage(app: Muninn) {
         MenuRow("refresh", "Replay first setup (practice)") { Setup.practice(app) }
     }
     UpdateChannel(app)
-    // 1.43: the natural voices' tuning, only on the Pre-release channel.
+    // Each voice packet on the relay as well as a direct path, for calls that drop out. Off until someone turns it on.
+    Framed {
+        val prefs = remember { app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) }
+        var two by remember { mutableStateOf(prefs.getBoolean(io.github.ravenor907.muninn.net.call.CallLogic.TWO_PATHS, false)) }
+        io.github.ravenor907.muninn.ui.ToggleRow("Voice over two paths", "Sends voice on two routes in calls. Uses the relay more", two) {
+            two = it
+            prefs.edit().putBoolean(io.github.ravenor907.muninn.net.call.CallLogic.TWO_PATHS, it).apply()
+        }
+    }
+    // The natural voices' tuning, only on the Pre-release channel.
     if (app.identity.preRelease) Framed { MenuRow("sound", "Voice tuning") { SettingsNav.folder = "tuning" } }
     // The beta's checklist: only on the Pre-release channel.
     if (app.identity.preRelease) ThingsToTest()
