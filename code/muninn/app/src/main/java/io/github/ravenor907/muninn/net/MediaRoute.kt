@@ -33,8 +33,8 @@ object MediaRoute {
      */
     fun relayMay(choice: String, ultra: Boolean, family: Boolean, peerCan: Boolean) = !ultra && choice != TOR && family && peerCan
 
-    /** Tor may carry it: chosen, Ultra privacy, or someone outside Family and trusted contacts. Never picked silently for Family. */
-    fun torMay(choice: String, ultra: Boolean, family: Boolean) = ultra || choice == TOR || !family
+    /** Tor may carry it: chosen, Ultra privacy, or the call relay can't (outside Family and trusted, an older app, a used-up month). */
+    fun torMay(choice: String, ultra: Boolean, relay: Boolean) = ultra || choice == TOR || !relay
 
     /** How long the direct way gets before the relay is tried. */
     fun punchMs(choice: String, relay: Boolean) = if (relay && choice == FASTEST) FASTEST_PUNCH_MS else FileLink.PUNCH_MS

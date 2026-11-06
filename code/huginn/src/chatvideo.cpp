@@ -95,7 +95,7 @@ GroupVideo::Member Chat::videoMember(const QString &key, bool group) const
     m.newPath = hasCap(key, QString::fromLatin1(GroupVideo::kNewPathCap));
     // Family and trusted, with an app that can go through the call relay: full quality, whatever the length and the network,
     // until the relay's month is used up or Data saver says otherwise.
-    m.family = m_files && m_files->relayPlan(key, QString()) && !Settings::dataSaverOn();
+    m.family = m_files && m_files->relayPlan(key, QString()) && !m_files->relayOver() && !Settings::dataSaverOn();
     return m;
 }
 

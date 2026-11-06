@@ -11,6 +11,8 @@
 #include <QSet>
 #include <QStringList>
 #include <QTimer>
+
+#include <functional>
 #include <functional>
 #include <map>
 
@@ -112,6 +114,9 @@ public:
 
     void start();
     void stop();   // deallocates (Refresh with lifetime 0)
+    // A call's leg: what it moved both ways goes to the month's relay count when it stops (files count their own).
+    void countForCall() { m_forCall = true; }
+    static inline std::function<void(qint64)> callMeter;
     bool ready() const { return m_relayed.valid(); }
     // The reason failed() gives when not one server name could be looked up.
     static constexpr const char kCantReach[] = "Can't reach the call relay right now";
@@ -135,6 +140,8 @@ Q_SIGNALS:
     void data(const Stun::Address &peer, const QByteArray &bytes);
 
 private:
+    bool m_forCall = false;
+    qint64 m_moved = 0;
     struct Pending {
         Stun::Message msg;
         bool auth = false;

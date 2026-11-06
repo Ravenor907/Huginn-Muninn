@@ -686,6 +686,12 @@ FileLink::FileLink(Chat *chat, QObject *parent)
     saveDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
     if (!chat)
         return;
+    // Calls through the relay use the same free month as relayed files.
+    QPointer<FileLink> me(this);
+    TurnClient::callMeter = [me](qint64 bytes) {
+        if (me)
+            me->relayUsed(bytes);
+    };
     signal = [chat](const QString &peer, const QJsonObject &msg) { chat->sendEverywhere(peer, QStringLiteral("file"), msg, QString()); };
     peerHasF1 = [chat](const QString &peer) { return chat->hasCap(peer, QString::fromLatin1(kCap)); };
     waitsForAsk = [chat](const QString &peer) { return chat->hasCap(peer, QString::fromLatin1(RingWire::kWrapCap)); };
@@ -1092,7 +1098,7 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     const bool trust = trusted && trusted(peer) && !ultra && choice != QLatin1String("tor");
     const bool sameWifi = !lanOf(peer).isEmpty() && hasF2 && hasF2(peer);
     const bool viaRelay = relayMay(choice, ultra, family, peerCan) && !testLocal && !relayStopped();
-    const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal && torMay(choice, ultra, family);
+    const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal && torMay(choice, ultra, viaRelay);  // Tor still there when the relay can't carry it
     if (!sameWifi && !trust && !tor && !viaRelay) {
         addFailed(peer, name, fi.size(), noPathText() + QStringLiteral(". Try again when you're on the same Wi-Fi or online."), path, false, QString(), group);
         return QString();
@@ -1426,13 +1432,6 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
     if (t == QLatin1String("offer")) {
         if (m_x.contains(id) || m_answered.contains(id))
             return;
-        // The same file again after a send lost my "done": it has it. Said so, and not sent twice.
-        const QString whole = from + QLatin1Char('|') + jstr(p, "sha") + QLatin1Char('|') + QString::number(qint64(p.value(QStringLiteral("size")).toDouble()));
-        if (now() - m_came.value(whole) < qint64(kFamilyWaitMs)) {
-            m_answered.insert(id);
-            signal(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("done")}, {QStringLiteral("id"), id}});
-            return;
-        }
         const QJsonArray cands = p.value(QStringLiteral("c")).toArray();
         const QString here = routeFor ? routeFor(from, jstr(p, "g")) : QStringLiteral("auto");
         const bool ultra = !UltraPrivacy::directAllowed();
@@ -1802,9 +1801,13 @@ void FileLink::openLeg(Xfer *x, const TurnLogin &login)
     x->relayOpening = true;
     connect(t, &TurnClient::allocated, this, [this, id, t, expires] {
         Xfer *x = m_x.value(id);
-        if (!x) {
+        if (!x || x->ended || !x->relay || !UltraPrivacy::directAllowed()) {
+            // Ultra privacy went on (or the send ended) while this leg was opening: never used.
+            t->disconnect(this);
             t->stop();
             t->deleteLater();
+            if (x)
+                x->relayOpening = false;
             return;
         }
         TurnClient *old = x->turn;
@@ -2463,7 +2466,6 @@ void FileLink::receivedAll(Xfer *x)
             fail(x, QStringLiteral("%1 couldn't be saved.").arg(x->name));
             return;
         }
-        m_came.insert(x->peer + QLatin1Char('|') + x->sha + QLatin1Char('|') + QString::number(x->size), now());
         x->name = QFileInfo(final).fileName();
         x->path = final;
         x->note.clear();

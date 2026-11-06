@@ -106,7 +106,7 @@
    "checks": [
     {
      "id": "m6.1",
-     "text": "On the Kids' Device page, Updates: Stable or Pre-release. Stable is the start. The device follows what the parent picks."
+     "text": "On the Kids' Device page, Release: Stable or Pre-release. Stable is the start. The device follows what the parent picks."
     }
    ]
   },

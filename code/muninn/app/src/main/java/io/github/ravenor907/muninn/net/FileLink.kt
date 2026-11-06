@@ -402,6 +402,8 @@ object FileLink {
     private val ins = ConcurrentHashMap<String, In>()
     /** Stopped with Cancel: its threads end quietly. */
     private val stopped: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Mine that trying again can't change (declined, rules, space, Ultra privacy): never sent again by itself, even after a restart. */
+    private val noRetry: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /** Mine, while it can be sent again (Retry): who to, the file and its name, and its group. */
     private val again = ConcurrentHashMap<String, Triple<String, File, String>>()
     private val againGroup = ConcurrentHashMap<String, String>()
@@ -465,8 +467,11 @@ object FileLink {
             }
             if (id.isEmpty() || again.containsKey(id) || _all.value[id] != null) continue
             val peer = o.optString("peer")
-            if (f == null || !f.isFile || peer.isEmpty() || o.optLong("time") < oldest) { f?.delete(); dropped = true; continue }
+            // Stopped by hand before stopped sends stayed stopped: dropped, never sent again by itself.
+            if (f == null || !f.isFile || peer.isEmpty() || o.optLong("time") < oldest || o.optString("note") == "Stopped") { f?.delete(); dropped = true; continue }
             val name = o.optString("name").ifEmpty { "file" }
+            if (o.optBoolean("noRetry")) noRetry.add(id)
+            o.optInt("tries", 0).takeIf { it > 0 }?.let { retries[f.path] = it }
             val g = o.optString("group")
             again[id] = Triple(peer, f, name)
             if (g.isNotEmpty()) againGroup[id] = g
@@ -481,6 +486,7 @@ object FileLink {
         val dir = h.cacheDir().absolutePath
         val vids = h.videosOutDir()?.absolutePath
         val a = JSONArray()
+        noRetry.retainAll(again.keys)
         for ((id, t) in again) {
             val f = t.second
             val parent = f.parentFile?.absolutePath
@@ -489,13 +495,13 @@ object FileLink {
             val p = _all.value[id]
             a.put(JSONObject().put("id", id).put("peer", t.first).put("file", f.name).put("name", t.third).put("group", againGroup[id].orEmpty())
                 .put("time", p?.time ?: f.lastModified()).put("note", if (p?.state == "failed") p.note else "")
-                .apply { if (inVids) put("dir", "videos-out") })
+                .apply { if (inVids) put("dir", "videos-out"); if (id in noRetry) put("noRetry", true); retries[f.path]?.let { put("tries", it) } })
         }
         return a
     }
 
     /** After a restart: stopped sends to Family and trusted contacts go on by themselves. */
-    fun resumeStopped() { for (id in again.keys.toList()) if (_all.value[id]?.state == "failed") autoRetry(id) }
+    fun resumeStopped() { for (id in again.keys.toList()) if (_all.value[id]?.state == "failed" && id !in noRetry) autoRetry(id) }
 
     /** Cap f3: writes the kept parts' list (when one comes or goes), with my own files that can be sent again. */
     private fun saveKept() {
@@ -796,7 +802,8 @@ object FileLink {
         val peerCan = h.hasF5(peer)
         val trust = h.trusted(peer) && MediaRoute.directMay(choice, ultra)
         val relay = MediaRoute.relayMay(choice, ultra, family, peerCan) && !h.relayStopped()
-        val tor = f4 && h.torAllowed() && MediaRoute.torMay(choice, ultra, family)
+        // Tor only by choice while the relay can carry it; an older app (or a used-up month) still gets Tor.
+        val tor = f4 && h.torAllowed() && MediaRoute.torMay(choice, ultra, relay)
         if (lan == null && !trust && !tor && !relay) return "no path"
         val lanOnly = !trust
         if (id in stopped) { file.delete(); return null }   // Cancel while it was being made ready
@@ -887,8 +894,6 @@ object FileLink {
 
     private fun g0(p: JSONObject) = p.optString("g")
 
-    /** Files that came whole, by who sent them and what they are: a send that didn't hear so isn't taken twice. */
-    private val came = object : LinkedHashMap<String, Long>() { override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>) = size > 64 }
 
     /** Offers of theirs already answered here (declined, taken, or gone): a queued offer sent again doesn't ask twice. */
     private val answered: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -900,12 +905,6 @@ object FileLink {
         when (p.getString("t")) {
             "offer" -> {
                 if (ins.containsKey(id) || id in answered) return
-                // The same file again after a send lost my "done": it has it. Said so, and not sent twice.
-                if (synchronized(came) { came[from + "|" + p.getString("sha") + "|" + p.getLong("size")] }?.let { System.currentTimeMillis() - it < KEEP_MS } == true) {
-                    answered.add(id)
-                    host?.signal(from, JSONObject().put("t", "done").put("id", id).toString())
-                    return
-                }
                 // Round 19 (interop 3, K19-4): a Kids' Device takes no full-size video. "rules" at once, so the sender's
                 // app sends the smaller relay copy now instead of waiting for an answer.
                 if (p.has("vid") && h.isKidDevice()) { decline(from, id, "rules"); return }
@@ -1094,6 +1093,7 @@ object FileLink {
         if (id in stopped) return
         if (videoFellBack(id)) return
         _all.value[id]?.let { put(it.copy(state = "failed", note = why)) }
+        if (!retry) noRetry.add(id)
         if (again.containsKey(id)) saveKept()   // its Retry card, with why, comes back after a restart
         if (!retry || !autoRetry(id)) host?.notice(why)
     }
@@ -1471,7 +1471,6 @@ object FileLink {
             val chat = if (inc.group.isEmpty()) h.nameOf(inc.peer) else h.groupName(inc.group)
             val folder = Sharing.folderFor("Muninn", chat)
             val saved = h.saveIn(inc.name, tmp, folder) ?: run { fail(id, "Not enough space to save ${inc.name}."); return }
-            synchronized(came) { came[inc.peer + "|" + inc.sha + "|" + inc.size] = System.currentTimeMillis() }
             put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri, route = route, group = inc.group, folder = Received.shown(folder)))
             h.logFile(if (inc.group.isEmpty()) inc.peer else "g:${inc.group}", saved.name, inc.size, saved.uri, false)
             h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved in ${Received.shown(folder)}" + if (risky(saved.name)) ". $RISKY_NOTE" else "")

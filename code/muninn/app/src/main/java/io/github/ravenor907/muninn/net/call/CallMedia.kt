@@ -102,6 +102,8 @@ class CallMedia(
     // ------------------------------------------------------------------ transports
 
     @Volatile private var turn: TurnClient? = null
+    /** What this call moved through the relay, both ways: it counts toward the same free month as relayed files. */
+    private val relayBytes = java.util.concurrent.atomic.AtomicLong(0)
     private val peerRelay = CallLogic.RelayPeer()
     /** The Wi-Fi (and Direct) socket: open for the whole call, bound to a random port on all interfaces. */
     val lan: DatagramSocket? = try { DatagramSocket(0) } catch (e: Exception) { null }
@@ -334,6 +336,7 @@ class CallMedia(
         if (kind == CallLogic.Kind.RELAY && peerRelay.heard(from)) from?.let { turn?.permit(it); renewing?.permit(it) }
         if (!gotFirst) { gotFirst = true; events.onFirstMedia() }
         synchronized(counters) { bytesIn += data.size }
+        if (kind == CallLogic.Kind.RELAY) relayBytes.addAndGet(data.size + RELAY_OVERHEAD.toLong())
         when (o.type) {
             CallCrypto.AUDIO -> { countAudio(o.ts); jitter.put(o.ts, o.payload) }
             CallCrypto.PING -> path(kind, from)?.let { send(CallCrypto.PONG, o.payload, only = it) }
@@ -461,7 +464,9 @@ class CallMedia(
             CallLogic.Kind.RELAY -> if (!(video && videoNoRelay)) turn?.let { t ->
                 // With copies on, nothing waits on the relay here: over TCP or TLS a slow write would hold up this lock, and
                 // so the free path, the pings and the sound coming in.
-                if (twoPaths) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
+                // Video never goes through the small drop queue: a keyframe burst would lose its start.
+                if (dual) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
+                relayBytes.addAndGet(p.size + RELAY_OVERHEAD.toLong())
                 // Pings and pongs keep a standby relay alive; only what else it carries counts as the relay in use.
                 if (only == null) relayUsedAt = now
             }
@@ -675,6 +680,8 @@ class CallMedia(
     private var ns: NoiseSuppressor? = null
     private var proximity: PowerManager.WakeLock? = null
     companion object {
+        /** TURN and UDP headers on each relayed packet, close enough for the month's count. */
+        const val RELAY_OVERHEAD = 40
         /** Calls holding the phone in call mode now; read aloud puts the mode back to normal when this is 0. */
         @JvmField val liveCalls = java.util.concurrent.atomic.AtomicInteger(0)
     }
@@ -900,6 +907,7 @@ class CallMedia(
         try { lan?.close() } catch (_: Exception) {}
         try { turn?.close() } catch (_: Exception) {}
         try { renewing?.close() } catch (_: Exception) {}
+        relayBytes.getAndSet(0).takeIf { it > 0 }?.let { n -> try { io.github.ravenor907.muninn.net.RelayMeter(context).add(n) } catch (_: Exception) {} }
         bluetooth?.onMedia(null)
         // Let the audio threads leave read() and write() before their objects go.
         try { mic?.join(500); player?.join(500) } catch (_: InterruptedException) {}

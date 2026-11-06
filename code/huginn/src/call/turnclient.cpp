@@ -578,6 +578,9 @@ void TurnClient::connectTls(const Server &s, const QHostAddress &ip)
 
 void TurnClient::stop()
 {
+    if (m_forCall && m_moved > 0 && callMeter)
+        callMeter(m_moved);
+    m_moved = 0;
     if (m_stopped)
         return;
     if (ready())
@@ -735,6 +738,7 @@ void TurnClient::onPacket(const QByteArray &b)
             return;
         for (const Peer &p : std::as_const(m_peers))
             if (p.channel == ch) {
+                m_moved += data.size() + 40;
                 Q_EMIT this->data(p.addr, data);
                 return;
             }
@@ -745,8 +749,11 @@ void TurnClient::onPacket(const QByteArray &b)
         return;
     if (m.method == Stun::Data && m.cls == Stun::Indication) {
         const Stun::Address peer = m.address(Stun::XorPeerAddress);
-        if (peer.valid())
-            Q_EMIT this->data(peer, m.get(Stun::DataAttr));
+        if (peer.valid()) {
+            const QByteArray d = m.get(Stun::DataAttr);
+            m_moved += d.size() + 40;
+            Q_EMIT this->data(peer, d);
+        }
         return;
     }
     if (m.cls == Stun::Success || m.cls == Stun::Error)
@@ -856,6 +863,7 @@ bool TurnClient::send(const Stun::Address &peer, const QByteArray &data)
     for (const Peer &p : std::as_const(m_peers)) {
         if (p.addr != peer)
             continue;
+        m_moved += data.size() + 40;
         if (p.bound) {
             writeRaw(Stun::channelData(p.channel, data, m_tls != nullptr));
         } else {

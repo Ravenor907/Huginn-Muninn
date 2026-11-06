@@ -83,7 +83,7 @@ public:
     static constexpr qint64 kRelayLimitBytes = 800 * 1000000000LL;
     static bool relayOk(const QJsonObject &p);
     static bool relayMay(const QString &choice, bool ultra, bool family, bool peerCan);
-    static bool torMay(const QString &choice, bool ultra, bool family);
+    static bool torMay(const QString &choice, bool ultra, bool relay);
     static constexpr qint64 kRelayStopBytes = 950 * 1000000000LL;   // the relay carries no more files this month past this
     static constexpr int kAutoRetryMax = 50;
     bool relayStopped() const;
@@ -366,7 +366,6 @@ private:
     void meterRoll() const;
     void relayUsed(qint64 bytes);
     void reportMeter() const;
-    QHash<QString, qint64> m_came;   // files that came whole (who, sha, size): when
     mutable bool m_meterGoing = false;
     mutable qint64 m_meterRest = 0;
     QHash<QString, int> m_autoTries;

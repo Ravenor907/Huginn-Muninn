@@ -33,7 +33,7 @@ with the device's own voice where there is one (Read aloud is hidden where nothi
   no download. A download that stalls (sleep, another network, a stuck Tor circuit) is cut after a minute with no data
   and resumes from where it stopped.
 - **Speech rules.** The engine keeps the first `espeak-ng-data` folder it's given for as long as the app runs. Each voice carries the same folder, so one copy stays beside the voices (`speech`), never a voice's own: with that voice's folder gone, the next voice would read words as nonsense.
-- **Checked by ear.** Actions › Voice check: each published voice reads known sentences and a recognizer writes down what it heard (`code/shared/tools/voice_check.py`). Both voices-1 files pass, at each end of the Labs presets, so no voices-2 was needed.
+- **Checked by ear.** Actions › Voice check: each published voice reads known sentences and a recognizer writes down what it heard (`code/shared/tools/voice_check.py`). Both voices-1 files pass, at each end of the Labs presets.
 - **The speech engine.** The sherpa-onnx 1.13.8 files every build bundles (Muninn's AAR, Huginn's Linux library and
   Windows DLLs) have their lines in `code/shared/voices.sha256`. Every build stops when a file doesn't match its line,
   or has none (Gradle's `fetchSherpa`, and the Flatpak and Windows steps in `build.yml`; the Flatpak manifest pins the

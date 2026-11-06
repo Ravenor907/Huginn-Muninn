@@ -287,6 +287,7 @@ void CallSession::startRelay()
         }
         TurnClient *old = self->m_turn;
         auto *turn = new TurnClient(login, self);
+        turn->countForCall();
         self->m_turn = turn;
         if (old) {
             old->stop();
@@ -445,6 +446,7 @@ void CallSession::renewRelay()
             return;
         }
         auto *next = new TurnClient(login, self);
+        next->countForCall();
         const qint64 exp = login.expiresMs;
         connect(next, &TurnClient::data, self, [self](const Stun::Address &from, const QByteArray &bytes) {
             if (self->m_media)

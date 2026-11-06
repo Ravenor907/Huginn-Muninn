@@ -616,7 +616,10 @@ object TvParent {
             // k15: another parent's voice pick (the latest config wins); a config without one leaves this phone's as it was.
             voice = KidVoice.of(cfg.raw) ?: t.voice,
             speed = KidVoice.speedOf(cfg.raw) ?: t.speed,
-            pre = KidVoice.preRelease(cfg.raw) || t.pre,
+            // k17: another parent's config while every app here reads Updates (Stable says nothing, so their Stable counts);
+            // this phone's own config, or one that couldn't carry it, leaves this phone's choice as it was.
+            pre = if (cfg.by != me && preReady(app, t)) KidVoice.preRelease(cfg.raw)
+                else KidVoice.preRelease(cfg.raw) || t.pre,
         )
     }
 
