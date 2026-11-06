@@ -80,6 +80,11 @@ jobs:
           if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/beta ]; then
             b=$(head -n1 code/BETA | tr -d '\r')
             echo "$b" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::BETA must look like 0.99, not \"$b\""; exit 1; }
+            # The beta's label is the next stable at most: never below stable, never more than one step past it.
+            bnum=$(( ${b%%.*} * 1000000 + 10#$(printf '%-6s' "${b#*.}" | tr ' ' 0) ))
+            if [ "$bnum" -lt "$num" ] || [ "$(( bnum - num ))" -gt 10000 ]; then
+              echo "::error title=Beta label::BETA ($b) must be the next stable at most, one step past VERSION ($v)."; exit 1
+            fi
             echo "beta=1" >> "$GITHUB_OUTPUT"
             echo "label=$b beta ${{ github.run_number }}" >> "$GITHUB_OUTPUT"
             echo "::notice title=Beta::This push replaces the beta pre-release ($b beta ${{ github.run_number }})"

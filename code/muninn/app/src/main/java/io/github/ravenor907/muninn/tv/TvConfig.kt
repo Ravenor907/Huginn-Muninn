@@ -177,7 +177,9 @@ data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MI
                      /** k15: the read-aloud voice, "f" or "m", only for a device whose app said "k15" (null: left out). */
                      val voice: String? = null,
                      /** k15 (1.42): the read-aloud speed, a whole number 50 to 150, sent like [voice] (null: left out, 100%; the device maps it into 70% to 130%). */
-                     val speed: Int? = null)
+                     val speed: Int? = null,
+                     /** k17: true puts the device on Pre-release (only for a device whose app said "k17"). */
+                     val pre: Boolean = false)
 
 /**
  * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
@@ -363,7 +365,9 @@ object TvRules {
             // k15: the read-aloud voice a parent picked.
             it.voice?.takeIf { v -> v in io.github.ravenor907.muninn.net.ReadAloudText.VOICES }?.let { v -> o.put(KidVoice.FIELD, v) }
             // k15 (1.42): the read-aloud speed beside it.
-            it.speed?.takeIf { p -> p in KidVoice.SPEED_MIN..KidVoice.SPEED_MAX }?.let { p -> o.put(KidVoice.SPEED, p) } }
+            it.speed?.takeIf { p -> p in KidVoice.SPEED_MIN..KidVoice.SPEED_MAX }?.let { p -> o.put(KidVoice.SPEED, p) }
+            // k17: Updates, Pre-release. Stable says nothing.
+            if (it.pre) o.put(KidVoice.UPDATES, KidVoice.UPDATES_PRE) }
         return Canon.sign(priv, CONFIG, o)
     }
 

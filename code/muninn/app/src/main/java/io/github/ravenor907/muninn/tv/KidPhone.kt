@@ -2,6 +2,7 @@
 
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.ui.fitBars
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -201,7 +202,7 @@ private fun putKidTheme(app: Muninn, t: KidTheme) {
 @Composable
 internal fun KidPhone(app: Muninn, cfg: TvConfig, person: TvPerson?, quiet: QuietTime?, onParent: () -> Unit) {
     KidStyle {
-        BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+        BoxWithConstraints(Modifier.fillMaxSize().fitBars().imePadding()) {
             val tablet = LocalConfiguration.current.smallestScreenWidthDp >= io.github.ravenor907.muninn.screens.ChatNav.TABLET_SW_DP
             val full = maxWidth
             val wide = tablet && full >= io.github.ravenor907.muninn.screens.ChatNav.WIDE_MIN

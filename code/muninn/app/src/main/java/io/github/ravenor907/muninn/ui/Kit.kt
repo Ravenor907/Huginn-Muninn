@@ -1,5 +1,9 @@
 package io.github.ravenor907.muninn.ui
 
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -444,6 +448,14 @@ fun AskDialog(a: Ask) {
             }
         },
     )
+}
+
+/**
+ * The one way a screen sits between the system bars: status bar, navigation bar (gesture or 3-button, on either side in
+ * landscape) and a camera cutout, whichever the device has. The keyboard stays each screen's own (imePadding).
+ */
+fun Modifier.fitBars(): Modifier = androidx.compose.ui.composed {
+    windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.systemBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout))
 }
 
 /**

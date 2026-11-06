@@ -105,6 +105,9 @@ object ReadAloudText {
     /** Read after [SAMPLE] by Hear a sample, so Cadence can be heard too. */
     const val SAMPLE_PAUSES = "Commas, full stops and new lines each get a short pause."
 
+    /** The speech rules' one folder beside the voices (ReadAloud.sharedSpeech). */
+    const val SPEECH_FOLDER = "speech"
+
     /** The release file for [voice]. */
     fun fileFor(voice: String): String = if (voice == MALE) "voice-male-1.tar" else "voice-female-1.tar"
 
@@ -504,7 +507,7 @@ object ReadAloudText {
     data class Tune(val name: String, val noise: Float, val width: Float)
 
     /** A is the default (what 1.42 used). */
-    val TUNES = listOf(Tune("A", 0.667f, 0.8f), Tune("B", 0.5f, 0.6f), Tune("C", 0.75f, 0.9f), Tune("D", 0.6f, 1.0f), Tune("E", 0.8f, 0.7f))
+    val TUNES = listOf(Tune("A", 0.667f, 0.8f), Tune("B", 0.33f, 0.4f), Tune("C", 0.85f, 1.0f), Tune("D", 0.5f, 1.2f), Tune("E", 1.0f, 0.5f))
 
     fun tuneOf(name: String?): Tune = TUNES.firstOrNull { it.name == name } ?: TUNES[0]
 

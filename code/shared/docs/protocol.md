@@ -99,6 +99,8 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `h1` | hidden certificates named over the ratchet (21.3, 1.42): `hf` in receipts to contacts, the certificates its Wi-Fi server may show (its lasting one, its hidden one now and the next), so a contact asks a saved address with Nearby off only with one of them pinned. Muninn and Huginn. |
 | `r2` | a ring tag per caller (23.2, 1.42): `rt` in receipts with `rk`, and in the ring plaintext of a caller that says `r2`. Locked rings are limited per caller, and a tag taken back stops ringing at once. Muninn and Huginn. |
 | `l5` | the phone pings its companions too, and a ping more than 36 hours off is answered (section 15, "Clocks more than 36 hours apart", 1.42). Like `l1`, only in room `link` (`caps` on `ping`; Huginn says it on `sync` too, Muninn's `sync` says `l4`). Nothing reads it yet. Muninn and Huginn. |
+| `f5` | a file through the call relay (section 32). Past the first 48 tokens. |
+| `k17` | a Kids' Device's update channel: config field `uch`, `"pre"` for Pre-release, Stable when it's left out. Past the first 48 tokens. Muninn only. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless

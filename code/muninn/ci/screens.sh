@@ -90,6 +90,33 @@ shot tablet-settings --es screen settings
 adb shell wm size reset
 adb shell wm density reset
 sleep 2
+# Every screen fits: a small phone and a Pixel-size one, gesture and 3-button navigation, 100% and 200% text, a tablet and an
+# open foldable. Each size opens the busiest screens; the chat's bubbles are looked at in the screenshots of the run.
+GEST=com.android.internal.systemui.navbar.gestural
+BTN=com.android.internal.systemui.navbar.threebutton
+sizes() {   # name WxH density navigation font-scale
+  local name=$1 size=$2 dens=$3 nav=$4 font=$5
+  adb shell wm size "$size"; adb shell wm density "$dens"
+  adb shell cmd overlay enable-exclusive --category "$nav" >/dev/null 2>&1 || true
+  adb shell settings put system font_scale "$font"
+  sleep 2
+  shot "$name-chats" --es screen chat
+  shot "$name-conversation" --es chat demo
+  shot "$name-group" --ez group true
+  shot "$name-settings" --es screen settings
+  shot "$name-files" --es screen files
+}
+sizes small-100 720x1280 320 "$BTN" 1.0
+sizes small-200 720x1280 320 "$GEST" 2.0
+sizes pixel-100 1080x2424 420 "$GEST" 1.0
+sizes pixel-200 1080x2424 420 "$BTN" 2.0
+sizes tablet-200 1600x2560 320 "$GEST" 2.0
+sizes foldable-open 2208x1840 420 "$GEST" 1.0
+adb shell settings put system font_scale 1.0
+adb shell cmd overlay enable-exclusive --category "$GEST" >/dev/null 2>&1 || true
+adb shell wm size reset
+adb shell wm density reset
+sleep 2
 # A fresh install opens on "Protect Muninn" (a lock is required).
 adb shell am force-stop $PKG
 adb shell am start -W -n $PKG/.MainActivity >/dev/null

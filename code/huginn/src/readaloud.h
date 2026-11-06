@@ -205,7 +205,7 @@ public:
     static constexpr int kLongSentence = 18;
     // Labs › Voice tuning's presets: noise scale and noise width ("A" is the default).
     struct Tune { const char *id; float noise; float width; };
-    static constexpr Tune kTunes[5] = {{"A", 0.667f, 0.8f}, {"B", 0.5f, 0.6f}, {"C", 0.75f, 0.9f}, {"D", 0.6f, 1.0f}, {"E", 0.8f, 0.7f}};
+    static constexpr Tune kTunes[5] = {{"A", 0.667f, 0.8f}, {"B", 0.33f, 0.4f}, {"C", 0.85f, 1.0f}, {"D", 0.5f, 1.2f}, {"E", 1.0f, 0.5f}};
     static Tune tuneFor(const QString &id);
 
 Q_SIGNALS:

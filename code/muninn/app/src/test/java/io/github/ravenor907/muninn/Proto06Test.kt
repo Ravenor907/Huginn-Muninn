@@ -178,22 +178,22 @@ class Proto06Test {
         val e = ChatWire.base("private", chat.getString("pubA"), "Raven", "fp", "a1".repeat(32), "m1")
         assertEquals("r1", e.getString("cap"))
         assertEquals(Proto06.CAPS, e.getString("caps"))
-        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "k5", "t1", "v1", "m1", "m2", "i1", "f1", "d1", "k6", "k7", "k8", "k9", "k10", "j1", "x1", "s1", "p1", "b1", "e1", "a1", "v2", "f2", "g2", "f3", "g3", "g4", "n1", "n2", "u1", "k11", "k12", "k13", "k14", "p2", "h1", "r2", "v3", "k15", "f4", "k16"), ChatWire.capsOf(e))
+        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "k5", "t1", "v1", "m1", "m2", "i1", "f1", "d1", "k6", "k7", "k8", "k9", "k10", "j1", "x1", "s1", "p1", "b1", "e1", "a1", "v2", "f2", "g2", "f3", "g3", "g4", "n1", "n2", "u1", "k11", "k12", "k13", "k14", "p2", "h1", "r2", "v3", "k15", "f4", "k16", "f5", "k17"), ChatWire.capsOf(e))
         assertEquals(setOf("r1"), ChatWire.capsOf(JSONObject().put("cap", "r1")))
         assertTrue("group" in ChatWire.RATCHET_ROOMS && "gmsg" in ChatWire.RATCHET_ROOMS && "greceipt" in ChatWire.RATCHET_ROOMS)
     }
 
     @Test
     fun caps() {
-        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "k5", "t1", "v1", "v2", "m1", "m2", "i1", "f1", "d1", "k6", "k7", "k8", "k9", "k10", "j1", "x1", "s1", "b1", "e1", "a1", "g2", "p1", "f2", "f3", "g3", "g4", "n1", "n2", "u1", "k11", "k12", "k13", "k14", "p2", "h1", "r2", "v3", "k15", "f4", "k16"), Proto06.caps(Proto06.CAPS))
+        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "k5", "t1", "v1", "v2", "m1", "m2", "i1", "f1", "d1", "k6", "k7", "k8", "k9", "k10", "j1", "x1", "s1", "b1", "e1", "a1", "g2", "p1", "f2", "f3", "g3", "g4", "n1", "n2", "u1", "k11", "k12", "k13", "k14", "p2", "h1", "r2", "v3", "k15", "f4", "k16", "f5", "k17"), Proto06.caps(Proto06.CAPS))
         // Every Huginn keeps only the first 48 tokens: the ones it reads must sit inside them.
         val list = Proto06.CAPS.split(' ').filter { it.isNotEmpty() }
         // Older Huginns keep the first 48 and ignore the rest; Huginn keeps 96 now. New tokens go at the end.
         assertTrue("Huginn keeps 96 caps", list.size <= 96)
         assertEquals("f5", list[48])
         for (t in listOf("h1", "r2", "v3", "p2", "n2", "f3", "f4")) assertTrue(t, list.indexOf(t) in 0 until 48)
-        // Caps f4 (1.42, Encrypted file sharing over Tor) and k16 (a Kids' Device's read-aloud speed) were appended at the end.
-        assertEquals(listOf("f4", "k16"), list.takeLast(2))
+        // Each new cap goes at the end: f4, k16, then past the first 48 f5 and k17.
+        assertEquals(listOf("f4", "k16", "f5", "k17"), list.takeLast(4))
         assertEquals(setOf("r1", "zz"), Proto06.caps(" r1  zz "))
         assertTrue(Proto06.isLogicalId(Proto06.newLogicalId()))
         assertEquals(22, Proto06.newGroupId().length)

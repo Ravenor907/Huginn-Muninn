@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import io.github.ravenor907.muninn.ui.fitBars
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -56,7 +57,7 @@ fun VaultTrouble(app: Muninn, trouble: VaultCore.Trouble, done: (Boolean) -> Uni
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars()) {
         Brand()
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Panel {

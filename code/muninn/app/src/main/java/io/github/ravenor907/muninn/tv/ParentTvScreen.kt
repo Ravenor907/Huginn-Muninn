@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.ui.fitBars
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -204,7 +205,7 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
     LaunchedEffect(tvKey, k3, open) { TvParent.askUsage(app, tvKey) }
     val tvName = contacts.firstOrNull { it.chatKey == tvKey }?.shown ?: "Kids' Device"
 
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars()) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction("back", "Back") { back() }
             Spacer(Modifier.width(4.dp))
@@ -380,6 +381,17 @@ private fun Updates(app: Muninn, t: ManagedTv) {
     }
     MButton("Update now", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Accent, enabled = canAskUpdate(app, t)) { askTvUpdate(app, t) }
     if (!can) Note(updateSteps(app, t))
+    // Updates: Stable (every device starts here) or Pre-release, only for a device whose app reads it.
+    if (TvParent.k17(app, t.key)) {
+        Text("Updates", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+        io.github.ravenor907.muninn.ui.ChoiceRow(2, Modifier.padding(vertical = 6.dp)) { i, m ->
+            val pre = i == 1
+            MButton(if (pre) "Pre-release" else "Stable", m, if (t.pre == pre) Kind.Accent else Kind.Normal) {
+                if (t.pre != pre) { TvParent.setPre(t.key, pre); Ui.say("Saved. It changes on the device once it's online.") }
+            }
+        }
+        Note("Stable is the tested release. Pre-release gets new builds first.")
+    }
     // The TV installs updates by itself only while this is on.
     val installOff = t.off?.contains("install")
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {

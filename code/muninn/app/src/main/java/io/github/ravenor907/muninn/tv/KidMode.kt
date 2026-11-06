@@ -678,6 +678,8 @@ object KidTv {
                 KidVoice.of(new)?.let { v -> io.github.ravenor907.muninn.net.ReadAloud.parentPicked(app, v) }
                 // 1.42: the speed beside it (a config without one reads at 100%; 1.43 maps 50 to 150 into 70% to 130%).
                 io.github.ravenor907.muninn.net.ReadAloud.parentSpeed(app, KidVoice.speedOf(new))
+                // k17: Updates, as the parent chose. A config without it is Stable.
+                app.identity.preRelease = KidVoice.preRelease(new)
                 // k8 (7.13): how long messages stay on the TV, as the parent set it.
                 cfg.keep?.let { d ->
                     val ms = TvRules.keepMs(d)

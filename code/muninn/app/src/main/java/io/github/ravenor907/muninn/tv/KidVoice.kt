@@ -20,7 +20,14 @@ object KidVoice {
     const val SPEED = "speed"
     /** Cap k16: the app reads the config field [SPEED]. */
     const val SPEED_CAP = "k16"
-    val FIELDS = setOf(FIELD, SPEED)
+    /** Cap k17: the device's update channel, "pre" for Pre-release. Stable when it's left out. */
+    const val UPDATES = "uch"
+    const val UPDATES_PRE = "pre"
+    const val UPDATES_CAP = "k17"
+    val FIELDS = setOf(FIELD, SPEED, UPDATES)
+
+    /** Whether config [c] puts the device on Pre-release. Anything but [UPDATES_PRE] is Stable, the safe side. */
+    fun preRelease(c: JSONObject): Boolean = c.opt(UPDATES) == UPDATES_PRE
 
     /**
      * Throws IllegalArgumentException("voice") if config [c] has a "voice" that isn't "f" or "m", and ("speed") if it
@@ -28,6 +35,7 @@ object KidVoice {
      */
     fun check(c: JSONObject) {
         if (c.has(FIELD)) require((c.get(FIELD) as? String) in ReadAloudText.VOICES) { FIELD }
+        if (c.has(UPDATES)) require(c.get(UPDATES) == UPDATES_PRE) { UPDATES }
         if (c.has(SPEED)) {
             val v = c.get(SPEED)
             require(Canon.isInt(v) && (v as Number).toLong() in SPEED_MIN.toLong()..SPEED_MAX.toLong()) { SPEED }

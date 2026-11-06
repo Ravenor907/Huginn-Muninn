@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.ui.fitBars
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -241,7 +242,7 @@ internal fun KidVideo(app: Muninn, m: Chat.Msg, onClose: () -> Unit) {
         val b = bytes
         if (b == null) Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             MIcon("video", Palette.textMuted, 72.dp)
-        } else Box(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
+        } else Box(Modifier.fillMaxSize().background(Color.Black).fitBars()) {
             // Clear of the status bar and a camera cutout, so Back can be reached.
             io.github.ravenor907.muninn.screens.VideoPlayer(b, onClose)
         }

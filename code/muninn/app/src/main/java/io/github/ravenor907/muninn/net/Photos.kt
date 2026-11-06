@@ -212,7 +212,7 @@ object Photos {
         /** The filters over the grid, in order: (key, label). */
         val FILTERS = listOf("all" to "All", PHOTO to "Photos", VIDEO to "Videos", GIF to "GIFs")
         /** Under the grid, about what each video becomes (owner wording, 2026-11-04). */
-        const val NOTE = "Full size close by. Others get up to 5 minutes."
+        const val NOTE = "Full quality for Family and trusted people. Others get up to 5 minutes."
 
         /** The pick order after tapping item [i]: taken out if picked (the rest move up), else added last while there's room. */
         fun toggle(order: List<Int>, i: Int, max: Int = MAX): List<Int> = when {

@@ -508,7 +508,7 @@ object ReadAloud {
         (engine as? com.k2fsa.sherpa.onnx.OfflineTts)?.takeIf { engineDir == key }?.let { return it }
         unload()
         val vits = com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig(
-            model = File(dir, "model.onnx").path, tokens = File(dir, "tokens.txt").path, dataDir = File(dir, "espeak-ng-data").path,
+            model = File(dir, "model.onnx").path, tokens = File(dir, "tokens.txt").path, dataDir = sharedSpeech(dir).path,
             noiseScale = tune.noise, noiseScaleW = tune.width, lengthScale = 1.0f)
         val cfg = com.k2fsa.sherpa.onnx.OfflineTtsConfig(
             model = com.k2fsa.sherpa.onnx.OfflineTtsModelConfig(vits = vits,
@@ -518,6 +518,23 @@ object ReadAloud {
         engine = tts
         engineDir = key
         return tts
+    }
+
+    /**
+     * The speech rules' folder for every voice. The engine keeps the first folder it's given for as long as the app runs, so
+     * it must never be one voice's own: with that voice's folder gone or changed, the next voice read words as nonsense. The
+     * folder is the same in every voice; one copy stays beside them, outside any voice's folder.
+     */
+    private fun sharedSpeech(dir: File): File {
+        val shared = File(dir.parentFile, ReadAloudText.SPEECH_FOLDER)
+        if (!File(shared, "phontab").isFile) synchronized(filesLock) {
+            val fresh = File(dir.parentFile, ReadAloudText.SPEECH_FOLDER + ".new")
+            fresh.deleteRecursively()
+            File(dir, "espeak-ng-data").copyRecursively(fresh, overwrite = true)
+            shared.deleteRecursively()
+            fresh.renameTo(shared)
+        }
+        return shared
     }
 
     /** Lets go of the model (and its memory), and of the speaker. Runs on [synth]. */
@@ -735,8 +752,8 @@ object ReadAloud {
      * folder stay.
      */
     private fun cleanOther(app: Context) = synchronized(filesLock) {
-        val keep = if (io.github.ravenor907.muninn.tv.KidMode.isTv(app)) listOf(ReadAloudText.folderFor(voice(app)))
-            else listOf(ReadAloudText.folderFor(ReadAloudText.FEMALE), ReadAloudText.folderFor(ReadAloudText.MALE))
+        val keep = (if (io.github.ravenor907.muninn.tv.KidMode.isTv(app)) listOf(ReadAloudText.folderFor(voice(app)))
+            else listOf(ReadAloudText.folderFor(ReadAloudText.FEMALE), ReadAloudText.folderFor(ReadAloudText.MALE))) + ReadAloudText.SPEECH_FOLDER
         voicesDir(app).listFiles()?.forEach { f ->
             if (f.name !in keep && f.name != "reading" && !f.name.endsWith(".part") && !f.name.endsWith(".new")) f.deleteRecursively()
         }

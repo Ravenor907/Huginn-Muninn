@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn
 
+import io.github.ravenor907.muninn.ui.fitBars
 import androidx.compose.ui.text.style.TextOverflow
 import android.Manifest
 import android.content.Intent
@@ -702,7 +703,7 @@ class MainActivity : ComponentActivity() {
     private fun PhoneLayout(toast: Pair<String, Boolean>?) {
         // An open conversation (or My code, Add someone, the Nearby room) gets the whole screen: no header, no tabs.
         val full = tab == "chat" && ChatNav.open.isNotEmpty()
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().fitBars()) {
             // Only the raven, the name and the valknut. On Chats the name is centred; in Settings the raven counts taps (Labs).
             val header: @Composable () -> Unit = { Brand(onLogo = if (tab == "settings") ({ io.github.ravenor907.muninn.screens.Labs.tap(app) }) else null,
                 title = title(tab).uppercase(), centered = tab == "chat") {
@@ -822,7 +823,7 @@ class MainActivity : ComponentActivity() {
         // A phone on its side is narrower than a tablet: the list takes a little less, so the chat keeps room.
         val listW = minOf(270.dp, width * 0.34f)
         // A camera cutout on a side edge (sideways foldables and tablets) keeps clear of the rail and the buttons.
-        Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+        Row(Modifier.fillMaxSize().fitBars()
             .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.displayCutout.only(androidx.compose.foundation.layout.WindowInsetsSides.Horizontal))) {
             Column(Modifier.width(80.dp).fillMaxHeight().background(Palette.groundDeep).padding(vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -881,7 +882,7 @@ class MainActivity : ComponentActivity() {
     /** While everything starts in the background: the raven and "Opening…", nothing to tap. */
     @Composable
     private fun Opening() {
-        Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding(),
+        Column(Modifier.fillMaxSize().background(Palette.ground).fitBars(),
             horizontalAlignment = Alignment.CenterHorizontally) {
             Brand()
             Text("Opening…", style = Type.normal, modifier = Modifier.padding(top = 6.dp))

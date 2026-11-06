@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import io.github.ravenor907.muninn.ui.fitBars
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
@@ -185,7 +186,7 @@ fun LockScreen(app: Muninn, inApp: Boolean = false, done: (Boolean) -> Unit) {
         }
     }
     // Clear of the gesture bar too, so the pattern and Erase never sit under it.
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars()) {
         Brand()
         // A pattern: the dots sit where Settings › Privacy and lock says (Lower unless changed), for one-handed use.
         // PadPage keeps the words and Forgot it? in reach and the pad on screen, upright or sideways, at any text size.
@@ -298,7 +299,7 @@ private fun ForgotLock(app: Muninn, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var restoring by remember { mutableStateOf(false) }
     androidx.activity.compose.BackHandler { if (restoring) restoring = false else onBack() }
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars()) {
         Brand()
         Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (!restoring) Panel {
@@ -572,7 +573,7 @@ fun spareStep(app: Muninn): String? = when {
 /** [spareStep]'s page, full screen, before any chat shows. No Skip: the unlock password is the way back in. */
 @Composable
 fun UnlockPasswordPage(app: Muninn, step: String, done: () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars()) {
         Brand {}
         Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
             UnlockPasswordSteps(app, recall = step == "recall", header = {
@@ -590,7 +591,7 @@ fun UnlockPasswordPage(app: Muninn, step: String, done: () -> Unit) {
 @Composable
 fun FirstLock(app: Muninn, done: () -> Unit) {
     val ask by Ui.ask.collectAsState()
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars()) {
         Brand {}
         Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
             LockSetup(app, onCancel = {
@@ -614,7 +615,7 @@ fun FirstLock(app: Muninn, done: () -> Unit) {
 @Composable
 fun NewLock(app: Muninn, done: () -> Unit) {
     val ask by Ui.ask.collectAsState()
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars()) {
         Brand {}
         Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
             LockSetup(app, onCancel = null, fill = true, header = {
@@ -635,7 +636,7 @@ fun NewLock(app: Muninn, done: () -> Unit) {
 @Composable
 fun FirstName(app: Muninn, done: () -> Unit) {
     var name by remember { mutableStateOf(app.identity.username) }
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding().imePadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).fitBars().imePadding()) {
         Brand {}
         Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
             Text("What should people call you?", style = Type.big)
@@ -797,7 +798,7 @@ fun LockGateDialog(app: Muninn) {
     val g = LockGate.open ?: return
     androidx.compose.ui.window.Dialog(onDismissRequest = { LockGate.close() },
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
-        Box(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
+        Box(Modifier.fillMaxSize().background(Palette.ground).fitBars().padding(16.dp)) {
             androidx.compose.runtime.key(g) {
                 ConfirmLock(app, g.what, Modifier.fillMaxSize(), onCancel = { LockGate.close() }) { LockGate.close(); g.then() }
             }

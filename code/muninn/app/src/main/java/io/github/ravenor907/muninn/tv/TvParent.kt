@@ -98,6 +98,8 @@ data class ManagedTv(
     val voice: String = "",
     /** k15 (1.42): the read-aloud speed picked for the device, a whole number 50 to 150 as the config carries it (null: none picked, it reads at 100%; 1.43 maps it into 70% to 130%). */
     val speed: Int? = null,
+    /** k17: Updates, Pre-release (off: Stable, what every Kids' Device starts on). */
+    val pre: Boolean = false,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -337,7 +339,9 @@ object TvParent {
                 // k15: the read-aloud voice, once a parent picked one, and only while every co-parent's app reads it.
                 voice = KidVoice.toSend(t.voice, k15(app, key), coParentCaps(app, t)),
                 // k16 (1.42): the speed beside it, only when the device and every co-parent's app say k16.
-                speed = KidVoice.speedToSend(t.speed, k16(app, key), coParentCaps(app, t))) else null
+                speed = KidVoice.speedToSend(t.speed, k16(app, key), coParentCaps(app, t)),
+                // k17: only to a device whose app reads it.
+                pre = t.pre && k17(app, key)) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -610,6 +614,7 @@ object TvParent {
             // k15: another parent's voice pick (the latest config wins); a config without one leaves this phone's as it was.
             voice = KidVoice.of(cfg.raw) ?: t.voice,
             speed = KidVoice.speedOf(cfg.raw) ?: t.speed,
+            pre = KidVoice.preRelease(cfg.raw),
         )
     }
 
@@ -1092,6 +1097,12 @@ object TvParent {
     /** The device's app said "k15". */
     fun k15(app: Muninn, key: String): Boolean = KidVoice.CAP in (app.contacts.get(key)?.caps ?: emptySet())
 
+    /** The device's app said "k17" (it reads Updates: Stable or Pre-release). */
+    fun k17(app: Muninn, key: String): Boolean = KidVoice.UPDATES_CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** The parent picked the device's updates: Stable, or Pre-release. */
+    fun setPre(key: String, on: Boolean) = change(key) { it.copy(pre = on) }
+
     /** The device's app said "k16" (it reads the read-aloud speed). */
     fun k16(app: Muninn, key: String): Boolean = KidVoice.SPEED_CAP in (app.contacts.get(key)?.caps ?: emptySet())
 
@@ -1391,7 +1402,7 @@ object TvParent {
             .put("waitKid", JSONObject().apply { t.waitKid.forEach { (k, v) -> put(k, v) } })
             .put("kidAsks", JSONArray().apply { t.kidAsks.forEach { put(JSONObject().put("a", JSONObject(KidK14.kidAddMessage(it.add))).put("from", it.from)) } })
             .put("goneC", JSONArray(t.goneC)).put("goneP", JSONArray(t.goneP)).put("voice", t.voice)
-            .apply { t.speed?.let { put("speed", it) } }
+            .apply { t.speed?.let { put("speed", it) }; if (t.pre) put("pre", true) }
             .apply { t.pin?.let { put("pin", KidRules.pinJson(it)) } })
     }
 
@@ -1439,7 +1450,7 @@ object TvParent {
                 } } ?: emptyList(),
                 goneC = strs(x.optJSONArray("goneC")), goneP = strs(x.optJSONArray("goneP")),
                 voice = x.optString("voice").takeIf { it in io.github.ravenor907.muninn.net.ReadAloudText.VOICES } ?: "",
-                speed = x.optInt("speed", 0).takeIf { it in KidVoice.SPEED_MIN..KidVoice.SPEED_MAX })
+                speed = x.optInt("speed", 0).takeIf { it in KidVoice.SPEED_MIN..KidVoice.SPEED_MAX }, pre = x.optBoolean("pre"))
         } catch (e: Exception) { null }
     }.toMap()
 }

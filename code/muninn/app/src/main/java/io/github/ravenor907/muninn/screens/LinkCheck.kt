@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import io.github.ravenor907.muninn.ui.fitBars
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -171,7 +172,7 @@ fun LinkYourPhone(app: Muninn, onClose: () -> Unit) {
     }
     Box(Modifier.fillMaxSize().background(Palette.ground)) {
         io.github.ravenor907.muninn.ui.SeasonFall()
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().fitBars()) {
             val p = phone
             when {
                 done != null || (p?.ok == true && !LinkUi.relinking) -> DoneStep(true, p?.name ?: "") { close() }
@@ -247,7 +248,7 @@ fun LinkCheck(app: Muninn) {
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
         Box(Modifier.fillMaxSize().background(Palette.ground)) {
             io.github.ravenor907.muninn.ui.SeasonFall()
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Column(Modifier.fillMaxSize().fitBars()) {
                 if (d != null) MatchStep(d.name, Link.emojiWith(d.key), companion,
                     onYes = { Link.confirm(d.key); LinkUi.linked = LinkUi.Linked(d.name, companion) },
                     onNo = { Link.unlink(d.key) })
@@ -290,7 +291,7 @@ private fun RelinkScan(name: String) {
     val scope = rememberCoroutineScope()
     Dialog(onDismissRequest = { LinkUi.rescan = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Palette.ground)) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Column(Modifier.fillMaxSize().fitBars()) {
                 Step {
                     RavenMark()
                     Text("Link $name again", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp).semantics { heading() })

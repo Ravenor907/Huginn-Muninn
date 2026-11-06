@@ -308,6 +308,28 @@ private:
         return true;
     }
 
+    // The speech rules' folder for every voice. The engine keeps the first folder it's given for as long as the app runs, so
+    // it must never be one voice's own: with that voice's folder gone or changed, the next voice read words as nonsense.
+    // The folder is the same in every voice; one copy stays beside them, outside any voice's folder.
+    static QString sharedSpeech(const QString &dir)
+    {
+        const QString shared = QFileInfo(dir).path() + QStringLiteral("/speech");
+        if (QFileInfo::exists(shared + QStringLiteral("/phontab")))
+            return shared;
+        const QString fresh = shared + QStringLiteral(".new");
+        QDir(fresh).removeRecursively();
+        const QString from = dir + QStringLiteral("/espeak-ng-data");
+        QDirIterator it(from, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString f = it.next();
+            const QString to = fresh + QLatin1Char('/') + QDir(from).relativeFilePath(f);
+            QDir().mkpath(QFileInfo(to).path());
+            QFile::copy(f, to);
+        }
+        QDir(shared).removeRecursively();
+        return QDir().rename(fresh, shared) ? shared : from;
+    }
+
     bool open(const QString &dir, float noise, float width, QString *why)
     {
         if (m_tts && m_dir == dir && m_noise == noise && m_width == width)
@@ -317,7 +339,7 @@ private:
             return false;
         const QByteArray model = enginePath(dir + QStringLiteral("/model.onnx"));
         const QByteArray tokens = enginePath(dir + QStringLiteral("/tokens.txt"));
-        const QByteArray data = enginePath(dir + QStringLiteral("/espeak-ng-data"));
+        const QByteArray data = enginePath(sharedSpeech(dir));
         // In a zeroed buffer 4 KB larger than the struct: a library whose struct were bigger reads zeros, never the stack.
         alignas(SherpaOnnxOfflineTtsConfig) unsigned char room[sizeof(SherpaOnnxOfflineTtsConfig) + 4096];
         std::memset(room, 0, sizeof room);
@@ -1284,7 +1306,7 @@ void ReadAloud::cleanOther()
     releaseEngine([this] {
         // Both natural voices stay, so a switch never downloads anything again; only leftovers go. A download under way
         // (its part and its unpack folder) stays.
-        const QStringList keep{folderFor(QStringLiteral("f")), folderFor(QStringLiteral("m"))};
+        const QStringList keep{folderFor(QStringLiteral("f")), folderFor(QStringLiteral("m")), QStringLiteral("speech")};
         const QDir d(voicesDir());
         for (const QString &e : d.entryList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
             if (keep.contains(e) || (!m_downloading.isEmpty() && (e.startsWith(fileFor(m_downloading)) || e.startsWith(folderFor(m_downloading)))))
@@ -1993,8 +2015,8 @@ bool ReadAloud::selfTest()
     check("the verse, 900 ms, What it means, one dot only", versePhrases(QStringLiteral("Fire he needs,\nThe man from the mountains come.."), QStringLiteral("Help them.\nBe kind."), false)
                                                                == P{{QStringLiteral("Fire he needs,"), 400}, {QStringLiteral("The man from the mountains come."), 900},
                                                                     {QStringLiteral("What it means."), 500}, {QStringLiteral("Help them."), 500}, {QStringLiteral("Be kind."), 0}});
-    check("tuning presets", tuneFor(QStringLiteral("A")).noise == 0.667f && tuneFor(QStringLiteral("B")).width == 0.6f && tuneFor(QStringLiteral("D")).width == 1.0f
-                                && tuneFor(QStringLiteral("E")).noise == 0.8f && QLatin1String(tuneFor(QStringLiteral("x")).id) == QLatin1String("A"));
+    check("tuning presets", tuneFor(QStringLiteral("A")).noise == 0.667f && tuneFor(QStringLiteral("B")).width == 0.4f && tuneFor(QStringLiteral("D")).width == 1.2f
+                                && tuneFor(QStringLiteral("E")).noise == 1.0f && QLatin1String(tuneFor(QStringLiteral("x")).id) == QLatin1String("A"));
     // code/shared/voices.sha256.
     const QString a64 = QString(64, QLatin1Char('a'));
     const QHash<QString, QString> h = hashes(QStringLiteral("# comment\n%1  voice-female-1.tar\nnothex  voice-male-1.tar\n%2 one-space.tar\n")

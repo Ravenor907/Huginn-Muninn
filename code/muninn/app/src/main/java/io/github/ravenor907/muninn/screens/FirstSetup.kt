@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import io.github.ravenor907.muninn.ui.fitBars
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -251,7 +252,7 @@ fun FirstSetup(app: Muninn) {
     BackHandler(enabled = !run.first || run.practice) { if (run.first) Setup.finish(false) else Setup.back() }
     Box(Modifier.fillMaxSize().background(Palette.ground)) {
         io.github.ravenor907.muninn.ui.SeasonFall()
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+        Column(Modifier.fillMaxSize().fitBars().imePadding()) {
             if (run.practice) PracticeRibbon()
             Brand {}
             Box(Modifier.weight(1f).fillMaxWidth()) {

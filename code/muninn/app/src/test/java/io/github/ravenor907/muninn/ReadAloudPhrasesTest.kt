@@ -173,8 +173,8 @@ class ReadAloudPhrasesTest {
         assertEquals("A", a.name)
         assertEquals(0.667f, a.noise, 0f)
         assertEquals(0.8f, a.width, 0f)
-        assertEquals(ReadAloudText.Tune("D", 0.6f, 1.0f), ReadAloudText.tuneOf("D"))
+        assertEquals(ReadAloudText.Tune("D", 0.5f, 1.2f), ReadAloudText.tuneOf("D"))
         assertEquals("A", ReadAloudText.tuneOf("Z").name)
-        assertEquals("B: 0.5 / 0.6", ReadAloudText.tuneText(ReadAloudText.tuneOf("B")))
+        assertEquals("B: 0.33 / 0.4", ReadAloudText.tuneText(ReadAloudText.tuneOf("B")))
     }
 }
