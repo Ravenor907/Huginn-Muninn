@@ -1282,12 +1282,12 @@ void ReadAloud::releaseEngine(std::function<void()> then)
 void ReadAloud::cleanOther()
 {
     releaseEngine([this] {
-        // Only the chosen voice is kept: the other one (and any leftovers) go once this one is in. A download under
-        // way (its part and its unpack folder) stays.
-        const QString keep = folderFor(naturalVoice());
+        // Both natural voices stay, so a switch never downloads anything again; only leftovers go. A download under way
+        // (its part and its unpack folder) stays.
+        const QStringList keep{folderFor(QStringLiteral("f")), folderFor(QStringLiteral("m"))};
         const QDir d(voicesDir());
         for (const QString &e : d.entryList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
-            if (e == keep || (!m_downloading.isEmpty() && (e.startsWith(fileFor(m_downloading)) || e.startsWith(folderFor(m_downloading)))))
+            if (keep.contains(e) || (!m_downloading.isEmpty() && (e.startsWith(fileFor(m_downloading)) || e.startsWith(folderFor(m_downloading)))))
                 continue;
             const QString p = d.filePath(e);
             if (QFileInfo(p).isDir())

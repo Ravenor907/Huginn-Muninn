@@ -53,7 +53,7 @@ with the device's own voice where there is one (Read aloud is hidden where nothi
   it exists, beta builds warn and release builds stop.
 - **When.** The first time something is read aloud, in the background, on Wi-Fi (or any network with "Allow on mobile
   data" on, in Settings › Look › Read aloud). Kept in Muninn's private files and Huginn's data folder; "Delete voices"
-  frees the space. Switching voices downloads the other one the same way and deletes the first once it's ready.
+  frees the space. Phones, tablets and computers keep both voices once each is in, so a switch never downloads again. A TV keeps only the voice in use.
 - **Ultra privacy.** While it's on, the download goes through Tor when Ultra privacy offers a way to; otherwise the app
   waits and says so, and keeps the device's voice. On Muninn it starts only from Settings' "Download the voice now"
   (65 MB through Tor is slow), never from a read.

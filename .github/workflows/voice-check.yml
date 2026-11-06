@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pip install --quiet sherpa-onnx numpy
+          pip install --quiet sherpa-onnx==1.13.8 numpy
           mkdir -p v
           grep -E '  voice-(female|male)-[0-9]+\.tar$' code/shared/voices.sha256 | while read -r sum name; do
             tag=voices-${name##*-}; tag=${tag%.tar}
