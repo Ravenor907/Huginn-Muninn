@@ -233,6 +233,11 @@ void VideoMsg::play(const QString &id, QObject *videoOutput)
         delete big;
         big = nullptr;
     }
+    // A longer video whose pieces aren't here (backups and moves leave them out): only its poster is.
+    if (!big && id != QLatin1String("review") && m_chat->bigVideoGone(id)) {
+        setError(QStringLiteral("This video isn't on this computer. Longer videos don't come along in a backup or a move."));
+        return;
+    }
     if (!big)
         m_shown = id == QLatin1String("review") ? m_clip : m_chat->blob(id);
     if (!big && !MoreWire::isVideo(m_shown)) {

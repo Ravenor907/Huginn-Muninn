@@ -121,7 +121,10 @@ inline const char kTooLongTitle[] = "Video too long";
 inline const char kTooLongText[] = "Videos over the internet can be up to 5 minutes.";
 inline const char kNote[] = "Full size close by. Others get up to 5 minutes.";
 QString names(const QStringList &n);
-QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf);
+// newPath: whether a member's app has the new paths (Member::newPath). A member it can't go to says "their app is
+// older" without them, and "no way to reach them" with them (none given: every member has them).
+QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf,
+                const std::function<bool(const QString &)> &newPath = {});
 
 // When each relay piece may go: kPacePerSecond a second, nothing while a "rate-limited" answer is under kBackoffMs old.
 class Pacer

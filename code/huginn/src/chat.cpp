@@ -3083,8 +3083,10 @@ void Chat::retryLoop()
 void Chat::retry(const QString &key, const QString &id)
 {
     for (const QVariant &v : m_private.value(key))
-        if (str(v.toMap(), "id") == id && v.toMap().value(QStringLiteral("vb")).toBool())
-            return;   // a longer video: its FileLink card has Retry
+        if (str(v.toMap(), "id") == id && v.toMap().value(QStringLiteral("vb")).toBool()) {
+            retryBigVideo(key, id);   // a longer video: its FileLink cards go again
+            return;
+        }
     m_tries.remove(id);
     update(key, id, [](QVariantMap &x) {
         x.insert(QStringLiteral("failed"), false);

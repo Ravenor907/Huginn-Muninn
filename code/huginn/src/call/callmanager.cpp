@@ -259,7 +259,7 @@ void CallManager::startVideo()
         });
         connect(m, &CallMedia::profileChanged, this, [this] {
             if (m_camera && m_session && m_session->media())
-                m_camera->setProfile(m_session->media()->profile(VideoWire::Camera));
+                m_camera->setProfile(m_session->media()->profile(VideoWire::Camera), m_session->media()->videoKbps(VideoWire::Camera));
         });
     }
     if (m_cameraOn)
@@ -304,7 +304,7 @@ void CallManager::setCamera(bool on)
     if (m_cameraOn) {
         ensureSender();
         m_camera->setPreview(m_localSink);
-        m_camera->setProfile(m->profile(VideoWire::Camera));
+        m_camera->setProfile(m->profile(VideoWire::Camera), m->videoKbps(VideoWire::Camera));
         if (!m_camera->start()) {
             Q_EMIT finished(QStringLiteral("No camera found"));
             m_cameraOn = false;
@@ -356,7 +356,7 @@ QString CallManager::shareVideo(const QString &path)
     // The camera stops while the video plays in its place; whether it was on is kept (m_cameraOn) for after.
     m_camera->stop();
     m_camera->setPreview(m_localSink);
-    m_camera->setProfile(m->profile(VideoWire::Camera));
+    m_camera->setProfile(m->profile(VideoWire::Camera), m->videoKbps(VideoWire::Camera));
     m_camera->setKbps(m->videoKbps(VideoWire::Camera));
     m_camera->requestKey();
     m->setVideoSending(VideoWire::Camera, true);

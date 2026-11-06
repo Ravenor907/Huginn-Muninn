@@ -1417,6 +1417,8 @@ Window {
     Connections {
         target: Chat
         function onNotice(text) { app.sayUnlessLocked(text) }
+        // A longer video's Save, written on its own thread.
+        function onMediaSaved(path) { Ui.say(path !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save the video.", path === "") }
         function onLiveChanged() {
             const a = Chat.active, t = Date.now(), seen = Object.assign({}, app.lastActive)
             for (const k in a) seen[k] = t

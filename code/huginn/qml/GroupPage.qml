@@ -1599,7 +1599,7 @@ Rectangle {
         else if (a === "report") reportToAdmins(m)
         else if (a === "view") viewing = m.photo
         else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
-        else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
+        else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p === "saving" ? "Saving the video." : p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
         else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
         else if (a === "unsend") Ui.sure("Unsend this message?", "It's removed for everyone.", "Unsend", () => Chat.unsendGroup(g, m.id), true, true)
         else if (a === "remove")

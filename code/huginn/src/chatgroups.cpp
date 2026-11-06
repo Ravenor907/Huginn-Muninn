@@ -1393,6 +1393,13 @@ void Chat::deleteGroupMessage(const QString &g, const QString &id)
 
 void Chat::retryGroup(const QString &g, const QString &id)
 {
+    // A longer video: never in the outbox; its FileLink cards go again.
+    if (const auto it = m_groups.constFind(g); it != m_groups.cend())
+        for (const QVariant &v : it->messages)
+            if (str(v.toMap(), "id") == id && v.toMap().value(QStringLiteral("vb")).toBool()) {
+                retryBigVideo(QStringLiteral("g:") + g, id);
+                return;
+            }
     for (auto it = m_gout.begin(); it != m_gout.end(); ++it)
         if (it->g == g && it->logical == id) {
             it->next = 0;

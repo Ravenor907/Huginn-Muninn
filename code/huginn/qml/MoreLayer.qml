@@ -66,8 +66,9 @@ Item {
         if (tour) return
         if (where === "") { Ui.say("Open a chat first.", true); return }
         const cam = Videos.hasCamera()
-        // FileLink.reachNote: "" when Nearby, Trusted direct or Tor works right now, else "Ask them to update" (an
-        // older app) or "Can't reach them right now". A group keeps the row on: each member gets their own path.
+        // FileLink.reachNote: "" when Nearby, Trusted direct, the relay or Tor works right now, else "Ask them to update"
+        // (an older app), why there's no way with Ultra privacy off (FileLink::noPathWhy), or "Can't reach them right
+        // now". A group keeps the row on: each member gets their own path.
         const inGroup = String(where).indexOf("g:") === 0
         const note = inGroup || typeof FileLink.reachNote !== "function" ? "" : String(FileLink.reachNote(where) || "")
         const reach = note === ""
@@ -310,7 +311,7 @@ Item {
         else if (a === "forward") { if (sharedTab === "links") PeopleActions.forwardMenu(it.url); else PeopleActions.forwardMedia(it, kindOf(it)) }
         else if (a === "save") {
             const path = Chat.saveMedia(it.photo)
-            Ui.say(path !== "" ? "Saved in " + saveWhere(it) + "." : "Couldn't save it.", path === "")
+            Ui.say(path === "saving" ? "Saving the video." : path !== "" ? "Saved in " + saveWhere(it) + "." : "Couldn't save it.", path === "")
         } else if (a === "delete") {
             const w = where, kind = kindOf(it)
             Ui.sure("Delete this " + kind + "?", "It's deleted on this computer only.", "Delete", () => {

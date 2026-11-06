@@ -72,7 +72,9 @@ names start with "@" and are never written as files:
 | `@prefs.json` | Muninn's settings (Muninn only). |
 
 Huginn's settings go in as `huginn-settings.dat`. Files and pictures are `photos/...` and `mirror-media/...`; left out
-when the checkbox is off.
+when the checkbox is off. A longer video's pieces (`photos/<id>.v/...`) are never in a backup or a move, since both are
+held whole in memory: its poster (`photos/<id>`) still goes, and on the other device the bubble shows the poster and
+Play says the video isn't there.
 
 ### 2.3 Restoring
 

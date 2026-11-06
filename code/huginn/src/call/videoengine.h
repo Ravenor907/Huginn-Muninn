@@ -75,7 +75,8 @@ public:
     bool start();
     void stop();
     bool running() const { return m_running; }
-    void setProfile(const VideoWire::Profile &p);
+    // kbps: the bitrate now (CallMedia::videoKbps); 0 for 60 % of the profile's cap.
+    void setProfile(const VideoWire::Profile &p, int kbps = 0);
     void setKbps(int kbps);
     void requestKey();
     // The camera's own picture, for the small self view (picture in picture).

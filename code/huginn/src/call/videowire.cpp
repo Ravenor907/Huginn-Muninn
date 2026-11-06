@@ -280,9 +280,11 @@ VideoWire::Assembler::Ask VideoWire::Assembler::poll(qint64 now, int rtt)
 void VideoWire::RateControl::setCap(int kbps)
 {
     const bool first = m_raised == 0 && m_lowered == 0 && m_kbps == 420;
+    const int was = m_cap;
     m_cap = std::max(kMin, kbps);
-    if (first)
-        m_kbps = std::max(kMin, m_cap * 6 / 10);
+    // A higher cap (the call moved from the relay to a free path): at least 60 % of it at once, as a new call starts.
+    if (first || m_cap > was)
+        m_kbps = std::max({kMin, m_kbps, m_cap * 6 / 10});
     m_kbps = std::min(m_kbps, m_cap);
 }
 
@@ -510,6 +512,13 @@ bool VideoWire::selfTest()
         for (int i = 0; i < 60; ++i)
             rc.onReport(0, t += 1000);
         check(rc.kbps() == 700, "a clean network climbs back to the cap and stops there");
+        RateControl up;
+        up.setCap(700);
+        up.onReport(12, 1000);
+        up.setCap(2000);
+        check(up.kbps() == 1200 && rung(up.kbps(), up.cap(), 2) == 0, "a higher cap (a free path) starts at 60 % of it, on ladder step 0");
+        up.setCap(700);
+        check(up.kbps() == 700, "a lower cap holds it under");
         check(cameraProfile(false).height == 480 && cameraProfile(false).capKbps <= 700 && cameraProfile(true).height == 720,
               "480p over the relay, 720p on Wi-Fi or direct");
         check(screenProfile(true, true).fps == 30 && screenProfile(true, true).height == 720 && screenProfile(false, true).height == 480

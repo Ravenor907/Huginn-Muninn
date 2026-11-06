@@ -102,6 +102,13 @@ public:
     static QString notSentText() { return QStringLiteral("Didn't send. Try again."); }
     static QString updateText() { return QStringLiteral("Ask them to update"); }
     static QString noPathText() { return QStringLiteral("Can't reach them right now"); }
+    // With Ultra privacy off, Tor carries no files: why there is no way over the internet to them, the same words as
+    // Muninn's ("" when it's only that they or this device are offline). Receiver with Ultra privacy on: their decline
+    // says so (Sharing::declineText("tor")).
+    static QString outsideText() { return QStringLiteral("Files reach people outside Family and trusted contacts on the same Wi-Fi, or with Trusted direct on for each other."); }
+    static QString olderFamilyText() { return QStringLiteral("Ask them to update, or send on the same Wi-Fi."); }
+    static QString relayUsedText() { return QStringLiteral("The relay's free limit is used this month. Send on the same Wi-Fi."); }
+    QString noPathWhy(const QString &peer, const QString &group) const;
     // How long an offer waits for an answer: longer for a file the other side asks about first.
     static constexpr int kAnswerMs = 120000;
     static constexpr int kAskAnswerMs = 10 * 60000;
@@ -200,7 +207,7 @@ public:
     Q_INVOKABLE QString sendTo(const QString &where, const QVariantList &urls);
     // Cap f4: whether a file can reach them now (the Send menu's "Encrypted file sharing" row): false only when no path
     // can (no internet and not on the same Wi-Fi, or their app is too old). reachNote: "" or what the greyed row says
-    // ("Ask them to update", "Can't reach them right now"). torWarning: the question before a file over 1 GB that will
+    // ("Ask them to update", "Can't reach them right now", or why with Ultra privacy off: noPathWhy). torWarning: the question before a file over 1 GB that will
     // most likely go over Tor ("" when it needn't ask).
     Q_INVOKABLE bool canReach(const QString &peer) const { return reachNote(peer).isEmpty(); }
     Q_INVOKABLE QString reachNote(const QString &peer) const;
@@ -264,6 +271,8 @@ public:
     Q_INVOKABLE bool canRetry(const QString &id) const;
     // Retry: the card goes and its file is sent again.
     Q_INVOKABLE void retry(const QString &id);
+    // A longer video's bubble (Try again on it): every failed card linked to it goes again. False when none is here.
+    bool retryBig(const QString &chat, const QString &msgId);
     // Open: the app this computer uses for that kind of file (only when the person asks). Show in folder: its folder.
     // A program or a file whose name hides what it is (Sharing::openWarning) isn't opened: askOpen says why, and
     // openAnyway opens it once the person agrees.
@@ -401,6 +410,9 @@ private:
     QString m_nextBigChat, m_nextBigMsg;
     // A card (one that failed before it began) follows a longer video's message too, so its Retry stays linked.
     void tagBig(const QString &id, const QString &chat, const QString &msgId, int vid);
+    // A card for longer video [msgId] failed or stopped: once none for it is still on its way, its bubble says Not sent
+    // (Chat::bigVideoFailed), and (keep) the failed card is kept across a restart so its Retry stays linked.
+    void bigCheck(const QString &id, const QString &chat, const QString &msgId, bool keep);
     void drop(const QString &id);
     void finish(Xfer *x);
     void end(Xfer *x);

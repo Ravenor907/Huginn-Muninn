@@ -277,6 +277,12 @@ void CallMedia::tick()
     const bool free = t - m_paths[Wifi].lastPong < 3000 || t - m_paths[Direct].lastPong < 3000;
     if (free != m_wasFree) {
         m_wasFree = free;
+        // A free path raises the cap (and the bitrate with it): the camera goes back to ladder step 0 at once, rather
+        // than climbing back a step every 10 s from where the relay left it.
+        if (free) {
+            m_rung = 0;
+            m_rungAt = t;
+        }
         m_rate[0].setCap(profile(VideoWire::Camera).capKbps);
         m_rate[1].setCap(profile(VideoWire::Screen).capKbps);
         Q_EMIT profileChanged();

@@ -242,13 +242,18 @@ bool Chat::videoSendingOff() const { return false; }
 QVariantMap Chat::planVideo(const QString &where, const QString &path, bool inFull)
 {
     Q_UNUSED(inFull)   // 1.42: no "in full later": a video is never cut, and full copies wait as any file does
-    const Picked p = pick(path, videoMembers(where));
+    const QList<GroupVideo::Member> members = videoMembers(where);
+    const Picked p = pick(path, members);
     QVariantMap out{{QStringLiteral("ok"), p.ok}, {QStringLiteral("why"), p.why}, {QStringLiteral("asFile"), p.asFile},
                     {QStringLiteral("tooLong"), p.tooLong}, {QStringLiteral("ms"), p.info.ms},
                     {QStringLiteral("title"), p.tooLong ? QString::fromLatin1(GroupVideo::kTooLongTitle) : QString()}};
     if (!p.ok)
         return out;
-    QString said = GroupVideo::summary(p.plan, [this](const QString &k) { return nameOf(k); });
+    QSet<QString> newPath;
+    for (const GroupVideo::Member &m : members)
+        if (m.newPath)
+            newPath.insert(m.k);
+    QString said = GroupVideo::summary(p.plan, [this](const QString &k) { return nameOf(k); }, [&newPath](const QString &k) { return newPath.contains(k); });
     const int none = count(p.plan, "none");
     if (none > 0 && !p.fullOk)
         said += QStringLiteral(" It's over 1080p or 30 frames a second, and Huginn can't convert videos: as a file it reaches everyone.");
@@ -462,6 +467,23 @@ QIODevice *Chat::bigVideoDevice(const QString &id, QObject *parent) const
     return new BigVideo::Device(total, [read, id](int i) { return read(BigVideo::piece(id, i)); }, parent);
 }
 
+bool Chat::bigVideoGone(const QString &id) const
+{
+    if (!m_ready || id.isEmpty() || isBigVideo(id))
+        return false;
+    const auto vb = [&id](const QVariant &v) {
+        const QVariantMap m = v.toMap();
+        return m.value(QStringLiteral("vb")).toBool() && str(m, "photo") == id;
+    };
+    for (auto it = m_private.cbegin(); it != m_private.cend(); ++it)
+        if (std::any_of(it.value().cbegin(), it.value().cend(), vb))
+            return true;
+    for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it)
+        if (std::any_of(it->messages.cbegin(), it->messages.cend(), vb))
+            return true;
+    return false;
+}
+
 void Chat::dropBig(const QString &id)
 {
     if (id.isEmpty() || id.contains(QLatin1Char('/')))
@@ -490,98 +512,87 @@ void Chat::sweepBig()
 
 void Chat::storeBigVideo(const QString &id, const QString &path, std::function<void(bool)> done)
 {
-    struct Job {
-        QString id;
-        QFile file;
-        qint64 total = 0, written = 0;
-        int i = 0;
-        std::function<void(bool)> done;
-    };
-    auto job = std::make_shared<Job>();
-    job->id = id;
-    job->done = std::move(done);
     const QFileInfo fi(path);
     QStorageInfo disk(QFileInfo(m_vault->path(QStringLiteral("photos"))).absolutePath());
     disk.refresh();
     const bool room = !disk.isValid() || disk.bytesAvailable() < 0 || disk.bytesAvailable() >= fi.size() + (qint64(200) << 20);
-    job->file.setFileName(path);
-    if (!m_ready || m_vault->locked() || id.isEmpty() || id.contains(QLatin1Char('/')) || m_bigStoring.contains(id) || !fi.isFile()
-        || fi.size() <= 0 || fi.size() > FileLink::kMaxBytes || !room || !job->file.open(QIODevice::ReadOnly)) {
-        QTimer::singleShot(0, this, [job] { job->done(false); });
+    if (!m_ready || m_vault->locked() || m_vault->sealing() || id.isEmpty() || id.contains(QLatin1Char('/')) || m_bigStoring.contains(id)
+        || !fi.isFile() || fi.size() <= 0 || fi.size() > FileLink::kMaxBytes || !room) {
+        QTimer::singleShot(0, this, [done] { done(false); });
         return;
     }
-    job->total = fi.size();
+    const qint64 total = fi.size();
     dropBig(id);
     m_bigStoring.insert(id);
     QPointer<Chat> self(this);
-    auto fail = [self, job] {
-        job->file.close();
+    auto fail = [self, id, done] {
         if (self) {
-            self->m_bigStoring.remove(job->id);
-            self->dropBig(job->id);
-            self->m_vault->remove(QStringLiteral("photos/") + job->id);
+            self->m_bigStoring.remove(id);
+            self->dropBig(id);
+            self->m_vault->remove(QStringLiteral("photos/") + id);
         }
-        job->done(false);
+        done(false);
     };
-    // One sealed piece per turn of the event loop, so the window keeps moving while a long video is kept.
-    auto step = std::make_shared<std::function<void()>>();
-    std::weak_ptr<std::function<void()>> weak = step;
-    *step = [self, job, fail, weak] {
+    // The pieces are sealed and written on their own thread, so the window and call sound never wait on them. Only the
+    // size, the poster and the message (in done) are written here, at the end.
+    const std::function<bool(const QString &, const QByteArray &)> write = m_vault->anyThreadWriter();
+    auto ok = std::make_shared<bool>(false);
+    QThread *t = QThread::create([path, id, total, write, ok] {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly))
+            return;
+        qint64 written = 0;
+        for (int i = 0;; ++i) {
+            QByteArray chunk = f.read(BigVideo::kPiece);
+            if (chunk.isEmpty())
+                break;
+            const bool good = write(BigVideo::piece(id, i), chunk);
+            written += chunk.size();
+            chunk.fill(0);
+            if (!good || written > total)
+                return;
+        }
+        *ok = written == total;
+    });
+    t->setObjectName(QStringLiteral("huginn-video-keep"));
+    connect(t, &QThread::finished, this, [self, t, id, total, ok, fail, done] {
+        t->deleteLater();
         if (!self)
             return;
         Chat *c = self;
-        if (!c->m_ready || c->m_vault->locked()) {
-            fail();
-            return;
-        }
-        QByteArray chunk = job->file.read(BigVideo::kPiece);
-        if (!chunk.isEmpty()) {
-            const bool ok = c->m_vault->write(BigVideo::piece(job->id, job->i), chunk);
-            job->written += chunk.size();
-            chunk.fill(0);
-            ++job->i;
-            if (!ok || job->written > job->total) {
-                fail();
-                return;
-            }
-            if (const std::shared_ptr<std::function<void()>> next = weak.lock())
-                QTimer::singleShot(0, c, [next] { (*next)(); });
-            return;
-        }
-        job->file.close();
-        if (job->written != job->total || !c->m_vault->write(BigVideo::sizeName(job->id), QByteArray::number(job->total))) {
+        if (!*ok || !c->m_ready || c->m_vault->locked() || !c->m_vault->write(BigVideo::sizeName(id), QByteArray::number(total))) {
             fail();
             return;
         }
         // Its first frame, read from the sealed pieces: the bubble's picture.
-        QIODevice *dev = c->bigVideoDevice(job->id);
+        QIODevice *dev = c->bigVideoDevice(id);
         if (!dev) {
             fail();
             return;
         }
-        BigVideo::poster(dev, c, [self, job, fail](const QByteArray &jpg) {
-            if (!self || !self->m_ready || jpg.isEmpty() || !self->m_vault->write(QStringLiteral("photos/") + job->id, jpg)) {
+        BigVideo::poster(dev, c, [self, id, fail, done](const QByteArray &jpg) {
+            if (!self || !self->m_ready || jpg.isEmpty() || !self->m_vault->write(QStringLiteral("photos/") + id, jpg)) {
                 fail();
                 return;
             }
-            self->m_bigStoring.remove(job->id);
-            job->done(true);
+            self->m_bigStoring.remove(id);
+            done(true);
         });
-    };
-    QTimer::singleShot(0, this, [step] { (*step)(); });
+    });
+    t->start();
 }
 
-bool Chat::exportBig(const QString &id, const QString &path) const
+bool Chat::exportBigWith(const std::function<QByteArray(const QString &)> &read, const QString &id, const QString &path)
 {
-    if (!isBigVideo(id))
+    if (id.isEmpty() || id.contains(QLatin1Char('/')))
         return false;
-    const qint64 total = m_vault->read(BigVideo::sizeName(id)).trimmed().toLongLong();
+    const qint64 total = read(BigVideo::sizeName(id)).trimmed().toLongLong();
     QFile f(path);
     if (total <= 0 || !f.open(QIODevice::WriteOnly))
         return false;
     qint64 done = 0;
     for (int i = 0; done < total; ++i) {
-        QByteArray b = m_vault->read(BigVideo::piece(id, i));
+        QByteArray b = read(BigVideo::piece(id, i));
         const bool ok = !b.isEmpty() && f.write(b) == b.size();
         done += b.size();
         b.fill(0);
@@ -597,6 +608,24 @@ bool Chat::exportBig(const QString &id, const QString &path) const
         return false;
     }
     return true;
+}
+
+void Chat::exportBig(const QString &id, const QString &path)
+{
+    if (!isBigVideo(id)) {
+        QTimer::singleShot(0, this, [this] { Q_EMIT mediaSaved(QString()); });
+        return;
+    }
+    // Read and written on its own thread (hundreds of MB for a long one): the window and call sound keep going.
+    const std::function<QByteArray(const QString &)> read = m_vault->anyThreadReader();
+    auto ok = std::make_shared<bool>(false);
+    QThread *t = QThread::create([read, id, path, ok] { *ok = exportBigWith(read, id, path); });
+    t->setObjectName(QStringLiteral("huginn-video-save"));
+    connect(t, &QThread::finished, this, [this, t, path, ok] {
+        t->deleteLater();
+        Q_EMIT mediaSaved(*ok ? path : QString());
+    });
+    t->start();
 }
 
 void Chat::inlineVideo(const QString &from, const QString &group, const QString &path, int ms, std::function<void(bool)> done)
@@ -710,4 +739,44 @@ void Chat::bigVideoSent(const QString &chat, const QString &msgId)
         updateGroupMessage(chat.mid(2), msgId, sent);
     else
         update(chat, msgId, sent);
+}
+
+void Chat::bigVideoFailed(const QString &chat, const QString &msgId, bool failed)
+{
+    // Only while it says sending: a copy that arrived already (sent) stays so.
+    const auto mark = [failed](QVariantMap &x) {
+        if (x.value(QStringLiteral("mine")).toBool() && x.value(QStringLiteral("vb")).toBool() && str(x, "state") == QLatin1String("sending"))
+            x.insert(QStringLiteral("failed"), failed);
+    };
+    if (chat.startsWith(QLatin1String("g:")))
+        updateGroupMessage(chat.mid(2), msgId, mark);
+    else
+        update(chat, msgId, mark);
+}
+
+void Chat::failStaleBig(const QSet<QString> &live)
+{
+    const auto stale = [&live](const QVariantMap &m) {
+        return m.value(QStringLiteral("mine")).toBool() && m.value(QStringLiteral("vb")).toBool() && str(m, "state") == QLatin1String("sending")
+            && !m.value(QStringLiteral("failed")).toBool() && !live.contains(str(m, "id"));
+    };
+    QList<QPair<QString, QString>> mark;
+    for (auto it = m_private.cbegin(); it != m_private.cend(); ++it)
+        for (const QVariant &v : it.value())
+            if (stale(v.toMap()))
+                mark << qMakePair(it.key(), str(v.toMap(), "id"));
+    for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it)
+        for (const QVariant &v : it->messages)
+            if (stale(v.toMap()))
+                mark << qMakePair(QStringLiteral("g:") + it.key(), str(v.toMap(), "id"));
+    for (const auto &m : std::as_const(mark))
+        bigVideoFailed(m.first, m.second, true);
+}
+
+bool Chat::retryBigVideo(const QString &chat, const QString &msgId)
+{
+    if (m_files && m_files->retryBig(chat, msgId))
+        return true;
+    Q_EMIT notice(QStringLiteral("This video can't go again from here. Send it again."));
+    return false;
 }

@@ -224,14 +224,17 @@ public:
     // device that plays it piece by piece (nullptr when it isn't here). VideoMsg::play uses it.
     Q_INVOKABLE bool isBigVideo(const QString &id) const;
     QIODevice *bigVideoDevice(const QString &id, QObject *parent = nullptr) const;
+    // A longer video's message whose pieces aren't on this computer (backups and moves leave them out): only its poster.
+    bool bigVideoGone(const QString &id) const;
     Q_INVOKABLE QString sendPoll(const QString &where, const QString &question, const QStringList &answers, bool multi);
     // My vote on a poll ([] takes it back).
     Q_INVOKABLE QString vote(const QString &where, const QString &id, const QVariantList &choices);
     // {media: [{id, photo, video, gif, mine, name, time, here}], links: [{id, url, title, description, host, thumb, name, time}],
     // voices: [{id, photo, voice, mine, name, time, here}]}, newest first. here: its bytes are on this device.
     Q_INVOKABLE QVariantMap shared(const QString &where) const;
-    // Media and files: save a photo, GIF, video or voice message kept here (the path, or empty), or send it again as a
-    // new message to someone else (empty when it went, else what to say).
+    // Media and files: save a photo, GIF, video or voice message kept here (the path, or empty; "saving" for a longer
+    // video, written on its own thread: mediaSaved follows), or send it again as a new message to someone else (empty
+    // when it went, else what to say).
     Q_INVOKABLE QString saveMedia(const QString &id);
     Q_INVOKABLE QString forwardMedia(const QString &id, const QString &to, int voiceMs);
     Q_INVOKABLE QString linkHost(const QString &url) const;
@@ -547,6 +550,8 @@ Q_SIGNALS:
     void recentPicturesReady(const QVariantList &pictures);
     void changed();
     void notice(const QString &text);
+    // A longer video's Save (saveMedia answered "saving") is done: the path it was saved as, or empty when it couldn't be.
+    void mediaSaved(const QString &path);
     // A message arrived: for the toast, sound and desktop notification. For a group message the
     // key is "g:<group>:<channel>".
     void arrived(const QString &name, const QString &text, const QString &key);
@@ -647,8 +652,18 @@ private:
     void ownBigVideo(const QString &where, const QString &path, int ms, std::function<void(const QString &)> done);
     // A copy of my big video [msgId] reached someone (FileLink): [chat] is a contact's key or "g:<group>".
     void bigVideoSent(const QString &chat, const QString &msgId);
-    // Save: the whole video written to [path], piece by piece. False when it isn't all here.
-    bool exportBig(const QString &id, const QString &path) const;
+    // No copy of it is on its way any more (failed true): Not sent, the same as a message that didn't go. False: Sending
+    // again (Retry). Only while it says sending.
+    void bigVideoFailed(const QString &chat, const QString &msgId, bool failed);
+    // After a restart (FileLink::loadKept): every longer video of mine still sending, except those in [live] (message
+    // ids with a copy on its way), says Not sent.
+    void failStaleBig(const QSet<QString> &live);
+    // Try again on a longer video's bubble: its failed cards go again (FileLink::retryBig).
+    bool retryBigVideo(const QString &chat, const QString &msgId);
+    // Save: the whole video written to [path], piece by piece, on its own thread; mediaSaved says how it went.
+    void exportBig(const QString &id, const QString &path);
+    // The writing itself, for any thread (read: Vault::anyThreadReader). False when it isn't all here.
+    static bool exportBigWith(const std::function<QByteArray(const QString &)> &read, const QString &id, const QString &path);
     void dropBig(const QString &id);
     // Pieces whose message is gone (its poster deleted with it, by any of the ways messages go): once an hour at most.
     void sweepBig();

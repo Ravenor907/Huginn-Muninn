@@ -313,14 +313,16 @@ QString names(const QStringList &n)
     return QStringLiteral("%1, %2 and %3 more").arg(n.at(0), n.at(1)).arg(n.size() - 2);
 }
 
-QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf)
+QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf,
+                const std::function<bool(const QString &)> &newPath)
 {
-    QStringList full, small, relay, none;
+    QStringList full, small, relay, none, older;
     QStringList keys = plan.keys();
     keys.sort();
     for (const QString &k : keys) {
         const QString how = plan.value(k);
-        (how == QLatin1String("full") ? full : how == QLatin1String("small") ? small : how == QLatin1String("relay") ? relay : none) << nameOf(k);
+        const bool old = how == QLatin1String("none") && newPath && !newPath(k);
+        (how == QLatin1String("full") ? full : how == QLatin1String("small") ? small : how == QLatin1String("relay") ? relay : old ? older : none) << nameOf(k);
     }
     QStringList out;
     if (!full.isEmpty())
@@ -329,6 +331,8 @@ QString summary(const QHash<QString, QString> &plan, const std::function<QString
         out << QStringLiteral("A 720p copy to %1.").arg(names(small));
     if (!relay.isEmpty())
         out << QStringLiteral("A smaller copy (720p, up to 20 seconds) to %1, whose app is older.").arg(names(relay));
+    if (!older.isEmpty())
+        out << QStringLiteral("Not to %1: their app is older. Ask them to update.").arg(names(older));
     if (!none.isEmpty())
         out << QStringLiteral("Not to %1: no way to reach them with this one now. Try on the same Wi-Fi.").arg(names(none));
     return out.isEmpty() ? QStringLiteral("Nobody else is here yet.") : out.join(QLatin1Char(' '));
@@ -760,6 +764,17 @@ bool selfTest()
     check(tooLong(6 * min, plan({wifi, far}, true, 6 * min)) && !tooLong(6 * min, plan({wifi, trusted}, true, 6 * min))
               && !tooLong(5 * min, plan({far}, true, 5 * min)),
           "too long only when someone isn't direct");
+    {
+        // Not to someone: an older app is asked to update; a new app with no way now is told to try on the same Wi-Fi.
+        const Member stuck = [&] { Member m = mem("f", false, false, true); m.reach = false; return m; }();
+        const QHash<QString, QString> q = plan({oldFar, stuck}, true, 30000);
+        const QString why = summary(q, [](const QString &k) { return k.toUpper(); },
+                                    [&](const QString &k) { return k == oldFar.k ? oldFar.newPath : stuck.newPath; });
+        check(q.value(QStringLiteral("h")) == QLatin1String("none") && q.value(QStringLiteral("f")) == QLatin1String("none")
+                  && why.contains(QLatin1String("Not to H: their app is older. Ask them to update."))
+                  && why.contains(QLatin1String("Not to F: no way to reach them with this one now. Try on the same Wi-Fi.")),
+              "not to: older apps asked to update, new apps told there's no way now");
+    }
     check(names({QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D"), QStringLiteral("E")}) == QLatin1String("A, B and 3 more"), "names");
     // Pacing.
     Pacer pacer(3);

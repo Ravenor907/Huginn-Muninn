@@ -192,6 +192,10 @@ public:
     // read() from any thread (the image providers): never waits on the main thread. The key it reads with is a copy
     // the main thread keeps current.
     std::function<QByteArray(const QString &)> anyThreadReader() const;
+    // write() from any thread (a longer video's pieces, sealed off the window's thread): the same key as
+    // anyThreadReader. It answers false, writing nothing, once the key has changed since it was made, Huginn is
+    // locked, or sealing for a new lock has begun, so nothing is left behind sealed with an old key.
+    std::function<bool(const QString &, const QByteArray &)> anyThreadWriter() const;
     void remove(const QString &name) const;
     QString path(const QString &name) const;
     // read() for another thread: the key and the file are taken now, the file is read and opened when it's called.
@@ -265,8 +269,11 @@ public:
     static QVariantMap backupSummary(const Files &files, const QJsonObject &header);
     // Photos, voice and video messages: in a backup only when files and pictures are.
     static bool isMedia(const QString &name);
+    // A longer video's sealed pieces ("photos/<id>.v/..."): never in a backup or a move (they'd be held whole in
+    // memory); its poster ("photos/<id>") still goes, and the chat says the video itself isn't on that device.
+    static bool isBigPiece(const QString &name);
     static bool safeName(const QString &name);
-    // Every file in a chat folder, opened with the data key (vault.key itself stays out). Round 17: nothing is left out
+    // Every file in a chat folder, opened with the data key (vault.key and longer videos' pieces stay out). Round 17: nothing is left out
     // without a word. A file that couldn't be read just now (another program holding it, after a few tries) goes in
     // *unreadable; one that is sealed but doesn't open with key (damaged) in *damaged. Callers stop on unreadable ones.
     static Files collect(const QByteArray &key, const QString &dir, QStringList *unreadable = nullptr, QStringList *damaged = nullptr);

@@ -293,9 +293,11 @@ bool VideoSender::nextCamera()
 
 QString VideoSender::cameraName() const { return m_camera ? m_camera->cameraDevice().description() : QString(); }
 
-void VideoSender::setProfile(const VideoWire::Profile &p)
+void VideoSender::setProfile(const VideoWire::Profile &p, int kbps)
 {
-    QMetaObject::invokeMethod(m_worker, [w = m_worker, p] { w->setProfile(p.width, p.height, p.fps, p.capKbps * 6 / 10); }, Qt::QueuedConnection);
+    // A ladder step keeps the bitrate the reports gave (kbps), rather than 60 % of the cap until the next second's rate.
+    const int k = kbps > 0 ? std::min(kbps, p.capKbps) : p.capKbps * 6 / 10;
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, p, k] { w->setProfile(p.width, p.height, p.fps, k); }, Qt::QueuedConnection);
 }
 
 void VideoSender::setKbps(int kbps)

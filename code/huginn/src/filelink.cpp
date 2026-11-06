@@ -457,7 +457,27 @@ QString FileLink::reachNote(const QString &peer) const
         return noPathText();
     const bool direct = trusted && trusted(peer) && UltraPrivacy::directAllowed();
     const bool tor = !UltraPrivacy::directAllowed() && (!torAllowed || torAllowed());
-    return direct || tor || relayPlan(peer, QString()) ? QString() : noPathText();
+    if (direct || tor || relayPlan(peer, QString()))
+        return {};
+    const QString why = noPathWhy(peer, QString());
+    return why.isEmpty() ? noPathText() : why;
+}
+
+QString FileLink::noPathWhy(const QString &peer, const QString &group) const
+{
+    // Only with Ultra privacy off (Tor isn't used for files then); with it on, Tor is the way and only offline stops it.
+    if (!UltraPrivacy::directAllowed())
+        return {};
+    if (!mayAlways(badge(peer)))
+        return outsideText();
+    const QString choice = routeFor ? routeFor(peer, group) : QStringLiteral("auto");
+    if (choice == QLatin1String("tor"))
+        return {};
+    if (!(hasF5 && hasF5(peer)))
+        return olderFamilyText();
+    if (relayStopped())
+        return relayUsedText();
+    return {};
 }
 
 QString FileLink::torWarning(const QString &peer, double size) const
@@ -800,6 +820,44 @@ QVariantList FileLink::transfers() const
 
 namespace
 {
+// Labs: why a file stopped, as a short fixed code for the activity log. Never the card's note itself, which can hold
+// a file's or a person's name.
+QString reasonCode(const QString &note)
+{
+    if (note.isEmpty())
+        return {};
+    const auto has = [&note](const char *w) { return note.contains(QLatin1String(w), Qt::CaseInsensitive); };
+    if (note == QLatin1String("Stopped"))
+        return QStringLiteral("stopped here");
+    if (note == QLatin1String("Declined"))
+        return QStringLiteral("declined");
+    if (has("they stopped"))
+        return QStringLiteral("stopped there");
+    if (has("ultra privacy"))
+        return QStringLiteral("ultra");
+    if (has("no answer"))
+        return QStringLiteral("no answer");
+    if (has("when huginn closed"))
+        return QStringLiteral("closed");
+    if (note.contains(QLatin1String("Tor")))
+        return QStringLiteral("tor");
+    if (has("relay"))
+        return QStringLiteral("relay");
+    if (has("damaged"))
+        return QStringLiteral("damaged");
+    if (has("space"))
+        return QStringLiteral("no space");
+    if (has("can't be read") || has("couldn't be saved"))
+        return QStringLiteral("file error");
+    if (has("update") || has("latest") || has("older"))
+        return QStringLiteral("older app");
+    if (has("in time"))
+        return QStringLiteral("timed out");
+    if (has("reach") || has("connect") || has("same wi-fi"))
+        return QStringLiteral("no path");
+    return QStringLiteral("other");
+}
+
 // One card's fields (FileLink::transfers): every card has all of them.
 QVariantMap cardOf(const QString &id, const QString &peer, const QString &group, const QString &chat, const QString &name, qint64 size, bool mine,
                    const QString &state, qint64 done, const QString &note, const QString &path)
@@ -977,7 +1035,7 @@ void FileLink::put(Xfer *x, bool force)
         if (!had || wasState != x->state || (route != wasRoute && !route.isEmpty()))
             ActivityLog::add(QStringLiteral("file"), ActivityLog::id(x->id) + (x->mine ? QStringLiteral(" out ") : QStringLiteral(" in ")) + x->state
                                                          + (route.isEmpty() ? QString() : QLatin1Char(' ') + route) + QLatin1Char(' ') + sizeText(x->size)
-                                                         + (x->state == QLatin1String("failed") && !x->note.isEmpty() ? QStringLiteral(" (") + x->note + QLatin1Char(')') : QString()));
+                                                         + (x->state == QLatin1String("failed") && !x->note.isEmpty() ? QStringLiteral(" (") + reasonCode(x->note) + QLatin1Char(')') : QString()));
     }
     bool found = false;
     for (QVariantMap &e : m_list)
@@ -1135,7 +1193,10 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal && torMay(ultra);
     if (!sameWifi && !trust && !tor && !viaRelay) {
         const QString failId = GroupWire::newLogicalId();
-        addFailed(peer, name, fi.size(), noPathText() + QStringLiteral(". Try again when you're on the same Wi-Fi or online."), path, false, failId, group);
+        // Online, but no way there with Ultra privacy off: why, and what to do (not an endless "try again").
+        const QString why = online && !online() ? QString() : noPathWhy(peer, group);
+        addFailed(peer, name, fi.size(), why.isEmpty() ? noPathText() + QStringLiteral(". Try again when you're on the same Wi-Fi or online.") : why, path, false,
+                  failId, group);
         tagBig(failId, bigChat, bigMsg, m_nextVid);
         return QString();
     }
@@ -2633,7 +2694,9 @@ void FileLink::fail(Xfer *x, const QString &why, bool tell, bool again)
     put(x, true);
     const bool retries = again && x->mine && mayAlways(badge(x->peer));
     const QString id = x->id, path = x->path;
+    const QString bigChat = x->mine ? x->bigChat : QString(), bigMsg = x->mine ? x->bigMsg : QString();
     end(x);
+    bigCheck(id, bigChat, bigMsg, again);
     // A send to Family or a trusted contact is never a dead end: it goes again by itself, after a wait that grows.
     if (retries && autoRetry(id, path))
         return;
@@ -2778,6 +2841,40 @@ void FileLink::tagBig(const QString &id, const QString &chat, const QString &msg
             e.insert(QStringLiteral("vid"), vid);
             e.insert(QStringLiteral("bubble"), false);   // failed: it shows
         }
+    bigCheck(id, chat, msgId, true);
+}
+
+void FileLink::bigCheck(const QString &id, const QString &chat, const QString &msgId, bool keep)
+{
+    if (msgId.isEmpty() || !m_chat)
+        return;
+    // Kept across a restart while its file is there, so Retry (and Try again on the bubble) still finds it. Not one
+    // stopped by hand or declined: that stays stopped (a kept card goes again by itself).
+    if (keep && canRetry(id) && !m_resumable.contains(id)) {
+        m_resumable.insert(id);
+        saveKept();
+    }
+    for (const Xfer *y : std::as_const(m_x))
+        if (y->mine && !y->ended && y->bigChat == chat && y->bigMsg == msgId)
+            return;   // another copy is still on its way
+    m_chat->bigVideoFailed(chat, msgId, true);
+}
+
+bool FileLink::retryBig(const QString &chat, const QString &msgId)
+{
+    if (msgId.isEmpty())
+        return false;
+    QStringList ids;
+    for (const QVariantMap &e : std::as_const(m_list))
+        if (e.value(QStringLiteral("bigMsg")).toString() == msgId && e.value(QStringLiteral("bigChat")).toString() == chat)
+            ids << e.value(QStringLiteral("id")).toString();
+    bool any = false;
+    for (const QString &id : std::as_const(ids))
+        if (canRetry(id)) {
+            retry(id);
+            any = true;
+        }
+    return any;
 }
 
 void FileLink::addFailed(const QString &peer, const QString &name, qint64 size, const QString &why, const QString &path, bool wifi, const QString &id,
@@ -2959,7 +3056,9 @@ void FileLink::retry(const QString &id)
     // A longer video of mine in the chat: it goes again as the same video offer, and its card follows the message again.
     if (!bigMsg.isEmpty()) {
         linkNext(bigChat, bigMsg);
-        m_nextVid = qBound(0, vid, GroupVideo::kFullMaxMs);
+        m_nextVid = qBound(1, vid > 0 ? vid : BigVideo::kInlineMaxMs, GroupVideo::kFullMaxMs);
+        if (m_chat)
+            m_chat->bigVideoFailed(bigChat, bigMsg, false);   // Sending again (a failure below says Not sent again)
     }
     const QString why = send(peer, path, group);
     m_nextVid = 0;
@@ -3150,6 +3249,14 @@ void FileLink::loadKept()
         // Its file's SHA-256 from before (with its size and last change), so Retry doesn't read it all again.
         const QJsonObject h = v.toObject().value(QStringLiteral("hash")).toObject();
         card.remove(QStringLiteral("hash"));
+        const QJsonObject big = v.toObject().value(QStringLiteral("big")).toObject();
+        card.remove(QStringLiteral("big"));
+        if (!jstr(big, "msg").isEmpty()) {
+            card.insert(QStringLiteral("bigChat"), jstr(big, "chat"));
+            card.insert(QStringLiteral("bigMsg"), jstr(big, "msg"));
+            card.insert(QStringLiteral("vid"), big.value(QStringLiteral("vid")).toInt());
+            card.insert(QStringLiteral("bubble"), false);   // failed: it shows
+        }
         const QString id = card.value(QStringLiteral("id")).toString();
         if (id.isEmpty() || qint64(card.value(QStringLiteral("time")).toDouble()) < oldest
             || !QFileInfo(card.value(QStringLiteral("path")).toString()).isFile()) {
@@ -3171,6 +3278,13 @@ void FileLink::loadKept()
         saveKept();
     if (added)
         Q_EMIT changed();
+    // A longer video of mine still "sending" from before is on its way no more (nothing goes on across a restart):
+    // its bubble says Not sent, and Try again on it (or its kept card's Retry) sends it again.
+    QSet<QString> live;
+    for (const Xfer *y : std::as_const(m_x))
+        if (y->mine && !y->ended && !y->bigMsg.isEmpty())
+            live.insert(y->bigMsg);
+    m_chat->failStaleBig(live);
 }
 
 void FileLink::saveKept()
@@ -3196,6 +3310,11 @@ void FileLink::saveKept()
         if (card.isEmpty())
             continue;
         QJsonObject j = QJsonObject::fromVariantMap(card);
+        // A longer video's card: the message it follows and its length, so after a restart it still marks that bubble
+        // and its Retry goes as the same video offer.
+        if (const QString msg = card.value(QStringLiteral("bigMsg")).toString(); !msg.isEmpty())
+            j.insert(QStringLiteral("big"), QJsonObject{{QStringLiteral("chat"), card.value(QStringLiteral("bigChat")).toString()}, {QStringLiteral("msg"), msg},
+                                                        {QStringLiteral("vid"), card.value(QStringLiteral("vid")).toInt()}});
         const Hashed h = m_hashed.value(card.value(QStringLiteral("path")).toString());
         if (!h.sha.isEmpty())
             j.insert(QStringLiteral("hash"), QJsonObject{{QStringLiteral("sha"), h.sha}, {QStringLiteral("size"), double(h.size)},

@@ -471,6 +471,10 @@ struct Vault::Shared
 {
     QMutex lock;
     QByteArray key;
+    // anyThreadWriter: held while one writes a file; gen goes up on every key change and when sealing for a new lock
+    // begins, so a writer made before then writes nothing more.
+    QMutex writing;
+    int gen = 0;
 };
 
 // The saving thread ("huginn-saving"): sealing and writing the files Chat saves often (Vault::writeLater), so the
@@ -1873,6 +1877,9 @@ void Vault::shareKey()
     m_shared->key.fill(0);
     m_shared->key = m_key;
     m_shared->key.detach();   // its own copy: wiping one never touches the other
+    l.unlock();
+    QMutexLocker w(&m_shared->writing);
+    ++m_shared->gen;
 }
 
 std::function<QByteArray(const QString &)> Vault::anyThreadReader() const
@@ -1895,6 +1902,42 @@ std::function<QByteArray(const QString &)> Vault::anyThreadReader() const
         const QByteArray plain = openSealed(key, f.readAll(), &ok);
         key.fill(0);
         return ok ? plain : QByteArray();
+    };
+}
+
+std::function<bool(const QString &, const QByteArray &)> Vault::anyThreadWriter() const
+{
+    const std::shared_ptr<Shared> shared = m_shared;
+    const QString dir = dataDir();
+    int gen = 0;
+    {
+        QMutexLocker w(&shared->writing);
+        gen = shared->gen;
+    }
+    const bool usable = !m_key.isEmpty() && !m_restarting && !m_sealing;
+    return [shared, dir, gen, usable](const QString &name, const QByteArray &data) -> bool {
+        if (!usable || !Vault::safeName(name))
+            return false;
+        QByteArray key;
+        {
+            QMutexLocker l(&shared->lock);
+            key = shared->key;
+            key.detach();
+        }
+        if (key.isEmpty())
+            return false;
+        const QByteArray sealed = kMagic + Vault::seal(key, data);
+        key.fill(0);
+        // Never while the chat folder is being swapped (a restore or a new lock). In this order: the swap may change
+        // the key, which takes writing too.
+        QMutexLocker hold(&s_swap);
+        QMutexLocker w(&shared->writing);
+        if (shared->gen != gen)
+            return false;
+        const QString file = dir + QLatin1Char('/') + name;
+        QDir().mkpath(QFileInfo(file).absolutePath());
+        QSaveFile f(file);
+        return f.open(QIODevice::WriteOnly) && f.write(sealed) == sealed.size() && f.commit();
     };
 }
 
@@ -2390,6 +2433,12 @@ bool Vault::isMedia(const QString &name)
     return name.startsWith(QLatin1String("photos/")) || name.startsWith(QLatin1String("mirror-media/"));
 }
 
+bool Vault::isBigPiece(const QString &name)
+{
+    return name.startsWith(QLatin1String("photos/")) && name.section(QLatin1Char('/'), 1, 1).endsWith(QLatin1String(".v"))
+        && name.count(QLatin1Char('/')) >= 2;
+}
+
 QString Vault::keepCopy(const QString &dir)
 {
     const QString kept = QDir::cleanPath(dir) + QStringLiteral("-kept-") + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd-HHmmss"));
@@ -2451,7 +2500,7 @@ Vault::Files Vault::collect(const QByteArray &key, const QString &dir, QStringLi
     while (it.hasNext()) {
         const QString full = it.next();
         const QString name = base.relativeFilePath(full);
-        if (name == QLatin1String("vault.key") || !safeName(name))
+        if (name == QLatin1String("vault.key") || !safeName(name) || isBigPiece(name))
             continue;
         QByteArray b;
         if (!readTrying(full, &b)) {
@@ -2649,6 +2698,11 @@ void Vault::startSeal(const QString &secret, bool pattern, const QString &spare)
     const auto done = m_sealDone, total = m_sealTotal;
     const auto stop = m_sealStop;
     m_sealing = true;
+    {
+        // Pieces still being sealed on another thread (anyThreadWriter) stop here: none is left with the old key.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
+    }
     m_dirty.clear();
     m_secretError.clear();
     Q_EMIT changed();
@@ -2942,9 +2996,12 @@ QVariantMap Vault::backupInfo() const
     QDirIterator it(dir, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString full = it.next();
+        const QString name = base.relativeFilePath(full);
+        if (isBigPiece(name))
+            continue;   // never in a backup
         const qint64 n = it.fileInfo().size();
         all += n;
-        if (isMedia(base.relativeFilePath(full)))
+        if (isMedia(name))
             media += n;
     }
     return {{QStringLiteral("name"), backupName()}, {QStringLiteral("folder"), QDir::toNativeSeparators(backupFolder())},
@@ -3389,6 +3446,8 @@ bool Vault::backupSelfTest()
         check("older summary has no list", old.value(QStringLiteral("contacts")).toInt() == -1 && old.value(QStringLiteral("files")).toString().isEmpty()
                                                && old.value(QStringLiteral("app")).toString() == QLatin1String("huginn"));
         check("files and pictures", isMedia(QStringLiteral("photos/abc")) && isMedia(QStringLiteral("mirror-media/x")) && !isMedia(QStringLiteral("chats.json")));
+        check("longer videos' pieces stay out", isBigPiece(QStringLiteral("photos/abc.v/00000")) && isBigPiece(QStringLiteral("photos/abc.v/size"))
+                                                    && !isBigPiece(QStringLiteral("photos/abc")) && !isBigPiece(QStringLiteral("photos/abc.v")));
     }
     // Weakened settings in the (unprotected) header are refused, not used.
     {

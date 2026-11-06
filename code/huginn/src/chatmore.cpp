@@ -402,7 +402,7 @@ QVariantMap Chat::shared(const QString &where) const
         if (!str(m, "photo").isEmpty() && m.value(QStringLiteral("voice")).toInt() == 0) {
             media << QVariantMap{{QStringLiteral("id"), str(m, "id")}, {QStringLiteral("photo"), str(m, "photo")}, {QStringLiteral("video"), m.value(QStringLiteral("video")).toInt()},
                                  {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))},
-                                 {QStringLiteral("gif"), m.value(QStringLiteral("gif")).toBool()}, {QStringLiteral("here"), here(str(m, "photo"))},
+                                 {QStringLiteral("gif"), m.value(QStringLiteral("gif")).toBool()}, {QStringLiteral("here"), m.value(QStringLiteral("vb")).toBool() ? isBigVideo(str(m, "photo")) : here(str(m, "photo"))},
                                  {QStringLiteral("vb"), m.value(QStringLiteral("vb")).toBool()}};
             continue;
         }
@@ -425,6 +425,9 @@ QString Chat::saveMedia(const QString &id)
 {
     // A longer video (bigvideo.h): its blob is only the poster, so the video itself is written out piece by piece.
     const bool big = isBigVideo(id);
+    // Its pieces aren't here (left out of a backup or a move): the poster is never saved as if it were the video.
+    if (!big && bigVideoGone(id))
+        return QString();
     QByteArray b = big ? QByteArray() : blob(id);
     if (b.isEmpty() && !big)
         return QString();
@@ -445,8 +448,10 @@ QString Chat::saveMedia(const QString &id)
     QString path = QDir(dir).filePath(stem + QLatin1Char('.') + ext);
     for (int n = 1; QFile::exists(path) && n < 1000; ++n)
         path = QDir(dir).filePath(stem + QStringLiteral(" (%1).").arg(n) + ext);
-    if (big)
-        return exportBig(id, path) ? path : QString();
+    if (big) {
+        exportBig(id, path);
+        return QStringLiteral("saving");
+    }
     QFile f(path);
     const bool ok = f.open(QIODevice::WriteOnly) && f.write(b) == b.size();
     b.fill(0);

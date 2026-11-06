@@ -105,8 +105,8 @@ private:
     Stats m_stats;
 };
 
-// The sender's video bitrate (kbps): starts at 60 % of the cap, backs off on loss, climbs slowly
-// while the network is clean.
+// The sender's video bitrate (kbps): starts at 60 % of the cap (and again at 60 % of a higher cap), backs off on loss,
+// climbs slowly while the network is clean.
 class RateControl
 {
 public:

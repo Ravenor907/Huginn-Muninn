@@ -3090,9 +3090,15 @@ tester's app knows about that key. The report is one envelope in room `private`:
 
 - No `fromId` and no `caps`. A `fromName` or `cap` is optional and never required by the owner's app.
 - `data` opens to the text: UTF-8, trimmed, 1 to 2000 characters (code points).
+- **Activity log.** When the tester adds the activity log (the raven held 7 seconds in Labs mode), the text is followed
+  by the mark `"\n\n[Activity log]\n"` and then the log, at most 24000 characters (UTF-16 units). The Labs contact's
+  app splits at the first mark: the written part before it is trimmed and is still 1 to 2000 characters (code points),
+  and the log after it is at most 24000; anything else is refused (400). The log holds only short ids, states, routes
+  and fixed words: never a name, a file name, what anyone wrote, a key or an address. An older Labs inbox (1.30 to
+  1.47) counts the whole text against 2000 and refuses a report with a log.
 - `v` is the installed version as the app shows it (`0.98`, `0.99 beta 12`), `os` the system (`Android 15`,
   `Windows 11`, `Linux`), `model` the device model. Each at most 80 characters. Nothing else about the device:
-  no logs, no addresses, no other data.
+  no other logs (only the activity log above, when the tester adds it), no addresses, no other data.
 - `s` is there only when a screenshot goes with it: the screenshot's id (1 to 64 characters, letters, digits, `-`).
 
 The screenshot (optional, one JPEG, every metadata block removed as for any photo) goes as photo pieces exactly as
@@ -3597,6 +3603,3 @@ metered network still asks). Past the month's limit (relay.md, "Relayed media") 
 **This side's say.** A receiver with Ultra privacy on takes no `rl`. It declines with `"why":"tor"`, and the sender's card
 says it can come on the same Wi-Fi, or over Tor with Ultra privacy on there too. A sender that offered `rl` serves no Tor,
 so the receiver never waits for one.
-
-**Already here.** A receiver answers an offer for a file it took whole from that person in the last 7 days with
-`{"t":"done","id":<file id>}`, so a send that lost its last packets isn't sent twice.

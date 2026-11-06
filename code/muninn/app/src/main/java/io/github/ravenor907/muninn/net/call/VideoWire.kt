@@ -232,8 +232,11 @@ object VideoWire {
 
         fun setCap(k: Int) {
             val first = raised == 0L && lowered == 0L && kbps == 420
+            val was = cap
             cap = maxOf(MIN, k)
+            // First, or a better path: start at 60% of the new cap (as Huginn), so the size ladder doesn't step down for a slow start.
             if (first) kbps = maxOf(MIN, cap * 6 / 10)
+            else if (cap > was) kbps = maxOf(kbps, cap * 6 / 10)
             kbps = minOf(kbps, cap)
         }
 

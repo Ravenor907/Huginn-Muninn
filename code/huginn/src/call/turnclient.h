@@ -13,7 +13,6 @@
 #include <QTimer>
 
 #include <functional>
-#include <functional>
 #include <map>
 
 class QSslSocket;
