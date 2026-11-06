@@ -227,4 +227,7 @@ private:
     int m_resentThisTick = 0;
     qint64 m_directSince = 0;
     qint64 m_keySentAt[2] = {-100000, -100000}, m_keyAskedAt[2] = {-100000, -100000};
+    // The camera's step on the size ladder (VideoWire::rung), changed at most every 10 s.
+    int m_rung = 0;
+    qint64 m_rungAt = -100000;
 };

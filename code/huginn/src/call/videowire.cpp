@@ -314,6 +314,32 @@ VideoWire::Profile VideoWire::screenProfile(bool freePath, bool smooth)
     return freePath ? Profile{1920, 1080, 10, 2500} : Profile{1280, 720, 8, 800};
 }
 
+int VideoWire::rung(int kbps, int was)
+{
+    const int lines[3] = {900, 450, 250};   // under lines[i]: at least step i + 1
+    int r = 0;
+    for (int i = 0; i < 3; ++i)
+        if (kbps < lines[i])
+            r = i + 1;
+    if (r < was) {   // up only with room to spare
+        int up = was;
+        while (up > r && kbps >= lines[up - 1] * 5 / 4)
+            --up;
+        r = up;
+    }
+    return r;
+}
+
+VideoWire::Profile VideoWire::onRung(const Profile &p, int r)
+{
+    switch (r) {
+    case 0: return p;
+    case 1: return Profile{std::min(p.width, 854), std::min(p.height, 480), std::min(p.fps, 24), p.capKbps};
+    case 2: return Profile{std::min(p.width, 640), std::min(p.height, 360), std::min(p.fps, 20), p.capKbps};
+    default: return Profile{std::min(p.width, 320), std::min(p.height, 240), std::min(p.fps, 15), p.capKbps};
+    }
+}
+
 // ------------------------------------------------------------------ self-test
 
 namespace
@@ -489,6 +515,15 @@ bool VideoWire::selfTest()
         check(screenProfile(true, true).fps == 30 && screenProfile(true, true).height == 720 && screenProfile(false, true).height == 480
                   && screenProfile(true, true).capKbps == screenProfile(true).capKbps && screenProfile(false, true).capKbps == screenProfile(false).capKbps,
               "screen share Smooth: 30 fps at 720p (480p over the relay), the same bitrate caps as Sharp");
+    }
+    {
+        check(rung(1200, 0) == 0 && rung(800, 0) == 1 && rung(200, 0) == 3, "the camera's ladder steps down at once");
+        // Back up only with a quarter more than the line.
+        check(rung(260, 3) == 3 && rung(320, 3) == 2 && rung(1000, 1) == 1 && rung(1130, 1) == 0, "and back up only with room to spare");
+        const Profile p = cameraProfile(true);
+        const Profile p0 = onRung(p, 0), p1 = onRung(p, 1), p3 = onRung(p, 3);
+        check(p0.width == p.width && p0.height == p.height && p0.fps == p.fps && p0.capKbps == p.capKbps && p1.height == 480 && p3.fps == 15,
+              "ladder step 0 is the profile, 1 is 480p, 3 is 15 fps");
     }
     std::printf("video wire: %s\n", g_fail ? "FAILED" : "all good");
     return g_fail == 0;

@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.launch
+import androidx.compose.ui.composed
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -104,7 +105,7 @@ const val HOLD_FOR_REPORT_MS = 7_000L
  * The raven: [onTap] on a tap; with [onHold] (Labs mode), held for [HOLD_FOR_REPORT_MS] it buzzes once and runs that
  * instead (a bug report with a screenshot and the activity log), and letting go after it isn't a tap.
  */
-fun Modifier.raven(onTap: () -> Unit, onHold: (() -> Unit)?): Modifier = androidx.compose.ui.composed {
+fun Modifier.raven(onTap: () -> Unit, onHold: (() -> Unit)?): Modifier = composed {
     val tap by androidx.compose.runtime.rememberUpdatedState(onTap)
     val hold by androidx.compose.runtime.rememberUpdatedState(onHold)
     val scope = androidx.compose.runtime.rememberCoroutineScope()

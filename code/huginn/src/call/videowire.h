@@ -130,6 +130,12 @@ Profile cameraProfile(bool freePath);
 // Screen share: Sharp (the default here) is full size at up to 10 frames a second, for text; Smooth is 30 a second
 // at 720p (24 at 480p over the relay), for games and video, at the same bitrate cap.
 Profile screenProfile(bool freePath, bool smooth = false);
+// The camera's step on the ladder for the bitrate the path carries now: 0 as the profile says, 1 at most 480p24,
+// 2 at most 360p20, 3 at most 240p15. Going down is at once; going back up needs a quarter more than the line
+// (was: the step now), so it doesn't flap. Sound is never part of this: it goes first, always. (Muninn's VideoWire.rung.)
+int rung(int kbps, int was);
+// p held to ladder step r.
+Profile onRung(const Profile &p, int r);
 
 bool selfTest();
 }
