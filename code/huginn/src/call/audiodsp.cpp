@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 namespace
 {
@@ -52,6 +53,25 @@ double AudioDsp::levelDb(const qint16 *pcm, int n)
         sum += double(pcm[i]) * double(pcm[i]);
     const double rms = std::sqrt(sum / n) / 32768.0;
     return rms > 1e-5 ? 20.0 * std::log10(rms) : -100;
+}
+
+void AudioDsp::mixUnder(qint16 *into, const qint16 *video, int n, bool talk)
+{
+    const int div = talk ? 4 : 2;
+    for (int i = 0; i < n; ++i) {
+        const int v = int(into[i]) + int(video[i]) / div;
+        into[i] = qint16(v < -32768 ? -32768 : v > 32767 ? 32767 : v);
+    }
+}
+
+bool AudioDsp::talking(const qint16 *pcm, int n)
+{
+    if (n <= 0)
+        return false;
+    qint64 sum = 0;
+    for (int i = 0; i < n; ++i)
+        sum += std::abs(int(pcm[i]));
+    return sum / n > 900;
 }
 
 bool AudioDsp::Speaking::frame(double levelDb)
@@ -223,6 +243,19 @@ bool AudioDsp::selfTest()
     check(a.frame(-12), "automatic: talking over the game still opens it");
     a.reset();
     check(!a.open() && a.threshold() == Gate::kDefaultDb, "reset: -40 dBFS until it hears the room again");
+    // A shared video's sound under the voice.
+    qint16 voice[kFrame], video[kFrame], none[kFrame] = {};
+    for (int i = 0; i < kFrame; ++i) {
+        voice[i] = 4000;
+        video[i] = 32000;
+    }
+    const bool talk = talking(voice, kFrame), silent = !talking(none, kFrame);
+    mixUnder(voice, video, kFrame, true);
+    mixUnder(none, video, kFrame, false);
+    check(talk && silent && voice[0] == 4000 + 8000 && none[0] == 16000, "a shared video's sound: a quarter under a voice, half alone");
+    qint16 top[1] = {30000}, big[1] = {32000};
+    mixUnder(top, big, 1, false);
+    check(top[0] == 32767, "a shared video's sound is clipped, never wrapped");
     std::printf("audio helpers: %s\n", g_fail ? "FAILED" : "all good");
     return g_fail == 0;
 }

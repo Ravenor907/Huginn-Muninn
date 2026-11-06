@@ -64,6 +64,7 @@ qt_add_executable(huginn
     src/updater.cpp src/updater.h
     src/ultraprivacy.cpp src/ultraprivacy.h
     src/labs.cpp src/labs.h
+    src/activitylog.cpp src/activitylog.h
     src/appstorage.cpp src/appstorage.h
     src/perfcheck.cpp src/perfcheck.h src/busy.h
     src/fall.cpp src/fall.h
@@ -132,6 +133,7 @@ qt_add_executable(huginn
     src/call/callmedia.cpp src/call/callmedia.h
     src/call/callsession.cpp src/call/callsession.h
     src/call/callmanager.cpp src/call/callmanager.h
+    src/call/callshare.cpp src/call/callshare.h
     src/call/callselftest.cpp src/call/callselftest.h
     # voice rooms and group calls (section 6): a mesh of the 1:1 calls above
     src/call/roomwire.cpp src/call/roomwire.h

@@ -262,12 +262,13 @@ object VideoWire {
     fun light(p: Profile) = Profile(minOf(p.width, 640), minOf(p.height, 360), minOf(p.fps, 20), minOf(p.capKbps, 800))
 
     /**
-     * The camera's step on the ladder for the bitrate the path carries now: 0 as the profile says, 1 at most 480p24,
+     * The camera's step on the ladder for the bitrate the path carries now, against the path's cap [cap] (so a relay call
+     * starting at its usual 60% stays as it is): 0 as the profile says, 1 at most 480p24,
      * 2 at most 360p20, 3 at most 240p15. Going down is at once; going back up needs a quarter more than the line
      * ([was]: the step now), so it doesn't flap. Sound is never part of this: it goes first, always.
      */
-    fun rung(kbps: Int, was: Int): Int {
-        val lines = intArrayOf(900, 450, 250)   // under lines[i]: at least step i + 1
+    fun rung(kbps: Int, cap: Int, was: Int): Int {
+        val lines = intArrayOf(cap * 45 / 100, cap * 25 / 100, cap * 12 / 100)   // under lines[i]: at least step i + 1
         var r = 0
         for (i in lines.indices) if (kbps < lines[i]) r = i + 1
         if (r < was) {   // up only with room to spare

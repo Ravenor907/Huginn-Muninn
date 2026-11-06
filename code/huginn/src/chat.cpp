@@ -1,5 +1,6 @@
 #include "chat.h"
 #include "busy.h"
+#include "activitylog.h"
 #include "settings.h"
 #include "system.h"
 #include "profile.h"
@@ -2274,6 +2275,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                     done << QStringLiteral("u-") + str(m, "id");
                 }
             } else if (str(m, "unsent").isEmpty() && rank(st) > rank(str(m, "state"))) {
+                ActivityLog::add(QStringLiteral("message"), ActivityLog::id(str(m, "id")) + QStringLiteral(" out ") + st);
                 m.insert(QStringLiteral("state"), st);
                 m.insert(QStringLiteral("failed"), false);
                 done << str(m, "id");
@@ -3338,6 +3340,10 @@ bool Chat::addPrivate(const QString &peer, const QVariantMap &m)
         if (str(v.toMap(), "id") == id)
             return false;
     l << m;
+    // Labs: a short id and how it came or went, never what it says.
+    ActivityLog::add(QStringLiteral("message"), ActivityLog::id(id) + (m.value(QStringLiteral("mine")).toBool() ? QStringLiteral(" out new") : QStringLiteral(" in arrived"))
+                                                    + (str(m, "via").isEmpty() ? QString() : QStringLiteral(" via ") + str(m, "via"))
+                                                    + (!str(m, "photo").isEmpty() ? QStringLiteral(" (photo)") : m.value(QStringLiteral("voice")).toInt() > 0 ? QStringLiteral(" (voice)") : QString()));
     // Round 17 (Linux minor 7): a chat kept for good still holds only the newest 1,000 messages; the first time one goes
     // from a chat, it says so (once per chat).
     if (l.size() > 1000) {
@@ -3377,6 +3383,11 @@ void Chat::update(const QString &peer, const QString &id, const std::function<vo
             if (m != before) {
                 v = m;
                 any = true;
+                // Labs: its state in the activity log (a short id, never what it says).
+                if (str(m, "state") != str(before, "state") || m.value(QStringLiteral("failed")).toBool() != before.value(QStringLiteral("failed")).toBool())
+                    ActivityLog::add(QStringLiteral("message"), ActivityLog::id(id) + (m.value(QStringLiteral("mine")).toBool() ? QStringLiteral(" out ") : QStringLiteral(" in "))
+                                                                    + str(m, "state") + (m.value(QStringLiteral("failed")).toBool() ? QStringLiteral(" not sent") : QString())
+                                                                    + (str(m, "via").isEmpty() ? QString() : QStringLiteral(" via ") + str(m, "via")));
             }
         }
     }

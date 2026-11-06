@@ -505,7 +505,7 @@ class CallMedia(
         // The camera's size and frame rate follow the bitrate down a ladder, and back up once the path recovers (at most
         // every 10 s, so the picture doesn't keep changing).
         if (sending[0] && now - rungAt >= 10_000L) {
-            val next = VideoWire.rung(rate[0].kbps, rung)
+            val next = VideoWire.rung(rate[0].kbps, rate[0].cap, rung)
             if (next != rung) { rung = next; rungAt = now; post { events.onProfile() } }
         }
     }

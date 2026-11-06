@@ -6,6 +6,8 @@ Rectangle {
     id: toast
     property bool bad: false
     function show(text, isBad) {
+        // Labs: what Huginn said, for the activity log.
+        Labs.note(isBad ? "said (problem)" : "said", String(text))
         msg.text = text
         bad = !!isBad
         opacity = 1

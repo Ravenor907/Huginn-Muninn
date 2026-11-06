@@ -7,7 +7,9 @@ import Huginn
 // twice: the first press says "Press B again to hang up" for 3 seconds), X camera on or off in a video
 // call (shared/docs/protocol.md 5.8.5), otherwise X ends like B. With a camera on, the
 // picture fills the top (yours small in its corner), a strip under it shows the name, the ways and the
-// time, and the buttons sit below that. Main.qml shows it while Calls.inCall.
+// time, and the buttons sit below that. Share video (a live call with video both ways) plays a video file in the
+// camera's place, its sound under the voices, with Pause or Play under the picture and Stop video in the buttons.
+// Main.qml shows it while Calls.inCall.
 Rectangle {
     id: page
     anchors.fill: parent
@@ -42,7 +44,16 @@ Rectangle {
 
     // Once either camera is on: the picture on top, a solid strip with who, which ways and how long under it,
     // then the buttons. Nothing covers the picture but your own small one in its corner.
-    readonly property bool videoLayout: !ended && (Calls.peerCamera || Calls.cameraOn)
+    readonly property bool videoLayout: !ended && (Calls.peerCamera || Calls.cameraOn || Calls.sharing)
+
+    // Share video: a video file plays in the camera's place for them, its sound under the voices.
+    function shareVideo() {
+        if (Calls.sharing) { Calls.stopShare(); return }
+        Ui.pickFiles(paths => {
+            const err = Calls.shareVideo(paths[0])
+            if (err !== "") Ui.say(err, true)
+        }, "videos", true)
+    }
 
     // Which ways the sound goes right now.
     Component {
@@ -99,7 +110,7 @@ Rectangle {
             spacing: Theme.px(16)
             // On a narrow window the buttons share the width evenly and their words are cut short.
             readonly property real avail: page.width - Theme.px(48)
-            readonly property var shown: [muteBtn, outputBtn, cameraBtn, switchBtn, endBtn].filter(b => b.visible)
+            readonly property var shown: [muteBtn, outputBtn, cameraBtn, shareBtn, switchBtn, endBtn].filter(b => b.visible)
             readonly property real natural: shown.reduce((w, b) => w + b.implicitWidth, 0) + spacing * Math.max(0, shown.length - 1)
             readonly property bool squeezed: natural > avail
             readonly property real share: Math.max(Theme.px(40), (avail - spacing * Math.max(0, shown.length - 1)) / Math.max(1, shown.length))
@@ -125,9 +136,17 @@ Rectangle {
                 onClicked: Calls.toggleCamera()
             }
             HButton {
+                id: shareBtn
+                width: buttonRow.squeezed ? buttonRow.share : implicitWidth
+                visible: Calls.canShare || Calls.sharing
+                text: Calls.sharing ? "Stop video" : "Share video"
+                kind: Calls.sharing ? "accent" : "normal"
+                onClicked: page.shareVideo()
+            }
+            HButton {
                 id: switchBtn
                 width: buttonRow.squeezed ? buttonRow.share : implicitWidth
-                visible: Calls.cameraOn
+                visible: Calls.cameraOn && !Calls.sharing
                 text: "Switch camera"
                 onClicked: Calls.nextCamera()
             }
@@ -191,9 +210,9 @@ Rectangle {
             active: !page.videoUp
             sourceComponent: avatar
         }
-        // Yours, like a mirror.
+        // Yours, like a mirror (or the video you share, the right way round).
         Rectangle {
-            visible: Calls.cameraOn && !page.ended
+            visible: (Calls.cameraOn || Calls.sharing) && !page.ended
             anchors.right: parent.right; anchors.top: parent.top
             anchors.margins: Theme.px(24)
             width: Math.min(Theme.px(220), Math.round(parent.width * 0.35)); height: Math.round(width * 0.75)
@@ -206,11 +225,11 @@ Rectangle {
                 anchors.fill: parent
                 anchors.margins: 1
                 fillMode: VideoOutput.PreserveAspectCrop
-                transform: Scale { origin.x: self.width / 2; xScale: -1 }
+                transform: Scale { origin.x: self.width / 2; xScale: Calls.sharing ? 1 : -1 }
                 Component.onCompleted: Calls.setLocalSink(self.videoSink)
             }
             Accessible.role: Accessible.Graphic
-            Accessible.name: "Your camera"
+            Accessible.name: Calls.sharing ? "The video you share" : "Your camera"
         }
     }
 
@@ -250,6 +269,23 @@ Rectangle {
                 }
             }
             Loader { active: page.videoLayout; sourceComponent: pathChips }
+            // A video shared into the call: how far along it is, with Pause or Play.
+            Row {
+                visible: Calls.sharing
+                spacing: Theme.px(14)
+                Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Calls.shareText
+                    color: Theme.text
+                    font.family: Theme.body; font.pixelSize: Theme.fs(16)
+                }
+                HButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Calls.sharePaused ? "Play" : "Pause"
+                    onClicked: Calls.pauseShare(!Calls.sharePaused)
+                }
+            }
         }
     }
 

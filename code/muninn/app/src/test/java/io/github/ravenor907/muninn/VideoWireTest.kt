@@ -149,14 +149,17 @@ class VideoWireTest {
 
     @Test
     fun theLadderStepsDownAtOnceAndUpWithRoom() {
-        assertEquals(0, VideoWire.rung(1200, 0))
-        assertEquals(1, VideoWire.rung(800, 0))
-        assertEquals(3, VideoWire.rung(200, 0))
+        // A free path (cap 2000): lines at 900, 500 and 240.
+        assertEquals(0, VideoWire.rung(1200, 2000, 0))
+        assertEquals(1, VideoWire.rung(800, 2000, 0))
+        assertEquals(3, VideoWire.rung(200, 2000, 0))
         // Back up only with a quarter more than the line.
-        assertEquals(3, VideoWire.rung(260, 3))
-        assertEquals(2, VideoWire.rung(320, 3))
-        assertEquals(1, VideoWire.rung(1000, 1))
-        assertEquals(0, VideoWire.rung(1130, 1))
+        assertEquals(3, VideoWire.rung(260, 2000, 3))
+        assertEquals(2, VideoWire.rung(310, 2000, 3))
+        assertEquals(1, VideoWire.rung(1000, 2000, 1))
+        assertEquals(0, VideoWire.rung(1130, 2000, 1))
+        // The relay (cap 700) starting at its usual 420: no step.
+        assertEquals(0, VideoWire.rung(420, 700, 0))
         val p = VideoWire.cameraProfile(true)
         assertEquals(p, VideoWire.onRung(p, 0))
         assertEquals(480, VideoWire.onRung(p, 1).height)

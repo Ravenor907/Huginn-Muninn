@@ -2,7 +2,8 @@ import QtQuick
 import Huginn
 
 // Labs reports (the Huginn with the Labs key, from the Chats list's three dots): each bug report with who
-// sent it, the app's version, system and device type, the text and the screenshot. Reply makes the sender a
+// sent it, the app's version, system and device type, the text, the activity log (behind Show activity log, when the
+// raven was held for it) and the screenshot. Reply makes the sender a
 // contact and opens the chat; Delete removes the report. Up and Down pick one, A replies, X deletes, B closes.
 Item {
     id: inbox
@@ -12,7 +13,8 @@ Item {
     property int at: 0
     readonly property var tourReports: [
         { id: "t1", key: "", name: "Raven 4821", app: "huginn", label: "0.99 beta 3", os: "Linux", model: "linux x86_64",
-          text: "The chat list jumps to the top when a photo arrives.", hasShot: false, time: Date.now() - 3600000 },
+          text: "The chat list jumps to the top when a photo arrives.", hasShot: false, time: Date.now() - 3600000,
+          log: "Huginn 0.99 beta 3 · Linux · linux x86_64\nNetwork: Wi-Fi\n\n12:00:01.250 screen: dms\n12:00:03.900 message: 3fa2c1 in arrived (photo)", logLines: 5 },
         { id: "t2", key: "", name: "Mira", app: "muninn", label: "0.99 beta 3", os: "Android 15", model: "android arm64",
           text: "Voice messages stop after a minute.", hasShot: false, time: Date.now() - 86400000 }
     ]
@@ -109,6 +111,8 @@ Item {
                         id: card
                         readonly property var r: modelData
                         readonly property bool lit: inbox.at === index && inbox.padFocus
+                        readonly property string log: card.r.log || ""
+                        property bool showLog: false
                         width: col.width
                         height: cardCol.implicitHeight + Theme.px(24)
                         radius: Theme.radius
@@ -144,6 +148,20 @@ Item {
                                 text: card.r.text || "(no text)"
                                 color: Theme.textSoft
                                 font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                            }
+                            HButton {
+                                visible: card.log !== ""
+                                text: card.showLog ? "Hide activity log" : "Show activity log (" + (card.r.logLines || 0) + " lines)"
+                                onClicked: card.showLog = !card.showLog
+                            }
+                            Text {
+                                textFormat: Text.PlainText
+                                visible: card.showLog && card.log !== ""
+                                width: parent.width
+                                wrapMode: Text.WrapAnywhere
+                                text: card.showLog ? card.log : ""
+                                color: Theme.textSoft
+                                font.family: "monospace"; font.pixelSize: Theme.fs(12)
                             }
                             Image {
                                 visible: card.r.hasShot

@@ -150,6 +150,8 @@ Window {
     property int railIndex: 0
     // The rail item for the page on screen.
     readonly property string section: pageName
+    // Labs: where the person is, for the activity log (a group by a short id, never its name).
+    onPageNameChanged: Labs.note("screen", pageName.indexOf("g:") === 0 ? "group " + Labs.shortId(pageName.substring(2)) : pageName)
 
     function openPage(name, args) {
         if (name === "chat") name = "dms"
@@ -844,6 +846,15 @@ Window {
         labsReport.open(false)
         labsReport.text = t
     }
+    // Labs: the raven (Chats, at the top of the rail) held 7 seconds opens Report a bug with the screenshot and the
+    // activity log. The mouse holds it on the rail (Rail.qml); A or Enter held on it with the rail focused does too.
+    function openReportWithLog() {
+        if (lockedOut || !Settings.labs || labsReport.visible) return
+        Labs.capture(app)
+        Labs.takeActivity()
+        labsReport.open(app.touring)
+    }
+    Timer { id: ravenHold; interval: 7000; onTriggered: app.openReportWithLog() }
     function openPerf() { if (!lockedOut) perfPanel.open(app.touring) }
     function openLabsReports() { if (!lockedOut) labsInbox.open(app.touring) }
     function openAppStorage() { if (!lockedOut) appStorage.open(app.touring) }
@@ -1767,6 +1778,8 @@ Window {
         if (lbHeld && inVoice && (b === "up" || b === "down")) { lbUsed = true; voiceKey("lb+" + b); return }
         // Tab and Shift+Tab on the keyboard.
         if ((b === "next" || b === "prev") && !pageShoulders) { stepSection(b === "prev" ? -1 : 1); return }
+        // Labs: A held on the raven for 7 seconds (only a press whose release comes back).
+        if (focusZone === "rail" && b === "a" && railIndex === 0 && Settings.labs && heldNow["a"] && !ravenHold.running) ravenHold.start()
         if (focusZone === "rail") { railButton(b); return }
         // LT opens the options, which pages know as X.
         if (b === "lt") b = "x"
@@ -1777,6 +1790,7 @@ Window {
     }
     function release(b) {
         delete heldNow[b]
+        if (b === "a") ravenHold.stop()
         // Held from before a question opened by itself: its release isn't an answer (for the one on top).
         // (A question closed and asked again later doesn't keep eating them: only within 10 seconds of it showing.)
         let eaten = false

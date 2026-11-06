@@ -308,8 +308,20 @@ void CallMedia::onFrame(const qint16 *pcm)
     if (!m_running)
         return;
     const quint32 ts = m_frames++ * quint32(JitterBuffer::kFrameMs);
-    if (m_muted || !m_enc.ok())
+    // A video shared into the call: its sound goes out under the voice (lower while this side talks), muted or not.
+    qint16 shared[AudioDsp::kFrame];
+    const bool withShare = shareOut && shareOut(shared);
+    if ((m_muted && !withShare) || !m_enc.ok())
         return;   // muted: no audio packets at all (pings go on)
+    qint16 mixed[AudioDsp::kFrame];
+    if (withShare) {
+        if (m_muted)
+            std::fill(mixed, mixed + AudioDsp::kFrame, qint16(0));
+        else
+            std::copy(pcm, pcm + AudioDsp::kFrame, mixed);
+        AudioDsp::mixUnder(mixed, shared, AudioDsp::kFrame, AudioDsp::talking(mixed, AudioDsp::kFrame));
+        pcm = mixed;
+    }
     const QByteArray opus = m_enc.encode(pcm);
     if (opus.isEmpty())
         return;
@@ -342,6 +354,11 @@ void CallMedia::onPull(qint16 *pcm)
         Q_EMIT speakingChanged();
     if (gain)
         ModWire::applyGain(pcm, AudioDsp::kFrame, gain());
+    // The video this side shares plays here too, through the call's own sound (so the echo canceller knows it), lower
+    // while they talk.
+    qint16 shared[AudioDsp::kFrame];
+    if (shareHere && shareHere(shared))
+        AudioDsp::mixUnder(pcm, shared, AudioDsp::kFrame, m_speaking.on());
 }
 
 void CallMedia::onLan()
@@ -523,9 +540,20 @@ void CallMedia::onReport(const VideoWire::Report &r)
             m_asm[1].reset();
         Q_EMIT peerVideoChanged();
     }
+    const qint64 t = now();
     for (int s = 0; s < 2; ++s)
         if (m_sending[s])
-            m_rate[s].onReport(r.lossPct, now());
+            m_rate[s].onReport(r.lossPct, t);
+    // The camera's size and frame rate follow the bitrate down a ladder, and back up once the path recovers (at most
+    // every 10 s, so the picture doesn't keep changing).
+    if (m_sending[0] && t - m_rungAt >= 10000) {
+        const int next = VideoWire::rung(m_rate[0].kbps(), m_rate[0].cap(), m_rung);
+        if (next != m_rung) {
+            m_rung = next;
+            m_rungAt = t;
+            Q_EMIT profileChanged();
+        }
+    }
     pickBitrate();
 }
 
@@ -534,7 +562,7 @@ void CallMedia::onReport(const VideoWire::Report &r)
 VideoWire::Profile CallMedia::profile(int stream) const
 {
     const bool free = m_wasFree;
-    return (stream & 1) == VideoWire::Screen ? VideoWire::screenProfile(free) : VideoWire::cameraProfile(free);
+    return (stream & 1) == VideoWire::Screen ? VideoWire::screenProfile(free) : VideoWire::onRung(VideoWire::cameraProfile(free), m_rung);
 }
 
 void CallMedia::setVideoSending(int stream, bool on)

@@ -82,6 +82,12 @@ private:
     bool m_measured = false;   // a whole 2 s block has been heard
 };
 
+// A video shared into a call (CallShare): its sound mixed under a voice frame, about -6 dB (half), or about -12 dB (a
+// quarter) while talk is true. Clipped, never wrapped.
+void mixUnder(qint16 *into, const qint16 *video, int n, bool talk);
+// Someone is talking in this 20 ms frame: loud enough to be a voice, not room noise (mean level over 900).
+bool talking(const qint16 *pcm, int n);
+
 // A test tone, for the loopback self-test: amplitude 0..1 of full scale.
 void tone(qint16 *pcm, int n, double hz, double amplitude, qint64 *phaseSamples);
 // Rough frequency of a frame from its zero crossings.

@@ -454,7 +454,15 @@ Rectangle {
                 }
             }
             HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: rail.activated(rb.entry.idx) }
+            // Labs: the raven held 7 seconds opens Report a bug with the screenshot and the activity log (Main.qml).
+            TapHandler {
+                onTapped: rail.activated(rb.entry.idx)
+                onPressedChanged: {
+                    if (pressed && rb.entry.kind === "raven" && Settings.labs) ravenHold.restart()
+                    else ravenHold.stop()
+                }
+            }
+            Timer { id: ravenHold; interval: 7000; onTriggered: { if (Ui.main) Ui.main.openReportWithLog() } }
             // A right click (or a long press on a touch screen): its own small menu where it was clicked (Main.railMenu;
             // a group's: Open, Mute, Notifications, Mark as read, Copy invite, Group settings, Leave).
             TapHandler {

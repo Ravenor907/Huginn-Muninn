@@ -91,6 +91,9 @@ public:
     // Their volume here in percent (0 to 200, cap g2's menus; 0 while muted for me), asked for every 20 ms frame of
     // their decoded sound before it's played or mixed. Unset: 100.
     std::function<int()> gain;
+    // A video shared into the call (CallShare): 20 ms of its sound at 16 kHz to send under the voice (shareOut), and to
+    // play here through the call's own output so the echo canceller knows it (shareHere). False: none right now.
+    std::function<bool(qint16 *pcm320)> shareOut, shareHere;
     bool muted() const { return m_muted; }
     AudioIO *audio() const { return m_audio; }
 

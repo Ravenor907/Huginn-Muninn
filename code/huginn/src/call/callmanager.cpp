@@ -5,6 +5,7 @@
 #include "callcrypto.h"
 #include "callmedia.h"
 #include "callsession.h"
+#include "callshare.h"
 #include "callsignal.h"
 #include "opuscodec.h"
 #include "relayconfig.h"
@@ -12,6 +13,7 @@
 #include "videoengine.h"
 #include "vpxcodec.h"
 #include "../vault.h"
+#include "../activitylog.h"
 #include "../platform/singleinstance.h"
 #include "../ring.h"
 #include "../ultraprivacy.h"
@@ -49,6 +51,26 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
     });
     m_ticker.setInterval(1000);
     connect(&m_ticker, &QTimer::timeout, this, &CallManager::tick);
+    // A video shared into the call: its pictures go out in the camera's place, with the camera's profile and bitrate.
+    m_share = new CallShare(this);
+    connect(m_share, &CallShare::frame, this, [this](const QVideoFrame &f) {
+        if (m_camera && m_session && m_session->media())
+            m_camera->feedShared(f);
+    });
+    connect(m_share, &CallShare::changed, this, &CallManager::shareChanged);
+    connect(m_share, &CallShare::failed, this, &CallManager::finished);
+    connect(m_share, &CallShare::stopped, this, &CallManager::shareEnded);
+    // Labs: the call's phase in the activity log (a short form of the call's id, never who it is with).
+    connect(this, &CallManager::changed, this, [this] {
+        const QString st = state();
+        const QString now = st == QLatin1String("idle") ? QStringLiteral("none")
+                          : (m_session ? ActivityLog::id(m_session->callId()) + QLatin1Char(' ') : QString()) + st
+                                + (m_cameraOn ? QStringLiteral(" camera") : QString()) + (sharing() ? QStringLiteral(" sharing a video") : QString());
+        if (now != m_loggedCall) {
+            m_loggedCall = now;
+            ActivityLog::add(QStringLiteral("call"), now);
+        }
+    });
     // The video bitrate follows the other side's reports (5.8.6).
     m_videoRate.setInterval(1000);
     connect(&m_videoRate, &QTimer::timeout, this, [this] {
@@ -159,6 +181,18 @@ bool CallManager::peerCamera() const { return videoPossible() && m_session->medi
 int CallManager::peerRotation() const { return m_remote ? m_remote->rotation() : 0; }
 bool CallManager::incomingVideo() const { return m_session && m_session->state() == CallSession::Incoming && m_session->peerWantsVideo() && vpxAvailable(); }
 QString CallManager::cameraName() const { return m_camera ? m_camera->cameraName() : QString(); }
+bool CallManager::canShare() const { return state() == QLatin1String("active") && videoPossible(); }
+bool CallManager::sharing() const { return m_share && m_share->active(); }
+bool CallManager::sharePaused() const { return sharing() && m_share->paused(); }
+
+QString CallManager::shareText() const
+{
+    if (!sharing())
+        return QString();
+    const qint64 len = m_share->lengthMs();
+    return QStringLiteral("Sharing a video · ") + duration(int(m_share->atMs() / 1000))
+           + (len > 0 ? QStringLiteral(" of ") + duration(int(len / 1000)) : QString());
+}
 
 // ------------------------------------------------------------------ video (5.8.5)
 
@@ -233,6 +267,27 @@ void CallManager::startVideo()
     Q_EMIT changed();
 }
 
+void CallManager::ensureSender()
+{
+    if (m_camera)
+        return;
+    m_camera = new VideoSender(VideoSender::Camera, this);
+    connect(m_camera, &VideoSender::encoded, this, [this](const QByteArray &vp8, bool key) {
+        if (m_session && m_session->media())
+            m_session->media()->sendVideo(VideoWire::Camera, key, 0, vp8);
+    });
+    connect(m_camera, &VideoSender::failed, this, [this](const QString &) {
+#ifdef Q_OS_WIN
+        // Round 17 (m7): Windows can switch desktop apps off the camera, and says nothing when it does.
+        Q_EMIT finished(QStringLiteral("The camera isn't available. Check Windows Settings › Privacy & security › Camera › Let desktop "
+                                       "apps access your camera."));
+#else
+        Q_EMIT finished(QStringLiteral("The camera isn't available"));
+#endif
+        setCamera(false);
+    });
+}
+
 void CallManager::setCamera(bool on)
 {
     m_cameraOn = on && vpxAvailable();
@@ -241,24 +296,13 @@ void CallManager::setCamera(bool on)
         Q_EMIT changed();   // remembered for when the call connects
         return;
     }
+    // A shared video has the camera's place: on or off is remembered for when it ends.
+    if (sharing()) {
+        Q_EMIT changed();
+        return;
+    }
     if (m_cameraOn) {
-        if (!m_camera) {
-            m_camera = new VideoSender(VideoSender::Camera, this);
-            connect(m_camera, &VideoSender::encoded, this, [this](const QByteArray &vp8, bool key) {
-                if (m_session && m_session->media())
-                    m_session->media()->sendVideo(VideoWire::Camera, key, 0, vp8);
-            });
-            connect(m_camera, &VideoSender::failed, this, [this](const QString &) {
-#ifdef Q_OS_WIN
-                // Round 17 (m7): Windows can switch desktop apps off the camera, and says nothing when it does.
-                Q_EMIT finished(QStringLiteral("The camera isn't available. Check Windows Settings › Privacy & security › Camera › Let desktop "
-                                               "apps access your camera."));
-#else
-                Q_EMIT finished(QStringLiteral("The camera isn't available"));
-#endif
-                setCamera(false);
-            });
-        }
+        ensureSender();
         m_camera->setPreview(m_localSink);
         m_camera->setProfile(m->profile(VideoWire::Camera));
         if (!m_camera->start()) {
@@ -283,6 +327,9 @@ void CallManager::stopVideo()
 {
     m_videoRate.stop();
     m_cameraOn = false;
+    // The call ended (or another took its place): nothing more to share into.
+    if (m_share)
+        m_share->stop();
     if (m_camera) {
         m_camera->stop();
         m_camera->deleteLater();
@@ -294,6 +341,59 @@ void CallManager::stopVideo()
     }
     if (m_remoteSink)
         m_remoteSink->setVideoFrame(QVideoFrame());
+}
+
+QString CallManager::shareVideo(const QString &path)
+{
+    if (!canShare())
+        return QStringLiteral("Video can't be shared in this call.");
+    if (path.isEmpty())
+        return QString();
+    // Another video already playing ends first (the camera comes back for a moment, then stops again below).
+    m_share->stop();
+    CallMedia *m = m_session->media();
+    ensureSender();
+    // The camera stops while the video plays in its place; whether it was on is kept (m_cameraOn) for after.
+    m_camera->stop();
+    m_camera->setPreview(m_localSink);
+    m_camera->setProfile(m->profile(VideoWire::Camera));
+    m_camera->setKbps(m->videoKbps(VideoWire::Camera));
+    m_camera->requestKey();
+    m->setVideoSending(VideoWire::Camera, true);
+    m_videoRate.start();
+    m_share->start(path);
+    Q_EMIT changed();
+    return QString();
+}
+
+void CallManager::pauseShare(bool on)
+{
+    if (m_share)
+        m_share->pause(on);
+}
+
+void CallManager::stopShare()
+{
+    if (m_share)
+        m_share->stop();
+}
+
+void CallManager::shareEnded()
+{
+    // Stopped, played to the end, or it couldn't play: the camera comes back as it was.
+    CallMedia *m = m_session ? m_session->media() : nullptr;
+    const bool live = m && m_session->videoBoth() && m_session->state() != CallSession::Ended;
+    if (live && m_cameraOn) {
+        setCamera(true);
+    } else {
+        if (m)
+            m->setVideoSending(VideoWire::Camera, false);
+        m_videoRate.stop();
+        if (m_localSink)
+            m_localSink->setVideoFrame(QVideoFrame());
+        Q_EMIT changed();
+    }
+    Q_EMIT shareChanged();
 }
 
 QString CallManager::outputName() const
@@ -751,6 +851,12 @@ void CallManager::prime(CallSession *s)
     s->c2Local = true;
     s->videoCodec = vpxAvailable();
     connect(s, &CallSession::mediaStarted, this, [this, s] {
+        // A video shared into the call: its sound goes out under the voice and plays here through the call's output.
+        if (CallMedia *m = s->media()) {
+            QPointer<CallShare> share = m_share;
+            m->shareOut = [share](qint16 *pcm) { return share && share->active() && share->takeSend(pcm); };
+            m->shareHere = [share](qint16 *pcm) { return share && share->active() && share->takeHere(pcm); };
+        }
         // A microphone or speaker the call followed by itself (plugged in, pulled out, docked): a toast says which.
         if (s->media() && s->media()->audio())
             connect(s->media()->audio(), &AudioIO::deviceNotice, this, &CallManager::finished, Qt::UniqueConnection);

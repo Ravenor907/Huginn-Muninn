@@ -133,7 +133,7 @@ Profile screenProfile(bool freePath, bool smooth = false);
 // The camera's step on the ladder for the bitrate the path carries now: 0 as the profile says, 1 at most 480p24,
 // 2 at most 360p20, 3 at most 240p15. Going down is at once; going back up needs a quarter more than the line
 // (was: the step now), so it doesn't flap. Sound is never part of this: it goes first, always. (Muninn's VideoWire.rung.)
-int rung(int kbps, int was);
+int rung(int kbps, int cap, int was);   // against the path's cap, so a relay call starting at 60% stays as it is
 // p held to ladder step r.
 Profile onRung(const Profile &p, int r);
 

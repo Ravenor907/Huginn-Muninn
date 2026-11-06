@@ -1,4 +1,5 @@
 #include "labs.h"
+#include "activitylog.h"
 #include "chat.h"
 #include "chatcrypto.h"
 #include "chatwire.h"
@@ -6,6 +7,7 @@
 #include "photos.h"
 #include "platform/crashlog.h"
 #include "settings.h"
+#include "ultraprivacy.h"
 #include "vault.h"
 
 #include <QBuffer>
@@ -13,6 +15,7 @@
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QNetworkInformation>
 #include <QQuickWindow>
 #include <QSettings>
 #include <QSysInfo>
@@ -21,6 +24,7 @@
 const char Labs::kName[] = "Huginn Muninn Labs";
 const char Labs::kKey[] = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5ihedM8ypmMLI817zKk9CbxL0Tl3Q67Orwj8/UUpgOH9PlIIlw7FQDuIfKBa6BuK2fjw6Iu2RKxNvLdEFfVK+w==";
 const char Labs::kMailbox[] = "5ee40952b01671ffec761fc6ff65529fac098b03aed4b7a0b5d69d86e2e93529";
+const char Labs::kLogMark[] = "\n\n[Activity log]\n";
 
 namespace
 {
@@ -112,8 +116,71 @@ bool Labs::lbOk(const QJsonObject &lb, bool piece)
 
 // ------------------------------------------------------------------ sending (any Huginn in Labs mode)
 
+QString Labs::withLog(const QString &text, const QString &log)
+{
+    if (log.trimmed().isEmpty())
+        return text;
+    return text + QLatin1String(kLogMark) + log.left(kMaxLog);
+}
+
+bool Labs::split(const QString &full, QString *text, QString *log)
+{
+    const QString mark = QLatin1String(kLogMark);
+    const qsizetype at = full.indexOf(mark);
+    const QString t = (at < 0 ? full : full.left(at)).trimmed();
+    const QString l = at < 0 ? QString() : full.mid(at + mark.size());
+    if (t.isEmpty() || GroupWire::length(t) > kMaxText || l.size() > kMaxLog)
+        return false;
+    if (text)
+        *text = t;
+    if (log)
+        *log = l;
+    return true;
+}
+
+void Labs::note(const QString &tag, const QString &text) const { ActivityLog::add(tag, text); }
+
+QString Labs::shortId(const QString &id) const { return ActivityLog::id(id); }
+
+void Labs::takeActivity()
+{
+    // What kind of network this computer is on now, never which one or its address.
+    QString net = QStringLiteral("unknown");
+    if (!QNetworkInformation::instance())
+        QNetworkInformation::loadDefaultBackend();
+    if (const QNetworkInformation *n = QNetworkInformation::instance()) {
+        if (n->supports(QNetworkInformation::Feature::Reachability) && n->reachability() == QNetworkInformation::Reachability::Disconnected)
+            net = QStringLiteral("no network");
+        else if (n->supports(QNetworkInformation::Feature::TransportMedium)) {
+            switch (n->transportMedium()) {
+            case QNetworkInformation::TransportMedium::Ethernet: net = QStringLiteral("Ethernet"); break;
+            case QNetworkInformation::TransportMedium::Cellular: net = QStringLiteral("mobile data"); break;
+            case QNetworkInformation::TransportMedium::WiFi: net = QStringLiteral("Wi-Fi"); break;
+            case QNetworkInformation::TransportMedium::Bluetooth: net = QStringLiteral("Bluetooth"); break;
+            default: net = QStringLiteral("other"); break;
+            }
+        }
+        if (n->supports(QNetworkInformation::Feature::Metered) && n->isMetered())
+            net += QStringLiteral(", metered");
+    }
+    const QStringList head = {
+        QStringLiteral("Huginn %1 · %2 · %3").arg(label(), os(), model()),
+        QStringLiteral("Network: %1").arg(net),
+        QStringLiteral("Ultra privacy: %1 · Updates: %2").arg(UltraPrivacy::on() ? QStringLiteral("on") : QStringLiteral("off"),
+                                                              m_settings->preRelease() ? QStringLiteral("Pre-release") : QStringLiteral("Stable")),
+        QStringLiteral("Taken ") + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss t")),
+        QString(),
+    };
+    m_activity = ActivityLog::on() ? ActivityLog::dump(head) : QString();
+    m_activityLines = m_activity.isEmpty() ? 0 : int(m_activity.count(QLatin1Char('\n'))) + 1;
+    ActivityLog::add(QStringLiteral("labs"), QStringLiteral("bug report started (raven held)"));
+    Q_EMIT shotChanged();
+}
+
 void Labs::capture(QQuickWindow *window)
 {
+    m_activity.clear();
+    m_activityLines = 0;
     m_shot = window ? window->grabWindow() : QImage();
     m_shotUrl.clear();
     if (!m_shot.isNull()) {
@@ -131,12 +198,14 @@ void Labs::clearShot()
 {
     m_shot = QImage();
     m_shotUrl.clear();
+    m_activity.clear();
+    m_activityLines = 0;
     Q_EMIT shotChanged();
 }
 
 bool Labs::hasCrashLog() const { return CrashLog::hasLines(); }
 
-QString Labs::send(const QString &text, bool withShot, bool withLog, const QString &perf)
+QString Labs::send(const QString &text, bool withShot, bool withLog, const QString &perf, bool withActivity)
 {
     QString t = text.trimmed();
     if (t.isEmpty())
@@ -161,6 +230,9 @@ QString Labs::send(const QString &text, bool withShot, bool withLog, const QStri
         if (!tail.isEmpty() && GroupWire::length(t + head + tail) <= kMaxText)
             t += head + tail;
     }
+    // The activity log after it all, behind kLogMark (the Labs inbox splits it off again, as Muninn's does).
+    if (withActivity && !m_activity.isEmpty())
+        t = Labs::withLog(t, m_activity);
     if (!m_vault->exists())
         return QStringLiteral("Set a lock in Chats first.");
     if (!m_chat->ready() || m_vault->screenLocked())
@@ -261,10 +333,17 @@ QVariantList Labs::reports() const
     load();
     for (auto it = m_reports.crbegin(); it != m_reports.crend(); ++it) {
         const QJsonObject &r = *it;
+        // The activity log, when the report came with one, shows behind its own button.
+        QString written, log;
+        if (!split(jstr(r, "text"), &written, &log)) {
+            written = jstr(r, "text");
+            log.clear();
+        }
         out << QVariantMap{{QStringLiteral("id"), jstr(r, "id")}, {QStringLiteral("key"), jstr(r, "from")},
                            {QStringLiteral("name"), m_chat->isContact(jstr(r, "from")) ? m_chat->nameOf(jstr(r, "from")) : jstr(r, "name")},
                            {QStringLiteral("app"), jstr(r, "app")}, {QStringLiteral("label"), jstr(r, "label")}, {QStringLiteral("os"), jstr(r, "os")},
-                           {QStringLiteral("model"), jstr(r, "model")}, {QStringLiteral("text"), jstr(r, "text")},
+                           {QStringLiteral("model"), jstr(r, "model")}, {QStringLiteral("text"), written},
+                           {QStringLiteral("log"), log}, {QStringLiteral("logLines"), log.isEmpty() ? 0 : int(log.trimmed().count(QLatin1Char('\n'))) + 1},
                            {QStringLiteral("hasShot"), !jstr(r, "shot").isEmpty()}, {QStringLiteral("time"), r.value(QStringLiteral("time")).toDouble()}};
     }
     return out;
@@ -340,8 +419,9 @@ int Labs::receive(const QJsonObject &o, const QString &fromKey, const QString &n
     const QByteArray plain = m_chat->open(o, fromKey, &ok);   // v1 with the sender's chat key
     if (!ok)
         return 403;
+    // What they wrote (at most kMaxText), and the activity log after kLogMark when it came with one (Muninn's split rules).
     const QString text = QString::fromUtf8(plain).trimmed();
-    if (text.isEmpty() || GroupWire::length(text) > kMaxText)
+    if (!split(text, nullptr, nullptr))
         return 400;
     QString mailbox = jstr(o, "mailbox");
     if (mailbox.size() != 64)

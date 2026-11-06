@@ -1,4 +1,5 @@
 #include "gamepad.h"
+#include "activitylog.h"
 #include "localsend.h"
 #include "chat.h"
 #include "direct.h"
@@ -501,6 +502,20 @@ int main(int argc, char *argv[])
         applyMotion();
         QObject::connect(settings, &Settings::changed, &app, applyMotion);
         QObject::connect(system, &System::powerChanged, &app, applyMotion);
+    }
+    // Labs: the activity log for bug reports runs only in Labs mode (turned off, what it kept goes), and notes Huginn
+    // going to or from the background.
+    {
+        ActivityLog::setOn(settings->labs());
+        QObject::connect(settings, &Settings::changed, &app, [settings] { ActivityLog::setOn(settings->labs()); });
+        QObject::connect(qApp, &QGuiApplication::applicationStateChanged, &app, [](Qt::ApplicationState st) {
+            static int was = -1;
+            const int now = st == Qt::ApplicationActive ? 1 : 0;
+            if (now == was)
+                return;
+            was = now;
+            ActivityLog::add(QStringLiteral("app"), now ? QStringLiteral("on screen") : QStringLiteral("in the background"));
+        });
     }
     auto *gamepad = new Gamepad(&app);
     // Handheld mode's last fact: a controller there from the start (a handheld's own).

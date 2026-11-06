@@ -118,6 +118,26 @@ void VideoEncodeWorker::frame(const QVideoFrame &f)
     busy.storeRelease(0);
 }
 
+void VideoEncodeWorker::shared(const QVideoFrame &f)
+{
+    if (!m_clock.isValid())
+        m_clock.start();
+    const qint64 now = m_clock.elapsed();
+    if (now - m_last >= 1000 / qMax(1, m_fps) - 5 && f.isValid()) {
+        m_last = now;
+        // Halved (cheap and sharp) until it fits the profile, its long side against the profile's long side, so an
+        // upright video fits as well as a wide one.
+        const int lo = qMax(f.width(), f.height()), sh = qMin(f.width(), f.height());
+        const int limLo = qMax(m_target.width(), m_target.height()), limSh = qMin(m_target.width(), m_target.height());
+        int k = 1;
+        while (k < 64 && (lo / k > limLo || sh / k > limSh))
+            k *= 2;
+        // A square box of the halved long side: the picture fits it either way round, at exactly the halved size.
+        encode(VideoFrames::toI420(f, QSize(lo / k, lo / k)));
+    }
+    busy.storeRelease(0);
+}
+
 void VideoEncodeWorker::picture(const I420 &pic)
 {
     encode(pic);
@@ -305,6 +325,17 @@ void VideoSender::feed(const I420 &pic)
     if (!m_worker->busy.testAndSetOrdered(0, 1))
         return;
     QMetaObject::invokeMethod(m_worker, [w = m_worker, pic] { w->picture(pic); }, Qt::QueuedConnection);
+}
+
+void VideoSender::feedShared(const QVideoFrame &f)
+{
+    if (!f.isValid())
+        return;
+    if (m_preview)
+        m_preview->setVideoFrame(f);
+    if (!m_worker->busy.testAndSetOrdered(0, 1))
+        return;
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, f] { w->shared(f); }, Qt::QueuedConnection);
 }
 
 // ------------------------------------------------------------------ receiving

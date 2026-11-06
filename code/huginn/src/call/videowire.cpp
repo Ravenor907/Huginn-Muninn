@@ -314,9 +314,9 @@ VideoWire::Profile VideoWire::screenProfile(bool freePath, bool smooth)
     return freePath ? Profile{1920, 1080, 10, 2500} : Profile{1280, 720, 8, 800};
 }
 
-int VideoWire::rung(int kbps, int was)
+int VideoWire::rung(int kbps, int cap, int was)
 {
-    const int lines[3] = {900, 450, 250};   // under lines[i]: at least step i + 1
+    const int lines[3] = {cap * 45 / 100, cap * 25 / 100, cap * 12 / 100};   // under lines[i]: at least step i + 1
     int r = 0;
     for (int i = 0; i < 3; ++i)
         if (kbps < lines[i])
@@ -517,9 +517,9 @@ bool VideoWire::selfTest()
               "screen share Smooth: 30 fps at 720p (480p over the relay), the same bitrate caps as Sharp");
     }
     {
-        check(rung(1200, 0) == 0 && rung(800, 0) == 1 && rung(200, 0) == 3, "the camera's ladder steps down at once");
+        check(rung(1200, 2000, 0) == 0 && rung(800, 2000, 0) == 1 && rung(200, 2000, 0) == 3 && rung(420, 700, 0) == 0, "the camera's ladder steps down at once");
         // Back up only with a quarter more than the line.
-        check(rung(260, 3) == 3 && rung(320, 3) == 2 && rung(1000, 1) == 1 && rung(1130, 1) == 0, "and back up only with room to spare");
+        check(rung(260, 2000, 3) == 3 && rung(310, 2000, 3) == 2 && rung(1000, 2000, 1) == 1 && rung(1130, 2000, 1) == 0, "and back up only with room to spare");
         const Profile p = cameraProfile(true);
         const Profile p0 = onRung(p, 0), p1 = onRung(p, 1), p3 = onRung(p, 3);
         check(p0.width == p.width && p0.height == p.height && p0.fps == p.fps && p0.capKbps == p.capKbps && p1.height == 480 && p3.fps == 15,

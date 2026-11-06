@@ -2,6 +2,7 @@
 #include "groupvideo.h"
 #include "bigvideo.h"
 #include "busy.h"
+#include "activitylog.h"
 #include "chat.h"
 #include "call/directpath.h"
 #include "call/turnclient.h"
@@ -962,6 +963,22 @@ void FileLink::put(Xfer *x, bool force)
     m.insert(QStringLiteral("bigChat"), x->bigChat);
     m.insert(QStringLiteral("bigMsg"), x->bigMsg);
     m.insert(QStringLiteral("bubble"), x->mine && !x->bigMsg.isEmpty() && x->state != QLatin1String("failed"));
+    // Labs: a card that's new, or whose state or route changed, goes in the activity log (a short id, never its name).
+    {
+        const QString route = m.value(QStringLiteral("route")).toString();
+        bool had = false;
+        QString wasState, wasRoute;
+        for (const QVariantMap &e : std::as_const(m_list))
+            if (e.value(QStringLiteral("id")).toString() == x->id) {
+                had = true;
+                wasState = e.value(QStringLiteral("state")).toString();
+                wasRoute = e.value(QStringLiteral("route")).toString();
+            }
+        if (!had || wasState != x->state || (route != wasRoute && !route.isEmpty()))
+            ActivityLog::add(QStringLiteral("file"), ActivityLog::id(x->id) + (x->mine ? QStringLiteral(" out ") : QStringLiteral(" in ")) + x->state
+                                                         + (route.isEmpty() ? QString() : QLatin1Char(' ') + route) + QLatin1Char(' ') + sizeText(x->size)
+                                                         + (x->state == QLatin1String("failed") && !x->note.isEmpty() ? QStringLiteral(" (") + x->note + QLatin1Char(')') : QString()));
+    }
     bool found = false;
     for (QVariantMap &e : m_list)
         if (e.value(QStringLiteral("id")).toString() == x->id) {

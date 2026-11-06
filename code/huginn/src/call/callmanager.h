@@ -17,6 +17,7 @@ class CallSignal;
 #include <QVideoSink>
 class VideoReceiver;
 class VideoSender;
+class CallShare;
 class Chime;
 class RelayCredentials;
 class Vault;
@@ -56,6 +57,12 @@ class CallManager : public QObject
     Q_PROPERTY(int peerRotation READ peerRotation NOTIFY changed)
     Q_PROPERTY(bool incomingVideo READ incomingVideo NOTIFY changed)
     Q_PROPERTY(QString cameraName READ cameraName NOTIFY changed)
+    // A video shared into the call (CallShare): it plays in the camera's place, its sound under the voices.
+    // canShare: the call is live and video goes both ways. shareText: "Sharing a video · 0:12 of 1:30".
+    Q_PROPERTY(bool canShare READ canShare NOTIFY changed)
+    Q_PROPERTY(bool sharing READ sharing NOTIFY shareChanged)
+    Q_PROPERTY(bool sharePaused READ sharePaused NOTIFY shareChanged)
+    Q_PROPERTY(QString shareText READ shareText NOTIFY shareChanged)
     Q_PROPERTY(QVariantList history READ history NOTIFY historyChanged)
     Q_PROPERTY(bool available READ available CONSTANT)
 
@@ -85,6 +92,10 @@ public:
     int peerRotation() const;
     bool incomingVideo() const;
     QString cameraName() const;
+    bool canShare() const;
+    bool sharing() const;
+    bool sharePaused() const;
+    QString shareText() const;
     QVariantList history() const { return m_history; }
     bool available() const;
 
@@ -96,6 +107,10 @@ public:
     Q_INVOKABLE void answerVideo();
     Q_INVOKABLE void toggleCamera();
     Q_INVOKABLE void nextCamera();
+    // Share a video (a local file) into the call; "" when it started, otherwise what to tell the person.
+    Q_INVOKABLE QString shareVideo(const QString &path);
+    Q_INVOKABLE void pauseShare(bool on);
+    Q_INVOKABLE void stopShare();
     // The VideoOutputs of the call page: their picture, and the small self view.
     Q_INVOKABLE void setRemoteSink(QObject *videoSink);
     Q_INVOKABLE void setLocalSink(QObject *videoSink);
@@ -139,6 +154,7 @@ Q_SIGNALS:
     void changed();
     void tick();
     void historyChanged();
+    void shareChanged();
     // A 1:1 call ended and went into the history (result: "answered", "missed" or how it ended): main.cpp puts it in
     // that chat's timeline, and a missed one raises a notification that opens the chat.
     void logged(const QString &key, bool out, const QString &result, int seconds);
@@ -186,6 +202,10 @@ private:
     void startVideo();           // the session's media is up: show their picture, send ours if the camera is on
     void setCamera(bool on);
     void stopVideo();
+    void ensureSender();         // the camera's VideoSender, made (not started) when there's none yet
+    void shareEnded();           // the camera's state comes back as it was
+    CallShare *m_share = nullptr;
+    QString m_loggedCall;        // Labs: the call phase last put in the activity log
     bool m_cameraOn = false;
     VideoSender *m_camera = nullptr;
     VideoReceiver *m_remote = nullptr;

@@ -44,6 +44,8 @@ public:
     QAtomicInt busy;
     void frame(const QVideoFrame &f);
     void picture(const I420 &pic);
+    // A frame of a video shared into the call: the profile's frame rate at most, halved until it fits the profile.
+    void shared(const QVideoFrame &f);
 public Q_SLOTS:
     void setProfile(int width, int height, int fps, int kbps);
     void setKbps(int kbps);
@@ -87,6 +89,9 @@ public:
     void setScreen(QScreen *screen) { m_target = screen; m_useWindow = false; }
     // Self-test: encode this picture as if it came from the camera.
     void feed(const I420 &pic);
+    // A frame of a video shared into the call (CallShare), sent in the camera's place with the camera's profile, bitrate
+    // and keyframes. Works with the camera stopped. It also shows in the small self view.
+    void feedShared(const QVideoFrame &f);
 
 Q_SIGNALS:
     void encoded(const QByteArray &vp8, bool key);

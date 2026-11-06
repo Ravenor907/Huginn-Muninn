@@ -3,7 +3,8 @@ import Huginn
 
 // Labs › Report a bug: the screenshot of Huginn taken just before this opened, Include screenshot (on unless
 // switched off), what went wrong (up to 2000 characters), Include performance check (when Labs › Performance
-// check opened it; on unless switched off), Include crash log (off unless ticked; only when there is one), then Send. The D-pad moves between them, A uses one, B or Esc closes. Main.qml takes the screenshot and
+// check opened it; on unless switched off), Include activity log (the raven held 7 seconds in Labs mode opened it; on
+// unless switched off), Include crash log (off unless ticked; only when there is one), then Send. The D-pad moves between them, A uses one, B or Esc closes. Main.qml takes the screenshot and
 // opens it (openReport). Sending needs Huginn unlocked: when it's locked, the lock asks right here in the report and
 // the report goes once it opens. Huginn locking while the report is open (Lock now, or the panic lock) hides the report
 // behind the same lock until it's opened again; what was written, the screenshot and the performance check stay
@@ -20,12 +21,14 @@ Item {
     // Labs › Performance check's short report, sent after what was written.
     property string perf: ""
     property bool includePerf: true
-    // The focus with a controller: 0 Include screenshot, 1 the text, 5 Include performance check, 4 Include crash
-    // log, 2 Send, 3 Cancel.
+    // The activity log taken with the screenshot (Main.openReportWithLog): on unless switched off.
+    property bool includeActivity: true
+    // The focus with a controller: 0 Include screenshot, 1 the text, 5 Include performance check, 6 Include activity
+    // log, 4 Include crash log, 2 Send, 3 Cancel.
     property int focusAt: 1
     readonly property bool padFocus: !!Ui.main && Ui.main.padInUse
     // Top to bottom (Cancel sits beside Send).
-    readonly property var order: (Labs.hasShot ? [0] : []).concat([1]).concat(perf !== "" ? [5] : []).concat(hasLog ? [4] : []).concat([2])
+    readonly property var order: (Labs.hasShot ? [0] : []).concat([1]).concat(perf !== "" ? [5] : []).concat(Labs.hasActivity ? [6] : []).concat(hasLog ? [4] : []).concat([2])
     // The lock asks inside the report: Send while locked (sendAfter), or Huginn locked while it was open (guarded:
     // what it shows came from an unlocked Huginn, so it stays hidden until the lock is opened).
     readonly property bool lockedNow: !tour && Vault.exists && Vault.screenLocked
@@ -50,6 +53,7 @@ Item {
         hasLog = !tour && Labs.hasCrashLog()
         perf = ""
         includePerf = true
+        includeActivity = Labs.hasActivity
         focusAt = 1
         asking = false; sendAfter = false; guarded = false
         visible = true
@@ -64,7 +68,7 @@ Item {
         visible = false
         asking = false; sendAfter = false; guarded = false
         text = ""; perf = ""
-        Labs.clearShot()
+        Labs.clearShot()   // the activity log goes with it
         if (Ui.main) Ui.main.restoreFocus()
     }
     function dismiss() {
@@ -74,7 +78,7 @@ Item {
     // The controller's focus stays in view.
     onFocusAtChanged: Qt.callLater(reveal)
     function reveal() {
-        const it = focusAt === 0 ? shotRow : focusAt === 1 ? textBox : focusAt === 4 ? logRow : focusAt === 5 ? perfRow : buttons
+        const it = focusAt === 0 ? shotRow : focusAt === 1 ? textBox : focusAt === 4 ? logRow : focusAt === 5 ? perfRow : focusAt === 6 ? activityRow : buttons
         if (!it || !it.visible) return
         const y = it.mapToItem(col, 0, 0).y
         if (y < view.contentY) view.contentY = Math.max(0, y)
@@ -88,7 +92,8 @@ Item {
         if (report.text.trim() === "") { Ui.say("Say what went wrong first.", true); return }
         // Locked: the lock asks here, and the report goes once it opens.
         if (lockedNow) { sendAfter = true; asking = true; return }
-        const err = Labs.send(report.text, report.include && Labs.hasShot, report.includeLog && report.hasLog, report.includePerf ? report.perf : "")
+        const err = Labs.send(report.text, report.include && Labs.hasShot, report.includeLog && report.hasLog, report.includePerf ? report.perf : "",
+                               report.includeActivity && Labs.hasActivity)
         if (err !== "") { Ui.say(err, true); return }
         Ui.say("Report sent. Thank you.")
         close()
@@ -98,6 +103,7 @@ Item {
         else if (focusAt === 1) edit()
         else if (focusAt === 4) includeLog = !includeLog
         else if (focusAt === 5) includePerf = !includePerf
+        else if (focusAt === 6) includeActivity = !includeActivity
         else if (focusAt === 2) send()
         else close()
     }
@@ -269,6 +275,48 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         checked: report.includePerf
                         onToggled: report.includePerf = !report.includePerf
+                    }
+                }
+                // The activity log (screens, messages and files moving, calls, what Huginn said; never what anyone
+                // wrote). On unless switched off.
+                Rectangle {
+                    id: activityRow
+                    visible: Labs.hasActivity
+                    width: parent.width
+                    height: Math.max(Theme.px(48), activityText.implicitHeight + Theme.px(16))
+                    radius: Theme.radius
+                    color: report.focusAt === 6 && report.padFocus ? Theme.focusFill : "transparent"
+                    border.width: report.focusAt === 6 && report.padFocus ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Column {
+                        id: activityText
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.right: activitySwitch.left; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Theme.px(2)
+                        Text {
+                            textFormat: Text.PlainText
+                            width: parent.width
+                            elide: Text.ElideRight
+                            text: "Include activity log"
+                            color: Theme.text
+                            font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium
+                        }
+                        Text {
+                            textFormat: Text.PlainText
+                            width: parent.width
+                            wrapMode: Text.Wrap
+                            text: "What Huginn did lately (" + Labs.activityLines + " lines): screens, messages and files moving, calls. Never what anyone wrote."
+                            color: Theme.textMuted
+                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                        }
+                    }
+                    ToggleSwitch {
+                        id: activitySwitch
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: report.includeActivity
+                        onToggled: report.includeActivity = !report.includeActivity
                     }
                 }
                 // The crash log's last lines (crashes and errors only; no messages, names or addresses). Off unless ticked.
