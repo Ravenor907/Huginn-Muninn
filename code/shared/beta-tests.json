@@ -74,11 +74,7 @@
     },
     {
      "id": "m4.4",
-     "text": "Settings, Files, Send media: Automatic or Fastest only. Tor shows on a card only with Ultra privacy on."
-    },
-    {
-     "id": "m4.5",
-     "text": "In a chat: Person details, Send media overrides Settings."
+     "text": "Settings, Files: no Send media choice any more. Tor shows on a file's card only with Ultra privacy on."
     },
     {
      "id": "m4.6",

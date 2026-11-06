@@ -3260,15 +3260,6 @@ private fun GroupSettings(app: Muninn, g: String) {
                 Text(io.github.ravenor907.muninn.net.Sharing.rulesLine(s.fs, s.fm), style = Type.normal, modifier = Modifier.padding(top = 8.dp))
                 Text("Who can send files. Every member's app follows this.", style = Type.small, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
                 if (admin) MButton("Change", Modifier.padding(bottom = 8.dp), icon = "edit") { fileRules = true }
-                // Send media for this group: as in Settings, or its own.
-                Text("Send media", style = Type.normal, modifier = Modifier.padding(top = 4.dp))
-                var groupRoute by remember(g) { mutableStateOf(app.chat.mediaRouteOf("g:$g")) }
-                androidx.compose.foundation.layout.FlowRow(Modifier.padding(top = 6.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton("As in Settings", kind = if (groupRoute == null) Kind.Accent else Kind.Normal) { groupRoute = null; app.chat.setMediaRoute("g:$g", null) }
-                    io.github.ravenor907.muninn.net.MediaRoute.CHOICES.forEach { c ->
-                        MButton(io.github.ravenor907.muninn.net.MediaRoute.label(c), kind = if (groupRoute == c) Kind.Accent else Kind.Normal) { groupRoute = c; app.chat.setMediaRoute("g:$g", c) }
-                    }
-                }
             }
             if (fileRules) FileRulesDialog(app, g, s.fs, s.fm) { fileRules = false }
             if (admin || s.channels.size > 1) io.github.ravenor907.muninn.ui.Framed("Channels") {
