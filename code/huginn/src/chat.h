@@ -672,10 +672,22 @@ private:
     void exportBig(const QString &id, const QString &path);
     // The writing itself, for any thread (read: Vault::anyThreadReader). False when it isn't all here.
     static bool exportBigWith(const std::function<QByteArray(const QString &)> &read, const QString &id, const QString &path);
+    // A longer video's pieces: their folder moved aside at once (Vault::dropFolder), then removed on its own thread.
     void dropBig(const QString &id);
-    // Pieces whose message is gone (its poster deleted with it, by any of the ways messages go): once an hour at most.
+    // Removes [full] (a folder moved aside) on its own thread, so the window and call sound never wait on it.
+    void removeAside(const QString &full);
+    // Pieces whose message is gone (its poster deleted with it, by any of the ways messages go), and folders moved aside
+    // whose removal was cut off: once an hour at most.
     void sweepBig();
     QSet<QString> m_bigStoring;
+    // Theirs being kept under the sender's own id: which chat ("from|group"), and copies of it that arrived meanwhile,
+    // which finish with the first one's result (no second file).
+    struct BigWait
+    {
+        QString where;
+        QList<std::function<void(bool)>> done;
+    };
+    QHash<QString, BigWait> m_bigInline;
     qint64 m_bigSwept = 0;
     // The threads keeping or saving a longer video ("huginn-video-keep", "huginn-video-save"), so closing can wait for them.
     QList<QPointer<QObject>> m_bigThreads;
@@ -900,6 +912,7 @@ private:
     // Your chat name and who you blocked: in the vault (prefs.json), read when it opens.
     mutable QJsonObject m_prefs;
     QString ownMediaRoute(const QString &key) const;   // its own Send media choice, "" for As in Settings
+    void dropGroupRoute(const QString &g);              // a group left or deleted: its Send media choice goes from prefs.json
     bool m_prefsLoaded = false;
     mutable QString m_tempName;   // a name for this run only, while the vault isn't open yet
     void loadPrefs();

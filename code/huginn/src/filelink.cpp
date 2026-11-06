@@ -806,8 +806,16 @@ FileLink::~FileLink()
         // A file of theirs still coming that wasn't kept: its part file never stays behind.
         const bool part = !x->mine && x->file && x->path.endsWith(QLatin1String(".part"));
         delete x->file;
-        if (part)
+        if (part && x->storing) {
+            // All of it arrived and checked out, and the sender was told so, but it wasn't in the chat yet: never lost,
+            // saved under its planned name as a file from them (left as it is when even that can't be done).
+            const QString planned = x->path.chopped(5);
+            const QString final = QFile::exists(planned) ? QDir(x->folder).filePath(freeName(x->folder, x->name)) : planned;
+            if (QFile::rename(x->path, final))
+                Sharing::markFromInternet(final);
+        } else if (part) {
             QFile::remove(x->path);
+        }
         delete x;
     }
 }
@@ -2848,7 +2856,9 @@ void FileLink::tagBig(const QString &id, const QString &chat, const QString &msg
             e.insert(QStringLiteral("vid"), vid);
             e.insert(QStringLiteral("bubble"), false);   // failed: it shows
         }
-    bigCheck(id, chat, msgId, true);
+    // A moment later, as Muninn does: in a group's send loop, the other members' copies are started first, so one that
+    // fails at once doesn't mark the bubble Not sent while they're still on their way.
+    QTimer::singleShot(0, this, [this, id, chat, msgId] { bigCheck(id, chat, msgId, true); });
 }
 
 void FileLink::bigCheck(const QString &id, const QString &chat, const QString &msgId, bool keep)
@@ -3347,7 +3357,8 @@ void FileLink::keepForRestart()
         Xfer *x = m_x.value(id);
         // A send to Family or a trusted contact still waiting for them stays too: it goes when they're back.
         const bool waiting = x && x->mine && x->family && x->state == QLatin1String("offered");
-        if (!x || !hasF3(x->peer) || (x->state != QLatin1String("sending") && x->state != QLatin1String("connecting") && !waiting))
+        // One of theirs all here and being kept in the chat isn't a part: ~FileLink saves it as a file if it's still here.
+        if (!x || x->storing || !hasF3(x->peer) || (x->state != QLatin1String("sending") && x->state != QLatin1String("connecting") && !waiting))
             continue;
         if (x->mine) {
             // Its card says so and Retry goes on, once both apps are open again.

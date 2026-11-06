@@ -279,7 +279,9 @@ QString delivery(const Member &m, bool unmetered, int ms)
         return QStringLiteral("full");
     if (m.newPath && m.v3 && m.reach)
         return ms <= kSmallMaxMs + kSlackMs ? QStringLiteral("small") : QStringLiteral("none");
-    return ms <= kRelayMaxMs + kSlackMs ? QStringLiteral("relay") : QStringLiteral("none");
+    if (ms <= kRelayMaxMs + kSlackMs)
+        return QStringLiteral("relay");
+    return m.newPath && m.v3 ? QStringLiteral("unreached") : QStringLiteral("none");
 }
 
 QHash<QString, QString> plan(const QList<Member> &members, bool unmetered, int ms)
@@ -313,16 +315,15 @@ QString names(const QStringList &n)
     return QStringLiteral("%1, %2 and %3 more").arg(n.at(0), n.at(1)).arg(n.size() - 2);
 }
 
-QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf,
-                const std::function<bool(const QString &)> &newPath)
+QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf)
 {
-    QStringList full, small, relay, none, older;
+    QStringList full, small, relay, none, unreached;
     QStringList keys = plan.keys();
     keys.sort();
     for (const QString &k : keys) {
         const QString how = plan.value(k);
-        const bool old = how == QLatin1String("none") && newPath && !newPath(k);
-        (how == QLatin1String("full") ? full : how == QLatin1String("small") ? small : how == QLatin1String("relay") ? relay : old ? older : none) << nameOf(k);
+        (how == QLatin1String("full") ? full : how == QLatin1String("small") ? small : how == QLatin1String("relay") ? relay
+         : how == QLatin1String("unreached") ? unreached : none) << nameOf(k);
     }
     QStringList out;
     if (!full.isEmpty())
@@ -331,10 +332,10 @@ QString summary(const QHash<QString, QString> &plan, const std::function<QString
         out << QStringLiteral("A 720p copy to %1.").arg(names(small));
     if (!relay.isEmpty())
         out << QStringLiteral("A smaller copy (720p, up to 20 seconds) to %1, whose app is older.").arg(names(relay));
-    if (!older.isEmpty())
-        out << QStringLiteral("Not to %1: their app is older. Ask them to update.").arg(names(older));
     if (!none.isEmpty())
-        out << QStringLiteral("Not to %1: no way to reach them with this one now. Try on the same Wi-Fi.").arg(names(none));
+        out << QStringLiteral("Not to %1: their app is older. Ask them to update.").arg(names(none));
+    if (!unreached.isEmpty())
+        out << QStringLiteral("Not to %1: no way to reach them with this one now. Try on the same Wi-Fi.").arg(names(unreached));
     return out.isEmpty() ? QStringLiteral("Nobody else is here yet.") : out.join(QLatin1Char(' '));
 }
 
@@ -768,9 +769,8 @@ bool selfTest()
         // Not to someone: an older app is asked to update; a new app with no way now is told to try on the same Wi-Fi.
         const Member stuck = [&] { Member m = mem("f", false, false, true); m.reach = false; return m; }();
         const QHash<QString, QString> q = plan({oldFar, stuck}, true, 30000);
-        const QString why = summary(q, [](const QString &k) { return k.toUpper(); },
-                                    [&](const QString &k) { return k == oldFar.k ? oldFar.newPath : stuck.newPath; });
-        check(q.value(QStringLiteral("h")) == QLatin1String("none") && q.value(QStringLiteral("f")) == QLatin1String("none")
+        const QString why = summary(q, [](const QString &k) { return k.toUpper(); });
+        check(q.value(QStringLiteral("h")) == QLatin1String("none") && q.value(QStringLiteral("f")) == QLatin1String("unreached")
                   && why.contains(QLatin1String("Not to H: their app is older. Ask them to update."))
                   && why.contains(QLatin1String("Not to F: no way to reach them with this one now. Try on the same Wi-Fi.")),
               "not to: older apps asked to update, new apps told there's no way now");

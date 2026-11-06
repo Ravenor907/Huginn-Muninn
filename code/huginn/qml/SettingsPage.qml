@@ -357,8 +357,8 @@ Rectangle {
             { group: "Backup", kind: "button", key: "backup", title: "Back up", note: "One encrypted file", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
             { group: "Backup", kind: "button", key: "restore", title: "Restore from a backup", note: "Any backup file from Huginn or Muninn", label: "Restore", enabled: Vault.exists && !Vault.busy },
             { group: "Files", kind: "button", key: "saveFolder", title: "Save files to", note: Transfer.saveName + "/Huginn", label: "Change" },
-            { group: "Files", kind: "segmented", key: "mediaRoute", title: "Send media", note: Chat.relayNote() || "Family and trusted: full quality",
-              options: [{ value: "auto", label: "Automatic" }, { value: "fastest", label: "Fastest" }] },
+            // How photos and videos go: said here (Automatic and Fastest went the same way, so there's no choice).
+            { group: "Files", kind: "info", title: "Sending media", note: Chat.relayNote() || "Family and trusted: full quality" },
             { group: "Files", kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Use Downloads again", label: "Reset" },
             { group: "Files", kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" }
         ], [

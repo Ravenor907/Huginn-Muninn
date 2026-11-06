@@ -797,6 +797,7 @@ QString Chat::leaveGroup(const QString &g)
     Group &gr = m_groups[g];
     gr.left = true;
     gr.removed = false;
+    dropGroupRoute(g);
     groupNote(g, QStringLiteral("You left %1.").arg(groupName(g)));
     saveGroups();
     Q_EMIT changed();
@@ -815,6 +816,7 @@ void Chat::forgetGroup(const QString &g)
         m_gidx.remove(str(m, "id"));
     }
     m_groups.remove(g);
+    dropGroupRoute(g);
     if (m_mod)
         m_mod->forgetGroup(g);
     for (const QString &id : m_gout.keys())

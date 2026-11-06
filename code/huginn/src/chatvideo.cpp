@@ -151,6 +151,14 @@ bool Chat::addGroupBlobMember(const QString &g, const QString &gid, const QStrin
 
 namespace
 {
+int count(const QHash<QString, QString> &plan, const char *how)
+{
+    int n = 0;
+    for (const QString &v : plan)
+        n += v == QLatin1String(how) ? 1 : 0;
+    return n;
+}
+
 Picked pick(const QString &path, const QList<GroupVideo::Member> &members)
 {
     Picked p;
@@ -215,11 +223,13 @@ Picked pick(const QString &path, const QList<GroupVideo::Member> &members)
         if ((it.value() == QLatin1String("full") && !p.fullOk) || (it.value() == QLatin1String("small") && !p.smallOk)
             || (it.value() == QLatin1String("relay") && !p.relayOk))
             it.value() = QStringLiteral("none");
-        any = any || it.value() != QLatin1String("none");
+        any = any || (it.value() != QLatin1String("none") && it.value() != QLatin1String("unreached"));
     }
     if (!any && !p.plan.isEmpty()) {
         p.asFile = true;
-        p.why = GroupVideo::biggerThan720(p.info) || !GroupVideo::withinFps(p.info.fps, GroupVideo::kFullFps)
+        p.why = count(p.plan, "unreached") == p.plan.size()
+            ? QStringLiteral("No way to reach them with this one now. Try on the same Wi-Fi.")
+            : GroupVideo::biggerThan720(p.info) || !GroupVideo::withinFps(p.info.fps, GroupVideo::kFullFps)
             ? QStringLiteral("Over the internet, videos go at 720p and 30 frames a second at most, and Huginn can't shrink videos. It can go as a file.")
             : QStringLiteral("Their app is older and gets videos up to 20 seconds. It can go as a file.");
         return p;
@@ -228,13 +238,6 @@ Picked pick(const QString &path, const QList<GroupVideo::Member> &members)
     return p;
 }
 
-int count(const QHash<QString, QString> &plan, const char *how)
-{
-    int n = 0;
-    for (const QString &v : plan)
-        n += v == QLatin1String(how) ? 1 : 0;
-    return n;
-}
 }
 
 // 1.42: sending videos is allowed under Ultra privacy (over Tor or the same Wi-Fi only), so it's never off.
@@ -250,11 +253,7 @@ QVariantMap Chat::planVideo(const QString &where, const QString &path, bool inFu
                     {QStringLiteral("title"), p.tooLong ? QString::fromLatin1(GroupVideo::kTooLongTitle) : QString()}};
     if (!p.ok)
         return out;
-    QSet<QString> newPath;
-    for (const GroupVideo::Member &m : members)
-        if (m.newPath)
-            newPath.insert(m.k);
-    QString said = GroupVideo::summary(p.plan, [this](const QString &k) { return nameOf(k); }, [&newPath](const QString &k) { return newPath.contains(k); });
+    QString said = GroupVideo::summary(p.plan, [this](const QString &k) { return nameOf(k); });
     const int none = count(p.plan, "none");
     if (none > 0 && !p.fullOk)
         said += QStringLiteral(" It's over 1080p or 30 frames a second, and Huginn can't convert videos: as a file it reaches everyone.");
@@ -489,22 +488,43 @@ void Chat::dropBig(const QString &id)
 {
     if (id.isEmpty() || id.contains(QLatin1Char('/')))
         return;
-    const QString dir = m_vault->path(BigVideo::dir(id));
-    const QStringList files = QDir(dir).entryList(QDir::Files | QDir::Hidden);
-    for (const QString &f : files)
-        m_vault->remove(BigVideo::dir(id) + QLatin1Char('/') + f);
-    QDir(dir).removeRecursively();   // anything left over (a save that was cut off)
+    // One rename here; the hundreds of pieces go on their own thread. One that couldn't be moved stays for the next
+    // sweep (a piece written again over it replaces it).
+    removeAside(m_vault->dropFolder(BigVideo::dir(id)));
+}
+
+void Chat::removeAside(const QString &full)
+{
+    if (full.isEmpty() || !Vault::isGone(full))
+        return;
+    QThread *t = QThread::create([full] {
+        QDirIterator it(full, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            if (QThread::currentThread()->isInterruptionRequested())
+                return;   // Huginn is closing: the rest is swept at a later start
+            QFile::remove(it.next());
+        }
+        QDir(full).removeRecursively();
+    });
+    t->setObjectName(QStringLiteral("huginn-video-drop"));
+    trackBigThread(t);
+    connect(t, &QThread::finished, t, &QObject::deleteLater);
+    t->start();
 }
 
 void Chat::sweepBig()
 {
     const qint64 t = QDateTime::currentMSecsSinceEpoch();
-    if (!m_ready || m_vault->locked() || t - m_bigSwept < 3600000)
+    if (!m_ready || m_vault->locked() || m_vault->sealing() || t - m_bigSwept < 3600000)
         return;
     m_bigSwept = t;
     const QString photos = m_vault->path(QStringLiteral("photos"));
-    const QStringList dirs = QDir(photos).entryList({QStringLiteral("*.v")}, QDir::Dirs | QDir::NoDotAndDotDot);
+    const QStringList dirs = QDir(photos).entryList({QStringLiteral("*.v"), QStringLiteral("*.gone")}, QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString &d : dirs) {
+        if (Vault::isGone(d)) {
+            removeAside(photos + QLatin1Char('/') + d);   // moved aside already: its removal was cut off
+            continue;
+        }
         const QString id = d.chopped(2);
         if (!id.isEmpty() && !m_bigStoring.contains(id) && !QFileInfo::exists(photos + QLatin1Char('/') + id))
             dropBig(id);
@@ -684,22 +704,44 @@ void Chat::inlineVideo(const QString &from, const QString &group, const QString 
             QTimer::singleShot(0, this, [done] { done(true); });
             return;
         }
-        // The id is used for something else here: a new one, so nothing of that is touched.
-        if (m_gidx.contains(theirs) || isBigVideo(theirs) || QFileInfo::exists(m_vault->path(QStringLiteral("photos/") + theirs)))
+        const QString where = from + QLatin1Char('|') + group;
+        if (m_bigStoring.contains(theirs)) {
+            // A copy of it is still being kept: this one finishes with that one's result, never as a second file.
+            const auto it = m_bigInline.find(theirs);
+            if (it != m_bigInline.end() && it->where == where) {
+                it->done << done;
+                return;
+            }
+            theirs.clear();   // something else is being kept under that id
+        } else if (m_gidx.contains(theirs) || isBigVideo(theirs) || QFileInfo::exists(m_vault->path(QStringLiteral("photos/") + theirs))) {
+            // The id is used for something else here: a new one, so nothing of that is touched.
             theirs.clear();
+        }
+        if (!theirs.isEmpty())
+            m_bigInline.insert(theirs, BigWait{where, {}});
     }
     const QString mid = !theirs.isEmpty() ? theirs : group.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : GroupWire::newLogicalId();
     const int len = qBound(1, ms, BigVideo::kInlineMaxMs + BigVideo::kSlackMs);
     QPointer<Chat> self(this);
-    storeBigVideo(mid, path, [self, from, group, mid, len, done, here](bool ok) {
+    // The result, for this copy and any that arrived while it was kept.
+    const bool own = !theirs.isEmpty();
+    auto finish = [self, mid, own, done](bool ok) {
+        QList<std::function<void(bool)>> more;
+        if (self && own)
+            more = self->m_bigInline.take(mid).done;
+        done(ok);
+        for (const auto &f : std::as_const(more))
+            f(ok);
+    };
+    storeBigVideo(mid, path, [self, from, group, mid, len, finish, here](bool ok) {
         if (!self || !ok) {
-            done(false);
+            finish(false);
             return;
         }
         Chat *c = self;
         // Another copy of it got in while this one was being kept: that one stays, and this one counts as done.
         if (here(c, from, group, mid)) {
-            done(true);
+            finish(true);
             return;
         }
         bool added = false;
@@ -734,7 +776,7 @@ void Chat::inlineVideo(const QString &from, const QString &group, const QString 
             c->m_vault->remove(QStringLiteral("photos/") + mid);
             c->dropBig(mid);
         }
-        done(added);
+        finish(added);
     });
 }
 
@@ -787,9 +829,10 @@ void Chat::ownBigVideo(const QString &where, const QString &path, int ms, std::f
 
 void Chat::bigVideoSent(const QString &chat, const QString &msgId)
 {
+    // A copy is on their device already (the file arrived whole): Delivered, never Waiting for the relays.
     const auto sent = [](QVariantMap &x) {
         if (x.value(QStringLiteral("mine")).toBool() && str(x, "state") == QLatin1String("sending")) {
-            x.insert(QStringLiteral("state"), QStringLiteral("sent"));
+            x.insert(QStringLiteral("state"), QStringLiteral("delivered"));
             x.insert(QStringLiteral("failed"), false);
         }
     };
@@ -801,7 +844,7 @@ void Chat::bigVideoSent(const QString &chat, const QString &msgId)
 
 void Chat::bigVideoFailed(const QString &chat, const QString &msgId, bool failed)
 {
-    // Only while it says sending: a copy that arrived already (sent) stays so.
+    // Only while it says sending: a copy that arrived already (delivered) stays so.
     const auto mark = [failed](QVariantMap &x) {
         if (x.value(QStringLiteral("mine")).toBool() && x.value(QStringLiteral("vb")).toBool() && str(x, "state") == QLatin1String("sending"))
             x.insert(QStringLiteral("failed"), failed);

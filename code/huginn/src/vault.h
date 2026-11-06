@@ -197,6 +197,11 @@ public:
     // locked, or sealing for a new lock has begun, so nothing is left behind sealed with an old key.
     std::function<bool(const QString &, const QByteArray &)> anyThreadWriter() const;
     void remove(const QString &name) const;
+    // Folder [name] moved aside in one rename ("<name>.<time>.gone", never in a swap's moment), for the caller to remove
+    // on its own thread: the full path it's at now, or empty when there was no such folder or it couldn't be moved.
+    QString dropFolder(const QString &name) const;
+    // A folder dropFolder moved aside: its name ends so.
+    static bool isGone(const QString &folder) { return folder.endsWith(QLatin1String(".gone")); }
     QString path(const QString &name) const;
     // read() for another thread: the key and the file are taken now, the file is read and opened when it's called.
     std::function<QByteArray()> reader(const QString &name) const;
@@ -269,8 +274,9 @@ public:
     static QVariantMap backupSummary(const Files &files, const QJsonObject &header);
     // Photos, voice and video messages: in a backup only when files and pictures are.
     static bool isMedia(const QString &name);
-    // A longer video's sealed pieces ("photos/<id>.v/..."): never in a backup or a move (they'd be held whole in
-    // memory); its poster ("photos/<id>") still goes, and the chat says the video itself isn't on that device.
+    // A longer video's sealed pieces ("photos/<id>.v/...", and those of one being removed, "photos/<id>.v.<time>.gone/..."):
+    // never in a backup or a move (they'd be held whole in memory); its poster ("photos/<id>") still goes, and the chat
+    // says the video itself isn't on that device.
     static bool isBigPiece(const QString &name);
     static bool safeName(const QString &name);
     // Every file in a chat folder, opened with the data key (vault.key and longer videos' pieces stay out). Round 17: nothing is left out

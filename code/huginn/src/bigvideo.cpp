@@ -6,7 +6,9 @@
 #include <QMediaPlayer>
 #include <QMutexLocker>
 #include <QPointer>
+#include <QThread>
 #include <QTimer>
+#include <QTransform>
 #include <QUrl>
 #include <QVideoFrame>
 #include <QVideoSink>
@@ -136,15 +138,39 @@ void poster(QIODevice *dev, QObject *context, std::function<void(const QByteArra
         }
         done(jpg.isEmpty() ? blank() : jpg);
     };
-    QObject::connect(sink, &QVideoSink::videoFrameChanged, player, [end](const QVideoFrame &frame) {
-        if (!frame.isValid())
+    // The picture is made on its own thread (a 4K frame's conversion, scaling and JPEG take a while): the window and
+    // call sound never wait on it. One frame at a time; one that gives no picture lets the next one try.
+    auto taking = std::make_shared<bool>(false);
+    QObject::connect(sink, &QVideoSink::videoFrameChanged, player, [end, taking, ended](const QVideoFrame &frame) {
+        if (*taking || *ended || !frame.isValid())
             return;
-        QImage img = frame.toImage();
-        if (img.isNull())
-            return;
-        if (qMax(img.width(), img.height()) > kPosterSide)
-            img = img.scaled(kPosterSide, kPosterSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        end(jpeg(img.convertToFormat(QImage::Format_RGB32), 82));
+        *taking = true;
+        auto jpg = std::make_shared<QByteArray>();
+        QThread *t = QThread::create([frame, jpg] {
+            QImage img = frame.toImage();
+            if (img.isNull())
+                return;
+            // Halved fast while it's far bigger, then smoothly to its size.
+            while (qMax(img.width(), img.height()) >= 4 * kPosterSide)
+                img = img.scaled(img.width() / 2, img.height() / 2, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+            if (qMax(img.width(), img.height()) > kPosterSide)
+                img = img.scaled(kPosterSide, kPosterSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            // toImage() leaves the frame as it was stored: a phone video's turn (and a mirror) is applied here, as when
+            // it plays.
+            if (frame.mirrored())
+                img = img.transformed(QTransform().scale(-1, 1));
+            if (const int turn = int(frame.rotation()); turn != 0)
+                img = img.transformed(QTransform().rotate(turn));
+            *jpg = jpeg(img.convertToFormat(QImage::Format_RGB32), 82);
+        });
+        t->setObjectName(QStringLiteral("huginn-video-poster"));
+        QObject::connect(t, &QThread::finished, t, &QObject::deleteLater);
+        QObject::connect(t, &QThread::finished, player, [end, taking, jpg] {
+            *taking = false;
+            if (!jpg->isEmpty())
+                end(*jpg);
+        });
+        t->start();
     });
     QObject::connect(player, &QMediaPlayer::errorOccurred, player, [end](QMediaPlayer::Error, const QString &) { end(QByteArray()); });
     QTimer::singleShot(8000, player, [end] { end(QByteArray()); });

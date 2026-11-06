@@ -36,7 +36,7 @@ public:
     bool paused() const { return m_paused; }
     qint64 atMs() const;
     qint64 lengthMs() const;
-    // Degrees clockwise to turn the video upright (0, 90, 180, 270), from its own metadata: a phone video filmed
+    // Degrees clockwise to turn the video upright (0, 90, 180, 270), from its latest frame: a phone video filmed
     // upright is stored sideways with this set. It goes with each frame, as the camera's rotation does.
     int rotation() const { return m_rotation; }
 

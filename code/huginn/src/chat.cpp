@@ -932,6 +932,19 @@ void Chat::cycleMediaRoute(const QString &key)
     saveContacts();
 }
 
+void Chat::dropGroupRoute(const QString &g)
+{
+    QJsonObject routes = m_prefs.value(QStringLiteral("groupRoutes")).toObject();
+    if (!m_prefsLoaded || !routes.contains(g))
+        return;
+    routes.remove(g);
+    if (routes.isEmpty())
+        m_prefs.remove(QStringLiteral("groupRoutes"));
+    else
+        m_prefs.insert(QStringLiteral("groupRoutes"), routes);
+    savePrefs();
+}
+
 bool Chat::filesAsk(const QString &key) const
 {
     return m_contacts.value(key).value(QStringLiteral("filesAsk")).toBool();

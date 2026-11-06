@@ -3473,7 +3473,17 @@ sender waits 30 s for an answer (`RELAY_AFTER_MS`). If no answer comes, there's 
 for its rules or space, or the transfer breaks off, the card goes and that member gets the relay copy instead (added to
 the same group message, or a new one). Declined with `why:"no"`: nothing more.
 
-`"bm"` (optional), the sender's message id for the video in the chat.
+`"bm"` (optional), the sender's message id for the video in the chat, so both sides keep it as the same message. Its
+format: 16 to 40 ASCII letters, digits, `-` or `_`. In a chat with one person it's a UUID; in a group it's the group
+message's logical id. Anything else is ignored (the video still arrives, under an id the receiver picks).
+
+The receiver's rules for `bm`:
+
+- It uses `bm` only when it fits its chat: any valid id in a chat with one person, a logical id in a group.
+- If that message is already in this chat, or was deleted here, the copy counts as already handled: no second bubble
+  and no file. A copy that arrives while an earlier one with the same `bm` is still being kept finishes with that one.
+- If the id already belongs to other kept media here (another message, photo or video), the receiver picks a new id,
+  so nothing of that is touched.
 
 ### 29.4 Pacing
 

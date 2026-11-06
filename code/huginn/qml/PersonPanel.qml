@@ -91,7 +91,6 @@ Item {
         { id: "pin", sec: "This chat", label: "Pin to top", toggle: true },
         { id: "archive", sec: "This chat", label: "Archive", toggle: true },
         { id: "color", sec: "This chat", label: "Chat color", swatches: true },
-        { id: "mediaRoute", sec: "This chat", label: "Send media", value: tour ? "As in Settings" : (revision, Chat.mediaRouteLabel(key)) },
         { id: "folders", sec: "This chat", label: "Folders", value: folderLine },
         { id: "calls", sec: "They can", label: "Call me", toggle: true },
         { id: "files", sec: "They can", label: "Send me files", value: filesWord(filesRule()), choice: true,
@@ -155,7 +154,6 @@ Item {
         else if (id === "folders") PeopleActions.folderMenu(k, () => panel.again())
         else if (id === "pin") { if (has("pinChat")) Chat.pinChat(k, !isOn("pin")); revision++ }
         else if (id === "archive") { if (has("archiveChat")) Chat.archiveChat(k, !isOn("archive")); revision++ }
-        else if (id === "mediaRoute") { if (has("cycleMediaRoute")) Chat.cycleMediaRoute(k); revision++ }
         else if (id === "files") pickFiles()
         else if (id === "check") PeopleActions.checkCode(k)
         else if (id === "route") PeopleActions.sayRoute(k)

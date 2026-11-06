@@ -1953,7 +1953,14 @@ std::function<bool(const QString &, const QByteArray &)> Vault::anyThreadWriter(
         // lock). In this order: the swap may change the key, which takes writing too.
         const QString file = dir + QLatin1Char('/') + name;
         const QString tmp = file + QStringLiteral(".keep");
-        QDir().mkpath(QFileInfo(file).absolutePath());
+        {
+            // Its folder is made only while the key it was made with is still the one in use, and never in a swap's
+            // moment: a piece in flight never makes a folder again after a restore, a new lock or Erase everything.
+            QMutexLocker hold(&s_swap);
+            QMutexLocker w(&shared->writing);
+            if (shared->gen != gen || !QDir().mkpath(QFileInfo(file).absolutePath()))
+                return false;
+        }
         {
             QFile t(tmp);
             if (!t.open(QIODevice::WriteOnly | QIODevice::Truncate) || t.write(sealed) != sealed.size() || !t.flush()) {
@@ -1965,13 +1972,28 @@ std::function<bool(const QString &, const QByteArray &)> Vault::anyThreadWriter(
         }
         QMutexLocker hold(&s_swap);
         QMutexLocker w(&shared->writing);
-        if (shared->gen != gen || !QFileInfo::exists(QFileInfo(file).absolutePath())) {
+        if (shared->gen != gen) {
             QFile::remove(tmp);
             return false;
         }
         QFile::remove(file);
         return QFile::rename(tmp, file);
     };
+}
+
+QString Vault::dropFolder(const QString &name) const
+{
+    if (!safeName(name))
+        return {};
+    if (m_sealing)   // gone from the new folder too, just before it's swapped in (sealDirty)
+        m_dirty.insert(name);
+    const QString from = path(name);
+    const QString gone = from + QLatin1Char('.') + QString::number(QDateTime::currentMSecsSinceEpoch()) + QStringLiteral(".gone");
+    // One rename, under s_swap so it's never in the moment the chat folder is away.
+    QMutexLocker hold(&s_swap);
+    if (!QFileInfo(from).isDir() || QFileInfo::exists(gone) || !QDir().rename(from, gone))
+        return {};
+    return gone;
 }
 
 void Vault::remove(const QString &name) const
@@ -2468,7 +2490,8 @@ bool Vault::isMedia(const QString &name)
 
 bool Vault::isBigPiece(const QString &name)
 {
-    return name.startsWith(QLatin1String("photos/")) && name.section(QLatin1Char('/'), 1, 1).endsWith(QLatin1String(".v"))
+    const QString folder = name.section(QLatin1Char('/'), 1, 1);
+    return name.startsWith(QLatin1String("photos/")) && (folder.endsWith(QLatin1String(".v")) || (isGone(folder) && folder.contains(QLatin1String(".v."))))
         && name.count(QLatin1Char('/')) >= 2;
 }
 
@@ -2761,6 +2784,14 @@ void Vault::startSeal(const QString &secret, bool pattern, const QString &spare)
                     const QString full = it.next();
                     const QString name = base.relativeFilePath(full);
                     if (name == QLatin1String("vault.key") || name == kComplete || !safeName(name))
+                        continue;
+                    // A piece's file left from a write that was cut off: never read again, so not carried across.
+                    if (name.endsWith(QLatin1String(".keep"))) {
+                        QFile::remove(full);
+                        continue;
+                    }
+                    // A longer video's pieces being removed (Chat::dropBig): not carried across either.
+                    if (isBigPiece(name) && isGone(name.section(QLatin1Char('/'), 1, 1)))
                         continue;
                     names << name;
                     bytes += it.fileInfo().size();
@@ -3236,11 +3267,6 @@ void Vault::forgetOpened()
 
 void Vault::restoreOpened()
 {
-    {
-        // Pieces still being kept on another thread (anyThreadWriter) stop here.
-        QMutexLocker w(&m_shared->writing);
-        ++m_shared->gen;
-    }
     if (m_busy || m_opened.empty()) {
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Open the backup again first."));
         return;
@@ -3275,6 +3301,12 @@ void Vault::restoreOpened()
     if (kept.isEmpty()) {
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Couldn't keep a copy of what's here, so nothing changed. Is the disk full?"));
         return;
+    }
+    {
+        // Pieces still being kept on another thread (anyThreadWriter) stop here, just before the swap: a restore
+        // that's refused never cancels one.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
     }
     QString error;
     m_saves->dropAll(30000);   // the old chats' saves still waiting never land on the restored files
@@ -3331,11 +3363,6 @@ Vault::Files Vault::openedFiles(QString *why) const
 
 void Vault::restoreErasing()
 {
-    {
-        // Pieces still being kept on another thread (anyThreadWriter) stop here.
-        QMutexLocker w(&m_shared->writing);
-        ++m_shared->gen;
-    }
     if (m_busy || m_opened.empty()) {
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Open the backup again first."));
         return;
@@ -3350,6 +3377,12 @@ void Vault::restoreErasing()
     if (files.empty()) {
         Q_EMIT done(QStringLiteral("restore"), false, why);
         return;
+    }
+    {
+        // Pieces still being kept on another thread (anyThreadWriter) stop here, just before the swap: a restore
+        // that's refused never cancels one.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
     }
     // What's here can't be opened without the lock: replaced for good, under a new data key. Saves still waiting
     // (made with the old key) never land on the restored files.
@@ -3490,6 +3523,7 @@ bool Vault::backupSelfTest()
                                                && old.value(QStringLiteral("app")).toString() == QLatin1String("huginn"));
         check("files and pictures", isMedia(QStringLiteral("photos/abc")) && isMedia(QStringLiteral("mirror-media/x")) && !isMedia(QStringLiteral("chats.json")));
         check("longer videos' pieces stay out", isBigPiece(QStringLiteral("photos/abc.v/00000")) && isBigPiece(QStringLiteral("photos/abc.v/size"))
+                                                    && isBigPiece(QStringLiteral("photos/abc.v.123.gone/00000"))
                                                     && !isBigPiece(QStringLiteral("photos/abc")) && !isBigPiece(QStringLiteral("photos/abc.v")));
     }
     // Weakened settings in the (unprotected) header are refused, not used.

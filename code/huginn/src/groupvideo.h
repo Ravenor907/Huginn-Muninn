@@ -112,7 +112,8 @@ struct Member {
 };
 bool fullOk(const Member &m);
 bool direct(const Member &m, bool unmetered);
-// "full", "small" (720p copy through FileLink), "relay" (older apps) or "none" for a video [ms] long.
+// "full", "small" (720p copy through FileLink), "relay" (older apps), "none" (an older app, or over 5 minutes with no
+// direct way) or "unreached" (a new app with no way to it now) for a video [ms] long. The same as GroupVideo.kt's delivery.
 QString delivery(const Member &m, bool unmetered, int ms);
 QHash<QString, QString> plan(const QList<Member> &members, bool unmetered, int ms);
 // Over 5 minutes and someone isn't direct: "Video too long".
@@ -121,10 +122,9 @@ inline const char kTooLongTitle[] = "Video too long";
 inline const char kTooLongText[] = "Videos over the internet can be up to 5 minutes.";
 inline const char kNote[] = "Full size close by. Others get up to 5 minutes.";
 QString names(const QStringList &n);
-// newPath: whether a member's app has the new paths (Member::newPath). A member it can't go to says "their app is
-// older" without them, and "no way to reach them" with them (none given: every member has them).
-QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf,
-                const std::function<bool(const QString &)> &newPath = {});
+// What the send sheet says about [plan] ([nameOf] each key), word for word as GroupVideo.kt's summary: "none" says
+// "their app is older", "unreached" says "no way to reach them".
+QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf);
 
 // When each relay piece may go: kPacePerSecond a second, nothing while a "rate-limited" answer is under kBackoffMs old.
 class Pacer

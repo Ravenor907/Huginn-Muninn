@@ -2,7 +2,6 @@
 
 #include <QAudioBuffer>
 #include <QAudioFormat>
-#include <QMediaMetaData>
 #include <QMediaPlayer>
 #include <QUrl>
 #include <QVideoSink>
@@ -49,6 +48,9 @@ void CallShare::start(const QString &path)
         if (player != m_player.data() || !m_on || m_paused || !f.isValid())
             return;
         m_sawVideo = true;
+        // Its turn comes with each frame (the file's metadata can come after the first ones). The call's video carries
+        // no mirror, so a mirrored file goes as it's stored.
+        m_rotation = (int(f.rotation()) % 360 + 360) % 360;
         Q_EMIT frame(f);
     });
 #ifdef HUGINN_SHARE_SOUND
@@ -90,16 +92,6 @@ void CallShare::start(const QString &path)
         Q_EMIT changed();
     });
     connect(player, &QMediaPlayer::durationChanged, this, &CallShare::changed);
-    // Its rotation, once the file is read: the nearest quarter turn, clockwise.
-    connect(player, &QMediaPlayer::metaDataChanged, this, [this, player] {
-        if (player != m_player.data())
-            return;
-        const QVariant v = player->metaData().value(QMediaMetaData::Orientation);
-        bool ok = false;
-        const int deg = v.toInt(&ok);
-        const int d = ok ? (deg % 360 + 360) % 360 : 0;
-        m_rotation = ((d + 45) / 90 * 90) % 360;
-    });
     player->setSource(path.startsWith(QLatin1String("file:")) ? QUrl(path) : QUrl::fromLocalFile(path));
     player->play();
     Q_EMIT changed();
