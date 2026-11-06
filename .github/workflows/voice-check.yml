@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pip install --quiet sherpa-onnx==1.13.8 numpy
+          pip install --quiet sherpa-onnx==1.13.8 numpy==2.2.6
           mkdir -p v
           grep -E '  voice-(female|male)-[0-9]+\.tar$' code/shared/voices.sha256 | while read -r sum name; do
             tag=voices-${name##*-}; tag=${tag%.tar}
@@ -32,6 +32,7 @@ jobs:
             d="v/${name%.tar}"; mkdir -p "$d"; tar -xf "v/$name" -C "$d"
           done
           curl -fsSL --retry 5 -o asr.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2
+          echo "2bd6cf965c8bb3e068ef9fa2191387ee63a9dfa2a4e37582a8109641c20005dd  asr.tar.bz2" | sha256sum -c -
           tar -xjf asr.tar.bz2
       - name: Each voice reads, the recognizer listens
         shell: bash

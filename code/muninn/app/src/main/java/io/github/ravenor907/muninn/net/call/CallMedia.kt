@@ -557,7 +557,14 @@ class CallMedia(
      * The peer is a Kids' TV this phone manages: a TV box's weak decoder gets the light camera from the start
      * (VideoWire.light). Known only here, so nothing new goes on the wire.
      */
-    private val peerTv: Boolean by lazy { try { io.github.ravenor907.muninn.tv.TvParent.isManaged(peerKey) } catch (e: Throwable) { false } }
+    private val peerTv: Boolean by lazy {
+        try {
+            io.github.ravenor907.muninn.tv.TvParent.isManaged(peerKey) ||
+                // Any TV, not only one this phone looks after: its app says so with its version ("Muninn 1.48 · Android TV").
+                (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.chat?.contacts?.get(peerKey)?.app
+                    ?.let { io.github.ravenor907.muninn.net.AppVer.parse(it)?.platform == "Android TV" } == true
+        } catch (e: Throwable) { false }
+    }
 
     /** Keyframe requests for the camera: a receiver that keeps asking can't keep up, and gets the light camera too. */
     private val strain = VideoWire.Strain()

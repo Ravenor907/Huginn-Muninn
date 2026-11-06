@@ -228,7 +228,17 @@ internal fun MediaViewer(app: Muninn, m: Chat.Msg, a: MediaActions?, close: () -
     val bar: (@Composable () -> Unit)? = if (a != null) ({ MediaActionRow(m, bytes, a, { forwarding = true }, close) }) else null
     when {
         // A longer video (BigVideo) plays from its sealed pieces, never whole in memory.
-        m.big -> VideoPlayer(m.id, remember(m.id) { app.chat.bigSource(m.photo) }, close, bottom = bar)
+        m.big -> {
+            val src = remember(m.id) { app.chat.bigSource(m.photo) }
+            if (src != null) VideoPlayer(m.id, src, close, bottom = bar)
+            else Column(Modifier.fillMaxSize().background(Color.Black)) {
+                Row(Modifier.fillMaxWidth().padding(12.dp)) { MButton("Back", icon = "back") { close() } }
+                Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text("This video isn't on this phone. Longer videos don't come along in a backup or a move.",
+                        style = Type.normal.copy(color = Color.White))
+                }
+            }
+        }
         m.video > 0 -> VideoPlayer(bytes, close, bottom = bar)
         m.voice > 0 -> Column(Modifier.fillMaxSize().background(Color.Black)) {
             Row(Modifier.fillMaxWidth().padding(12.dp)) { MButton("Back", icon = "back") { close() } }

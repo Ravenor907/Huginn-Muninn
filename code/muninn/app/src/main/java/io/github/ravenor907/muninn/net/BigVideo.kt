@@ -18,6 +18,11 @@ object BigVideo {
 
     fun pieceName(i: Int) = "%05d".format(i)
 
+    /** The offer field with the sender's message id for the video in the chat, so both sides share one message. */
+    const val FIELD = "bm"
+    /** A message id that may name a big video: a UUID (a 1:1 chat) or a group's logical id, nothing else. */
+    fun idOk(s: String): Boolean = s.length in 16..40 && s.all { it.isLetterOrDigit() || it == '-' || it == '_' }
+
     /** Whether a video [ms] long from someone with [badge] (FileLink.mayAlways) goes in the chat. */
     fun inline(ms: Int, familyOrTrusted: Boolean) = familyOrTrusted && ms in 1..(INLINE_MAX_MS + GroupVideo.SLACK_MS)
 

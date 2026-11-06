@@ -129,7 +129,7 @@ fun BackupFlow(app: Muninn, onClose: () -> Unit) {
             Text("What's inside", style = Type.big)
             Text(INSIDE, style = Type.normal, modifier = Modifier.padding(top = 6.dp))
             val s = sizes
-            ToggleRow("Files and pictures", if (s == null) "Counting…" else "Photos, voice and video messages: ${FileText.size(s.media)}", withFiles) { withFiles = it }
+            ToggleRow("Files and pictures", if (s == null) "Counting…" else "Photos, voice and video messages: ${FileText.size(s.media)}. Longer videos stay on this phone; their pictures go.", withFiles) { withFiles = it }
             Text("Encrypted with a password you choose. Only that password opens it.", style = Type.small)
             MButton("Next", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { step = "password" }
             MButton("Cancel", Modifier.fillMaxWidth().padding(top = 8.dp)) { onClose() }

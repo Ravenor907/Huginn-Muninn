@@ -63,6 +63,7 @@ fun MoveSection(app: Muninn) {
     Section("Move from this device")
     Panel {
         Text("Scan the new device's code. Same Wi-Fi.", style = Type.small)
+        Text("Longer videos in chats stay on this device; their pictures move.", style = Type.small)
         Text(MOVE_WARNING, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
         if (scanning) QrScanner(Modifier.fillMaxWidth().padding(top = 8.dp)) { code -> scanning = false; takeIt(code) }
         // Moving sends everything to the other device: the current lock first.

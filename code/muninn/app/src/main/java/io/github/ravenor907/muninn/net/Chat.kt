@@ -381,7 +381,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun relayOver() = meter.over()
             override fun relayStopped() = meter.stopped()
             override fun relayUsed(bytes: Long) = meter.add(bytes)
-            override fun inlineVideo(peer: String, group: String, file: File, ms: Int) = this@Chat.inlineVideo(peer, group, file, ms)
+            override fun inlineVideo(peer: String, group: String, file: File, ms: Int, msgId: String) = this@Chat.inlineVideo(peer, group, file, ms, msgId)
             override fun bigVideoFailed(chat: String, msgId: String) {
                 if (chat.startsWith("g:")) groups.bigVideoFailed(chat.removePrefix("g:"), msgId)
                 else update(chat, msgId) { if (it.mine && it.state == "sending") it.copy(failed = true) else it }
@@ -1761,8 +1761,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * A video from Family or trusted [from] that came through FileLink (up to [BigVideo.INLINE_MAX_MS]): into the chat like a
      * photo ([group]: that group's main channel). False when it can't be kept (it's saved as a file instead).
      */
-    fun inlineVideo(from: String, group: String, file: File, ms: Int): Boolean {
-        val mid = if (group.isEmpty()) UUID.randomUUID().toString() else Proto06.newLogicalId()
+    fun inlineVideo(from: String, group: String, file: File, ms: Int, msgId: String = ""): Boolean {
+        // The sender's own id when it said one (the same message on both sides), else a new one here.
+        val theirs = msgId.takeIf { BigVideo.idOk(it) && (group.isEmpty() || Proto06.isLogicalId(it)) }
+        val mid = theirs ?: if (group.isEmpty()) UUID.randomUUID().toString() else Proto06.newLogicalId()
+        // Already here (a copy sent again after its "done" was lost): nothing more to keep, and no second bubble.
+        if (theirs != null && (if (group.isEmpty()) _private.value[from]?.any { it.id == theirs } == true
+                else groups.messages.value[group]?.any { it.id == theirs } == true)) return true
         if (!storeBigVideo(mid, file)) return false
         val ok = if (group.isNotEmpty()) groups.addBigVideo(group, from, nameOf(from), mid, ms)
         else {

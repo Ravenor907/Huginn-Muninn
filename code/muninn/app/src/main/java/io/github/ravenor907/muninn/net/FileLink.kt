@@ -400,7 +400,7 @@ object FileLink {
         fun relayStopped(): Boolean = false
         fun relayUsed(bytes: Long) {}
         /** A video from Family or trusted (up to 3 minutes) into the chat like a photo; false keeps it a file (BigVideo). */
-        fun inlineVideo(peer: String, group: String, file: File, ms: Int): Boolean = false
+        fun inlineVideo(peer: String, group: String, file: File, ms: Int, msgId: String = ""): Boolean = false
         /** A copy of my big video [msgId] (in [chat]: a key, or "g:" and a group) arrived. */
         fun bigVideoSent(chat: String, msgId: String) {}
         /** A copy of my big video [msgId] stopped (its card has Retry): the bubble says Not sent. */
@@ -429,7 +429,9 @@ object FileLink {
                      /** Cap f5: the call relay may carry it. */
                      val relay: Boolean = false, val punchMs: Long = PUNCH_MS,
                      /** A video's length in ms (its offer's "vid"), 0 for any other file. */
-                     val vid: Int = 0) {
+                     val vid: Int = 0,
+                     /** The sender's message id for it in the chat ("bm", BigVideo.FIELD), or "". */
+                     val bm: String = "") {
         val torSeq = java.util.concurrent.atomic.AtomicLong(TorFiles.SEQ_BASE)
         /** Cap f4: the sender's one-time onion service, once its `tor` message came. */
         @Volatile var onion: Pair<String, Int>? = null
@@ -897,6 +899,8 @@ object FileLink {
                     .put("e", ChatCrypto.b64(keys.public.encoded)).put("c", cs)
                 if (group.isNotEmpty()) offer.put("g", group)
                 if (vid > 0) offer.put("vid", vid)
+                // My big video's own message id, so their bubble is the same message (reactions, replies, read).
+                if (vid > 0) bigOf[id]?.second?.takeIf { BigVideo.idOk(it) }?.let { offer.put(BigVideo.FIELD, it) }
                 if (relay) offer.put("rl", 1)
                 h.signal(peer, offer.toString())
                 put(Progress(id, peer, name, size, true, "offered", group = group))
@@ -916,7 +920,8 @@ object FileLink {
                 // (no more STUN, no accept straight over the internet later). Cap f4: it goes on, by Nearby or Tor.
                 var ultraCut = false
                 while (System.currentTimeMillis() < until && _all.value[id]?.state == "offered" && id !in stopped) {
-                    Thread.sleep(250)
+                    // Quick for the first two minutes; after that a look every 2 s is plenty (a Family offer waits days).
+                    Thread.sleep(if (System.currentTimeMillis() - began < 120_000L) 250L else 2_000L)
                     val now = System.currentTimeMillis()
                     if (!lanOnly && !UltraPrivacy.directAllowed && !tor) { ultraCut = true; break }
                     if (relay && !UltraPrivacy.directAllowed && lan == null && !tor) { ultraCut = true; break }
@@ -1015,7 +1020,8 @@ object FileLink {
                 }
                 val direct = if (trust) CallLogic.directOf(c) else emptyList()
                 val theirs = listOfNotNull(lan) + direct
-                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay), vid)
+                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay), vid,
+                    (p.opt(BigVideo.FIELD) as? String)?.takeIf { BigVideo.idOk(it) }.orEmpty())
                 ins[id] = inc
                 val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
                 val badge = h.badge(from)
@@ -1532,7 +1538,7 @@ object FileLink {
             put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", inc.size, note = "Checking it", route = route, group = inc.group))
             if (sha256(tmp) != inc.sha) { fail(id, "${inc.name} arrived damaged, so it was thrown away."); return }
             // A video from Family or trusted, up to 3 minutes: in the chat like a photo, and its card goes.
-            if (BigVideo.inline(inc.vid, mayAlways(h.badge(inc.peer))) && !h.isKidDevice() && h.inlineVideo(inc.peer, inc.group, tmp, inc.vid)) {
+            if (BigVideo.inline(inc.vid, mayAlways(h.badge(inc.peer))) && !h.isKidDevice() && h.inlineVideo(inc.peer, inc.group, tmp, inc.vid, inc.bm)) {
                 _all.value = _all.value - id
                 return
             }
