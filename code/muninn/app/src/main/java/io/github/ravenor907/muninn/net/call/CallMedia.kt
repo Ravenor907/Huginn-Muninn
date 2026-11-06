@@ -502,7 +502,16 @@ class CallMedia(
         }
         val now = System.currentTimeMillis()
         for (s in 0..1) if (sending[s]) rate[s].onReport(r.lossPct, now)
+        // The camera's size and frame rate follow the bitrate down a ladder, and back up once the path recovers (at most
+        // every 10 s, so the picture doesn't keep changing).
+        if (sending[0] && now - rungAt >= 10_000L) {
+            val next = VideoWire.rung(rate[0].kbps, rung)
+            if (next != rung) { rung = next; rungAt = now; post { events.onProfile() } }
+        }
     }
+
+    @Volatile private var rung = 0
+    private var rungAt = 0L
 
     /** The Opus bitrate and expected loss now (5.8.4): 32 kbps on a free path, 24 over the relay, 16 in a room or without c2. */
     fun opusTuning(): Pair<Int, Int> {
@@ -536,7 +545,7 @@ class CallMedia(
         var p = VideoWire.cameraProfile(free)
         if (lowPower) p = VideoWire.lowPower(p)
         if (peerTv || strain.strained) p = VideoWire.light(p)
-        return p
+        return VideoWire.onRung(p, rung)
     }
 
     /**

@@ -146,4 +146,20 @@ class VideoWireTest {
             assertTrue(p.capKbps <= 400)
         }
     }
+
+    @Test
+    fun theLadderStepsDownAtOnceAndUpWithRoom() {
+        assertEquals(0, VideoWire.rung(1200, 0))
+        assertEquals(1, VideoWire.rung(800, 0))
+        assertEquals(3, VideoWire.rung(200, 0))
+        // Back up only with a quarter more than the line.
+        assertEquals(3, VideoWire.rung(260, 3))
+        assertEquals(2, VideoWire.rung(320, 3))
+        assertEquals(1, VideoWire.rung(1000, 1))
+        assertEquals(0, VideoWire.rung(1130, 1))
+        val p = VideoWire.cameraProfile(true)
+        assertEquals(p, VideoWire.onRung(p, 0))
+        assertEquals(480, VideoWire.onRung(p, 1).height)
+        assertEquals(15, VideoWire.onRung(p, 3).fps)
+    }
 }

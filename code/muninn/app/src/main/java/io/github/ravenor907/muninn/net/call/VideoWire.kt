@@ -262,6 +262,31 @@ object VideoWire {
     fun light(p: Profile) = Profile(minOf(p.width, 640), minOf(p.height, 360), minOf(p.fps, 20), minOf(p.capKbps, 800))
 
     /**
+     * The camera's step on the ladder for the bitrate the path carries now: 0 as the profile says, 1 at most 480p24,
+     * 2 at most 360p20, 3 at most 240p15. Going down is at once; going back up needs a quarter more than the line
+     * ([was]: the step now), so it doesn't flap. Sound is never part of this: it goes first, always.
+     */
+    fun rung(kbps: Int, was: Int): Int {
+        val lines = intArrayOf(900, 450, 250)   // under lines[i]: at least step i + 1
+        var r = 0
+        for (i in lines.indices) if (kbps < lines[i]) r = i + 1
+        if (r < was) {   // up only with room to spare
+            var up = was
+            while (up > r && kbps >= lines[up - 1] * 5 / 4) up--
+            r = up
+        }
+        return r
+    }
+
+    /** [p] held to ladder step [r]. */
+    fun onRung(p: Profile, r: Int): Profile = when (r) {
+        0 -> p
+        1 -> Profile(minOf(p.width, 854), minOf(p.height, 480), minOf(p.fps, 24), p.capKbps)
+        2 -> Profile(minOf(p.width, 640), minOf(p.height, 360), minOf(p.fps, 20), p.capKbps)
+        else -> Profile(minOf(p.width, 320), minOf(p.height, 240), minOf(p.fps, 15), p.capKbps)
+    }
+
+    /**
      * The receiver is struggling: it asked for a keyframe [NEEDED] times within [WINDOW_MS] (a decoder that falls behind
      * drops frames and asks for one, as does loss nothing could repair). The first [GRACE_MS] after the camera starts
      * don't count (the first picture and a screen coming up ask too). Once strained it stays so for the call.

@@ -67,9 +67,26 @@ object TvCallGuard {
         val c = CallManager.call.value ?: return
         if (!KidCallBack.endsHidden(c.phase)) return
         left = true
-        try { android.widget.Toast.makeText(a.applicationContext, KidCallBack.hiddenText(c.name), android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
+        // The call stays in front: with "Show over other apps" allowed, the call screen comes straight back over whatever
+        // took the screen (Home, the Assistant, a cast), quietly. The mic and sound are never touched here. Should it not
+        // come back, the call still ends in 10 seconds as before (a TV call is never live with nothing on screen).
+        val app = a.applicationContext
+        val overlay = try { android.provider.Settings.canDrawOverlays(app) } catch (_: Exception) { false }
+        if (overlay) {
+            main.postDelayed({
+                val now = CallManager.call.value
+                if (!shown && now != null && now.callId == c.callId && KidCallBack.endsHidden(now.phase)) try {
+                    app.startActivity(Intent(app, io.github.ravenor907.muninn.screens.CallActivity::class.java)
+                        .setAction(io.github.ravenor907.muninn.screens.CallActivity.SHOW)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                } catch (_: Exception) {}
+            }, BACK_MS)
+        } else try { android.widget.Toast.makeText(app, KidCallBack.hiddenText(c.name), android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
         endSoon()
     }
+
+    /** How soon the call screen comes back over another app (long enough for that app's own start not to undo it). */
+    private const val BACK_MS = 600L
 
     /** Every change of the call (from [TvRing.watch], on the main thread). */
     fun onCall(c: Context, ui: CallManager.Ui?) {
