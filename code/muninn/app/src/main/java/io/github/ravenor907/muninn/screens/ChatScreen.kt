@@ -1896,6 +1896,7 @@ internal fun mineTint(app: Muninn, key: String): Color {
 /** My bubbles' color in the chat on screen (Unspecified: the usual). Set per chat with Chat color. */
 internal val LocalMineBubble = androidx.compose.runtime.compositionLocalOf { Color.Unspecified }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, photo: (() -> ByteArray?)? = null, statusText: String? = null,
                    quote: Pair<String, String>? = null, onQuote: () -> Unit = {}, me: String = "", groupRead: Int = -1, highlight: Boolean = false,
@@ -1933,7 +1934,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
     val metaLine: @Composable () -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = when {
             showRead -> Modifier.semantics { contentDescription = "$meta, read by $groupRead" }
-            longStatus -> Modifier.clickable(onClickLabel = "Show who it's waiting for") {
+            longStatus -> Modifier.heightIn(min = 24.dp).combinedClickable(onClickLabel = "Show who it's waiting for", onLongClick = { longNow() }) {
                 fullStatus = !fullStatus
                 if (fullStatus) Ui.say(status + ". " + io.github.ravenor907.muninn.net.Ticks.WAITING_WHY)
             }.semantics { contentDescription = listOf(edited, clock(m.time), status).filter { it.isNotEmpty() }.joinToString(", ") }
@@ -2040,13 +2041,13 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                             name(); quoted()
                             // The text takes the bubble's full width. The time and receipt sit after its last line when they
                             // fit there, else on a line of their own under it, on the right.
-                            TextWithMeta(metaLine) { onLast ->
+                            androidx.compose.runtime.key(m.text) { TextWithMeta(metaLine) { onLast ->
                                 if (m.unsent.isNotEmpty()) Text(if (m.unsent == io.github.ravenor907.muninn.net.Groups.REMOVED) "Removed by an admin"
                                     else if (m.mine) "Message deleted by you" else "Message deleted by ${theirName ?: m.unsent}",
                                     style = bodyStyle.copy(color = Palette.textFaint, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
                                     onTextLayout = onLast)
                                 else Text(m.text, style = bodyStyle, onTextLayout = onLast)
-                            }
+                            } }
                             // Cap m2: what a link goes to, made on the sender's phone.
                             if (m.unsent.isEmpty()) m.preview?.let { Box(Modifier.padding(top = 6.dp)) { PreviewCard(it) } }
                         }
@@ -2073,7 +2074,8 @@ private fun TextWithMeta(meta: @Composable () -> Unit, text: @Composable (onLast
         text { r ->
             val n = r.lineCount - 1
             val rtl = n >= 0 && r.getParagraphDirection(r.getLineStart(n)) == androidx.compose.ui.text.style.ResolvedTextDirection.Rtl
-            last[0] = if (n < 0) 0f else if (rtl) -1f else r.getLineRight(n) - r.getLineLeft(n)
+            val against = n >= 0 && rtl != (r.layoutInput.layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl)
+            last[0] = if (n < 0) 0f else if (rtl || against) -1f else r.getLineRight(n) - r.getLineLeft(n)
         }
         meta()
     }) { items, c ->
@@ -3253,6 +3255,15 @@ private fun GroupSettings(app: Muninn, g: String) {
                 Text(io.github.ravenor907.muninn.net.Sharing.rulesLine(s.fs, s.fm), style = Type.normal, modifier = Modifier.padding(top = 8.dp))
                 Text("Who can send files. Every member's app follows this.", style = Type.small, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
                 if (admin) MButton("Change", Modifier.padding(bottom = 8.dp), icon = "edit") { fileRules = true }
+                // Send media for this group: as in Settings, or its own.
+                Text("Send media", style = Type.normal, modifier = Modifier.padding(top = 4.dp))
+                var groupRoute by remember(g) { mutableStateOf(app.chat.mediaRouteOf("g:$g")) }
+                androidx.compose.foundation.layout.FlowRow(Modifier.padding(top = 6.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MButton("As in Settings", kind = if (groupRoute == null) Kind.Accent else Kind.Normal) { groupRoute = null; app.chat.setMediaRoute("g:$g", null) }
+                    io.github.ravenor907.muninn.net.MediaRoute.CHOICES.forEach { c ->
+                        MButton(io.github.ravenor907.muninn.net.MediaRoute.label(c), kind = if (groupRoute == c) Kind.Accent else Kind.Normal) { groupRoute = c; app.chat.setMediaRoute("g:$g", c) }
+                    }
+                }
             }
             if (fileRules) FileRulesDialog(app, g, s.fs, s.fm) { fileRules = false }
             if (admin || s.channels.size > 1) io.github.ravenor907.muninn.ui.Framed("Channels") {

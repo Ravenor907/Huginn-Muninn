@@ -93,7 +93,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `p2` | profile pictures that always arrive (22.4): `pv` on every envelope, `profile?` and `profile-ok` in room `profile`, a picture marked sent only on its `profile-ok`, and `pask` in room `link`. Needs `p1`. Muninn and Huginn. |
 | `l4` | stamped link frames (section 15, "Replay"): the sender stamps every frame in room `link` with `lts` and `ln`. Like `l1`, only in room `link` (`caps` on `sync`, `ping` and `pong`). Muninn and Huginn. |
 | `k15` | a Kids' Device's read-aloud voice (7.18): config field `voice`, `f` (Female) or `m` (Male). Muninn only. |
-| `f4` | Encrypted file sharing (section 30): Nearby, Trusted direct or Tor (a one-time onion service), never through the message relays; every file asks first; `file` messages `wait` and `tor`. Muninn and Huginn. |
+| `f4` | Encrypted file sharing (section 30): Nearby, Trusted direct or Tor (a one-time onion service), never through the message relays; a file not from Family or trusted contacts asks first; `file` messages `wait` and `tor`. Muninn and Huginn. |
 | `k16` | a Kids' Device's read-aloud speed (7.18): config field `speed`, a whole percent 50 to 150. Sent only when the device and every co-parent say `k16`. Muninn only. |
 | `v3` | picked videos (section 29): a file offer may carry `vid` (a full-size video's length in ms, 1 to 60000), sent straight only to an app that says `v3`; a video message's relay copy may be up to 1280 x 720 and 192 pieces, its pieces paced. Muninn and Huginn. |
 | `h1` | hidden certificates named over the ratchet (21.3, 1.42): `hf` in receipts to contacts, the certificates its Wi-Fi server may show (its lasting one, its hidden one now and the next), so a contact asks a saved address with Nearby off only with one of them pinned. Muninn and Huginn. |
@@ -3588,7 +3588,15 @@ again; the other side just moves where its packets go. A receiver takes `rl` onl
 side, and never with Ultra privacy on.
 
 **Waiting and stopping.** To Family and trusted contacts an offer waits up to 7 days for a device that's offline, sent again
-every 30 minutes. A send that stops goes again by itself after 1, 5, 15 and then 60 minutes, and goes on from what arrived.
+every 30 minutes. A send that stops goes again by itself after 1, 5, 15 and then 60 minutes, about two days at most, and goes
+on from what arrived. Stopped by hand, declined or refused, it doesn't.
 
 **Video.** To Family and trusted contacts a video goes as the full copy, at any length and on any network (Data saver on a
-metered network still asks). Past the month's limit (relay.md, "Relayed media") they get the 720p copy like anyone not direct.
+metered network still asks). Past the month's limit (relay.md, "Relayed media") they get the 720p copy, through the relay.
+
+**This side's say.** A receiver with Ultra privacy on, or Most private chosen for that chat, takes no `rl`. It declines with
+`"why":"tor"`, and the sender's card says to choose Most private for that chat. A sender that offered `rl` serves no Tor, so
+the receiver never waits for one. Tor is never picked silently for Family or trusted contacts.
+
+**Already here.** A receiver answers an offer for a file it took whole from that person in the last 7 days with
+`{"t":"done","id":<file id>}`, so a send that lost its last packets isn't sent twice.

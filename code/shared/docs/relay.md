@@ -32,12 +32,12 @@ pieces go through the call relay (protocol.md 32): TURN only, never the relay Wo
 keeps the month's count. A file's login costs the Worker what a call's does (10 minutes a login, renewed while it moves).
 
 `POST {WORKER_URL}/meter`, the body of `/turn` with the install token (required) plus `mb`: what this install moved since
-it last said, in MB, at most 5000; 0 only asks. Apps say it about every 200 MB, and ask at most every 6 hours when
+it last said, in MB, at most 5000; 0 only asks. An install counts for at most 100,000 MB a day. Apps say it about every 200 MB, and ask at most every 6 hours when
 deciding about a send. The answer is `{"mb": <the month's total for everyone>}`. One row a month, the last month kept. No
 per-install count, no address.
 
-At 800 GB in a month (the free tier is 1,000 GB, shared with calls) relayed sends fall back to the 720p copy and Settings
-says so. Until a release deploys this route, or if the Worker can't be reached, apps go by their own count.
+At 800 GB in a month (the free tier is 1,000 GB, shared with calls) relayed videos go as the 720p copy and Settings says
+so. At 950 GB the relay carries no more files that month; calls are unchanged. Until a release deploys this route, or if the Worker can't be reached, apps go by their own count.
 
 ## Constants
 

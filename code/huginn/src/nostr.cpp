@@ -287,6 +287,7 @@ private:
         QSet<QString> owe;            // relays that haven't stored it yet (empty: not tracked)
         int rounds = 0;               // tries it gets for those relays
         int total = 0;                // relays it went to first
+        bool chat = false;            // Chat follows it and sends it again as a new event by itself
     };
 
     void open(const QString &url);
@@ -485,6 +486,7 @@ void NostrWorker::opened(const QString &url, QWebSocket *ws)
         drop(ws);
         return;
     }
+    relayReached(url);
     // Only reset the back-off once it has stayed up a minute (a relay that accepts and drops at once).
     QTimer::singleShot(60000, ws, [this, url, ws] {
         if (m_links.value(url).ws == ws && m_live.contains(url))
@@ -1107,6 +1109,7 @@ void NostrWorker::publish(quint64 token, const QString &mailboxHex, const QStrin
         out.owe = QSet<QString>(to.cbegin(), to.cend());
         out.rounds = token ? Nostr::kSpreadRounds : Nostr::kSpreadLightRounds;
         out.total = int(to.size());
+        out.chat = token != 0;
     }
     m_outbox << out;
     // Each kind has its own cap: a linked device's frames only ever push out older ones of their own.
@@ -1147,7 +1150,7 @@ void NostrWorker::spreadOn(const QString &id, int round)
     for (const Out &o : std::as_const(m_outbox))
         if (o.id == id) {
             rounds = o.rounds;
-            stored = int(o.owe.size()) < o.total;
+            stored = int(o.owe.size()) < o.total || o.chat;
         }
     const qint64 wait = round < rounds ? Nostr::spreadRetryMs(round) : -1;
     if (wait < 0) {

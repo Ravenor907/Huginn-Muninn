@@ -82,8 +82,11 @@ public:
     static constexpr int kFamilyWaitMs = 7 * 24 * 3600000;
     static constexpr qint64 kRelayLimitBytes = 800 * 1000000000LL;
     static bool relayOk(const QJsonObject &p);
-    static bool relayMay(const QString &choice, bool ultra, bool family, bool peerCan, bool over);
-    static bool torMay(const QString &choice, bool ultra, bool family, bool peerCan);
+    static bool relayMay(const QString &choice, bool ultra, bool family, bool peerCan);
+    static bool torMay(const QString &choice, bool ultra, bool family);
+    static constexpr qint64 kRelayStopBytes = 950 * 1000000000LL;   // the relay carries no more files this month past this
+    static constexpr int kAutoRetryMax = 50;
+    bool relayStopped() const;
     bool relayPlan(const QString &peer, const QString &group) const;
     bool relayOver() const;
     QString relayNote() const;
@@ -362,7 +365,10 @@ private:
     bool autoRetry(const QString &id, const QString &path);
     void meterRoll() const;
     void relayUsed(qint64 bytes);
-    void reportMeter(qint64 bytes) const;
+    void reportMeter() const;
+    QHash<QString, qint64> m_came;   // files that came whole (who, sha, size): when
+    mutable bool m_meterGoing = false;
+    mutable qint64 m_meterRest = 0;
     QHash<QString, int> m_autoTries;
     qint64 m_meterHold = 0;
     mutable qint64 m_meterAsked = 0;
@@ -372,7 +378,8 @@ private:
     void onDatagram(Xfer *x);
     void sendAck(Xfer *x);
     void receivedAll(Xfer *x);
-    void fail(Xfer *x, const QString &why, bool tell = true);
+    // again: false for what trying again can't change (stopped, declined, refused).
+    void fail(Xfer *x, const QString &why, bool tell = true, bool again = true);
     // No straight path for a file of mine: a small one goes over the internet route instead, else it fails with why.
     void fallBack(Xfer *x, const QString &why);
     // Cap v3: a full-size video of mine that can't go straight: its card goes and its relay copy is sent instead. True

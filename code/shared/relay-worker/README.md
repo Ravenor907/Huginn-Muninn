@@ -7,7 +7,7 @@ Files:
 
 - `worker.js`: the Worker, and the `RelayLimits` object that keeps the daily counts.
 - `wrangler.toml`: the Worker's name, the `LIMITS` binding and the storage setup, for `wrangler deploy`.
-- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `44 tests passed`.
+- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `45 tests passed`.
 - `package.json` and `package-lock.json`: the exact wrangler version the deploy installs (`npm ci`).
 
 ## How it gets to Cloudflare

@@ -357,7 +357,7 @@ Rectangle {
             { group: "Backup", kind: "button", key: "backup", title: "Back up", note: "One encrypted file", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
             { group: "Backup", kind: "button", key: "restore", title: "Restore from a backup", note: "Any backup file from Huginn or Muninn", label: "Restore", enabled: Vault.exists && !Vault.busy },
             { group: "Files", kind: "button", key: "saveFolder", title: "Save files to", note: Transfer.saveName + "/Huginn", label: "Change" },
-            { group: "Files", kind: "segmented", key: "mediaRoute", title: "Send media", note: Chat.relayNote() || "Family and trusted people get full quality",
+            { group: "Files", kind: "segmented", key: "mediaRoute", title: "Send media", note: Chat.relayNote() || "Family and trusted: full quality",
               options: [{ value: "auto", label: "Automatic" }, { value: "fastest", label: "Fastest" }, { value: "tor", label: "Most private (Tor)" }] },
             { group: "Files", kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Use Downloads again", label: "Reset" },
             { group: "Files", kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" }
@@ -415,7 +415,7 @@ Rectangle {
               options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
             { kind: "button", key: "goStable", hide: Settings.updateChannel !== "beta" && System.version.indexOf("beta") < 0,
               title: "Go back to stable", note: "Installs the latest stable", label: "Go back", enabled: !Updater.busy },
-            { kind: "toggle", key: "voiceTwoPaths", title: "Voice over two paths", note: "Sends voice on two routes in calls. Uses the relay more" },
+            { kind: "toggle", key: "voiceTwoPaths", title: "Voice over two paths", note: "Calls use two routes" },
             { kind: "button", key: "perf", title: "Performance check", note: "Lag and size", label: "Open" },
             { kind: "button", key: "voiceTuning", hide: Settings.updateChannel !== "beta", title: "Voice tuning", note: "Presets for the natural voices", label: "Open" },
             { kind: "button", key: "practice", title: "Replay first setup", note: "Practice. Nothing is saved", label: "Start" }

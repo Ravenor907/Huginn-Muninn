@@ -341,7 +341,7 @@ object TvParent {
                 // k16 (1.42): the speed beside it, only when the device and every co-parent's app say k16.
                 speed = KidVoice.speedToSend(t.speed, k16(app, key), coParentCaps(app, t)),
                 // k17: only to a device whose app reads it.
-                pre = t.pre && k17(app, key)) else null
+                pre = t.pre && preReady(app, t)) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -554,6 +554,8 @@ object TvParent {
                     // ...and once every co-parent reads it, the voice (and 1.42: the speed) picked here goes out.
                     if (done && runs != null && KidVoice.of(runs.raw) == null && t.voice.isNotEmpty() && k15(app, fromKey) && KidVoice.allRead(coParentCaps(app, t))) resend = true
                     if (done && runs != null && KidVoice.speedOf(runs.raw) == null && t.speed != null && k16(app, fromKey) && KidVoice.allReadSpeed(coParentCaps(app, t))) resend = true
+                    // k17: the same for Updates, either way.
+                    if (done && runs != null && KidVoice.preRelease(runs.raw) != (t.pre && preReady(app, t))) resend = true
                 }
             }
             _tvs.value[fromKey]?.let { if (it.havHeld != held) put(it.copy(havHeld = held)) }
@@ -614,7 +616,7 @@ object TvParent {
             // k15: another parent's voice pick (the latest config wins); a config without one leaves this phone's as it was.
             voice = KidVoice.of(cfg.raw) ?: t.voice,
             speed = KidVoice.speedOf(cfg.raw) ?: t.speed,
-            pre = KidVoice.preRelease(cfg.raw),
+            pre = KidVoice.preRelease(cfg.raw) || t.pre,
         )
     }
 
@@ -1099,6 +1101,9 @@ object TvParent {
 
     /** The device's app said "k17" (it reads Updates: Stable or Pre-release). */
     fun k17(app: Muninn, key: String): Boolean = KidVoice.UPDATES_CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** Pre-release can go to this device now: it and every co-parent's app read it (an older app refuses the whole config). */
+    fun preReady(app: Muninn, t: ManagedTv): Boolean = k17(app, t.key) && coParentCaps(app, t).all { it != null && KidVoice.UPDATES_CAP in it }
 
     /** The parent picked the device's updates: Stable, or Pre-release. */
     fun setPre(key: String, on: Boolean) = change(key) { it.copy(pre = on) }

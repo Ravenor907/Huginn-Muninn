@@ -274,6 +274,8 @@ QString Sharing::declineText(const QString &why)
         return QStringLiteral("Not enough space on their device.");
     if (why == QLatin1String("no"))
         return QStringLiteral("They declined.");
+    if (why == QLatin1String("tor"))
+        return QStringLiteral("They take files over Tor only. Set this chat's Send media to Most private.");
     return QStringLiteral("They declined, or direct files are off on their side (Trusted direct, or Ultra privacy).");
 }
 

@@ -383,14 +383,15 @@ private fun Updates(app: Muninn, t: ManagedTv) {
     if (!can) Note(updateSteps(app, t))
     // Updates: Stable (every device starts here) or Pre-release, only for a device whose app reads it.
     if (TvParent.k17(app, t.key)) {
-        Text("Updates", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+        Text("Release", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+        val preOk = TvParent.preReady(app, t)
         io.github.ravenor907.muninn.ui.ChoiceRow(2, Modifier.padding(vertical = 6.dp)) { i, m ->
             val pre = i == 1
-            MButton(if (pre) "Pre-release" else "Stable", m, if (t.pre == pre) Kind.Accent else Kind.Normal) {
+            MButton(if (pre) "Pre-release" else "Stable", m, if (t.pre == pre) Kind.Accent else Kind.Normal, enabled = !pre || preOk) {
                 if (t.pre != pre) { TvParent.setPre(t.key, pre); Ui.say("Saved. It changes on the device once it's online.") }
             }
         }
-        Note("Stable is the tested release. Pre-release gets new builds first.")
+        Note(if (preOk) "Pre-release gets new builds first." else "Pre-release needs every parent's app updated.")
     }
     // The TV installs updates by itself only while this is on.
     val installOff = t.off?.contains("install")

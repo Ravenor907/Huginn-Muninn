@@ -170,7 +170,7 @@ object NetLogic {
  * relay never costs a connection per message. Plain Kotlin, so the tests check it.
  */
 class RelaySpread(private val max: Int = MAX) {
-    private class Owed(val total: Int, val left: MutableSet<String>, val rounds: Int)
+    private class Owed(val left: MutableSet<String>, val rounds: Int) { var got = 0 }
     private val missing = LinkedHashMap<String, Owed>()
     private val fails = HashMap<String, Int>()
     private val downUntil = HashMap<String, Long>()
@@ -178,14 +178,14 @@ class RelaySpread(private val max: Int = MAX) {
     /** Event [id] went to [relays]: each one owes an OK, for [rounds] tries more. The oldest is let go past [max]. */
     @Synchronized fun add(id: String, relays: Collection<String>, rounds: Int = RETRY_MS.size) {
         if (id.isEmpty() || relays.isEmpty()) return
-        missing[id] = Owed(relays.size, relays.toMutableSet(), rounds)
+        missing[id] = Owed(relays.toMutableSet(), rounds)
         while (missing.size > max) missing.remove(missing.keys.first())
     }
 
     /** [url] stored [id]. True when every relay has it now, or it isn't tracked (nothing more to send). */
     @Synchronized fun stored(id: String, url: String): Boolean {
         val m = missing[id] ?: return true
-        m.left.remove(url)
+        if (m.left.remove(url)) m.got++
         if (m.left.isEmpty()) { missing.remove(id); return true }
         return false
     }
@@ -196,7 +196,8 @@ class RelaySpread(private val max: Int = MAX) {
      */
     @Synchronized fun refused(id: String, url: String, reason: String): Boolean {
         val m = missing[id] ?: return true
-        if (reason.startsWith("duplicate") || refusedForGood(reason)) m.left.remove(url)
+        if (reason.startsWith("duplicate")) { if (m.left.remove(url)) m.got++ }
+        else if (refusedForGood(reason)) m.left.remove(url)
         if (m.left.isEmpty()) { missing.remove(id); return true }
         return false
     }
@@ -213,7 +214,7 @@ class RelaySpread(private val max: Int = MAX) {
     @Synchronized fun wait(id: String, round: Int): Long? = missing[id]?.let { if (round < it.rounds) retryMs(round) else null }
 
     /** At least one relay stored [id]. */
-    @Synchronized fun anyStored(id: String): Boolean = missing[id]?.let { it.left.size < it.total } ?: true
+    @Synchronized fun anyStored(id: String): Boolean = missing[id]?.let { it.got > 0 } ?: true
 
     /** Given up on (all tries used): stops being sent. */
     @Synchronized fun forget(id: String) { missing.remove(id) }
@@ -226,6 +227,9 @@ class RelaySpread(private val max: Int = MAX) {
         fails[url] = n
         if (n >= DOWN_AFTER) { downUntil[url] = now + DOWN_MS; fails[url] = 0 }
     }
+
+    /** The network came back: every relay gets another try now. */
+    @Synchronized fun wake() { fails.clear(); downUntil.clear() }
 
     /** [url] answered: it's in use again. */
     @Synchronized fun reached(url: String) { fails.remove(url); downUntil.remove(url) }

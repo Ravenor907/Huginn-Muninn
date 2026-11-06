@@ -277,6 +277,9 @@ class NetLogicTest {
         // Every relay resting: they're all tried, one may be back.
         five.forEach { u -> repeat(RelaySpread.DOWN_AFTER) { s.failed(u, t) } }
         assertEquals(five, s.targets(five, t))
+        // The network came back: every relay is tried again at once.
+        s.wake()
+        assertFalse(s.down("wss://b", t))
     }
 
     @Test
@@ -288,6 +291,9 @@ class NetLogicTest {
         assertFalse(s.anyStored("receipt"))
         s.stored("receipt", "wss://a")
         assertTrue(s.anyStored("receipt"))
+        // A refusal isn't storing it.
+        s.add("x", five); s.refused("x", "wss://a", "restricted: no")
+        assertFalse(s.anyStored("x"))
     }
 
     @Test

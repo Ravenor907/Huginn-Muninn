@@ -732,8 +732,8 @@ internal fun filesAlwaysOffered(app: Muninn, key: String): Boolean =
 private fun SendMeFiles(app: Muninn, key: String, can: People.Can) {
     @Suppress("UNUSED_VARIABLE") val trust by io.github.ravenor907.muninn.net.call.CallManager.trustChanged.collectAsState()
     val offered = filesAlwaysOffered(app, key)
-    var always by remember(key) { mutableStateOf(offered && key !in app.chat.flags.all.value.asks) }
-    val now = when { !can.files -> "off"; always && offered -> "always"; else -> "ask" }
+    val st by app.chat.flags.all.collectAsState()
+    val now = when { !can.files -> "off"; offered && key !in st.asks -> "always"; else -> "ask" }
     val choices = if (offered) listOf("ask" to "Ask", "always" to "Always", "off" to "Off") else listOf("ask" to "Ask", "off" to "Off")
     Text("Send me files", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
     ChoiceRow(choices.size, Modifier.padding(top = 6.dp), minWidth = 72.dp, gap = 8.dp) { i, m ->
@@ -741,7 +741,8 @@ private fun SendMeFiles(app: Muninn, key: String, can: People.Can) {
         DetailChip(label, now == id, m) {
             People.setCan(key, can.copy(files = id != "off"))
             val a = id == "always"
-            if (a != always) { app.chat.setFilesAlways(key, a); app.chat.flags.setAsk(key, !a); always = a }
+            app.chat.setFilesAlways(key, a)
+            app.chat.flags.setAsk(key, !a)
         }
     }
     Text(when (now) { "always" -> "Theirs arrive without asking"; "off" -> "They can't send you files"; else -> "Each file asks you first" },

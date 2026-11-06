@@ -364,7 +364,7 @@ def check_file_tor(p):
 
 def check_tvconfig(c):
     need = {"tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig"}
-    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz", "look", "season", "accent", "lookpick", "kname", "tsz", "dsz", "hc", "cv", "still", "child", "gok", "wait", "voice", "speed"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin, tz; k12 (7.18) hav, havw, havh; k13 (7.18) look, season, accent, lookpick, kname; k14 (7.18) tsz, dsz, hc, cv, still, child, gok, wait; k15 (7.18) voice; k16 (7.18) speed: only sent to a device whose app said so
+    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz", "look", "season", "accent", "lookpick", "kname", "tsz", "dsz", "hc", "cv", "still", "child", "gok", "wait", "voice", "speed", "uch"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin, tz; k12 (7.18) hav, havw, havh; k13 (7.18) look, season, accent, lookpick, kname; k14 (7.18) tsz, dsz, hc, cv, still, child, gok, wait; k15 (7.18) voice; k16 (7.18) speed: only sent to a device whose app said so
     if not need <= set(c) or not set(c) - need <= optional: raise ValueError("fields")
     if "calls" in c and not isinstance(c["calls"], bool): raise ValueError("calls")
     if "mic" in c and (not isinstance(c["mic"], int) or isinstance(c["mic"], bool) or not 0 <= c["mic"] <= MAX_MIC): raise ValueError("mic")

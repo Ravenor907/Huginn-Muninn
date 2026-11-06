@@ -155,7 +155,7 @@ internal fun LabsPage(app: Muninn) {
     Framed {
         val prefs = remember { app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) }
         var two by remember { mutableStateOf(prefs.getBoolean(io.github.ravenor907.muninn.net.call.CallLogic.TWO_PATHS, false)) }
-        io.github.ravenor907.muninn.ui.ToggleRow("Voice over two paths", "Sends voice on two routes in calls. Uses the relay more", two) {
+        io.github.ravenor907.muninn.ui.ToggleRow("Voice over two paths", "Calls use two routes", two) {
             two = it
             prefs.edit().putBoolean(io.github.ravenor907.muninn.net.call.CallLogic.TWO_PATHS, it).apply()
         }

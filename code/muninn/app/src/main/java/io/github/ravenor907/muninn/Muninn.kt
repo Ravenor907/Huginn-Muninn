@@ -210,6 +210,8 @@ class Muninn : Application() {
         chat.profile = profile
         io.github.ravenor907.muninn.tv.Tv.install(this)
         io.github.ravenor907.muninn.net.call.CallManager.init(this, chat)
+        // Trust is known from here on: stopped sends to Family and trusted contacts go on.
+        io.github.ravenor907.muninn.net.FileLink.resumeStopped()
         io.github.ravenor907.muninn.net.call.RoomManager.init(this)
         io.github.ravenor907.muninn.net.Received.load(this)   // Settings › Files › Save files to
         // A notification for every message, unless that very chat is on screen: then just a buzz.

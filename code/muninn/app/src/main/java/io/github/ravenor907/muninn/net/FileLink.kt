@@ -235,7 +235,7 @@ object FileLink {
     }
 
     /** A `relay` message: their relayed address, numbers only (never a name to look up). */
-    fun relayOk(p: JSONObject): Boolean = (p.opt("a") as? String)?.let { a -> a.length in 7..45 && a.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == '.' || it == ':' } } == true &&
+    fun relayOk(p: JSONObject): Boolean = (p.opt("a") as? String)?.let { CallLogic.literal(it) != null } == true &&
         (p.opt("p") as? Number)?.toInt()?.let { it in 1..65535 } == true
 
     // ------------------------------------------------------------------ transfers
@@ -369,6 +369,7 @@ object FileLink {
         fun routeFor(peer: String, group: String): String = MediaRoute.AUTO
         fun relayLogin(): io.github.ravenor907.muninn.net.call.TurnCreds.Login? = null
         fun relayOver(): Boolean = false
+        fun relayStopped(): Boolean = false
         fun relayUsed(bytes: Long) {}
         /** Family or trusted, but set to Ask in their details. */
         fun asksFirst(peer: String): Boolean = false
@@ -567,6 +568,8 @@ object FileLink {
         stopped.add(id)
         pausedIds.remove(id)
         if (!p.mine) ins.remove(id)?.let { host?.signal(it.peer, JSONObject().put("t", "decline").put("id", id).toString()) }
+        // Stopped by hand stays stopped: nothing sends it again by itself, now or after a restart.
+        if (p.mine) { again.remove(id)?.second?.delete(); againGroup.remove(id); saveKept() }
         put(p.copy(state = "failed", note = "Stopped"))
     }
 
@@ -751,7 +754,7 @@ object FileLink {
     /** Cap f5: the call relay may carry a file to [peer] now. */
     private fun relayPlan(peer: String, group: String): Boolean {
         val h = host ?: return false
-        return MediaRoute.relayMay(h.routeFor(peer, group), !UltraPrivacy.directAllowed, mayAlways(h.badge(peer)), h.hasF5(peer), h.relayOver())
+        return MediaRoute.relayMay(h.routeFor(peer, group), !UltraPrivacy.directAllowed, mayAlways(h.badge(peer)), h.hasF5(peer)) && !h.relayStopped()
     }
 
     /**
@@ -792,8 +795,8 @@ object FileLink {
         val family = mayAlways(h.badge(peer))
         val peerCan = h.hasF5(peer)
         val trust = h.trusted(peer) && MediaRoute.directMay(choice, ultra)
-        val relay = MediaRoute.relayMay(choice, ultra, family, peerCan, h.relayOver())
-        val tor = f4 && h.torAllowed() && MediaRoute.torMay(choice, ultra, family, peerCan)
+        val relay = MediaRoute.relayMay(choice, ultra, family, peerCan) && !h.relayStopped()
+        val tor = f4 && h.torAllowed() && MediaRoute.torMay(choice, ultra, family)
         if (lan == null && !trust && !tor && !relay) return "no path"
         val lanOnly = !trust
         if (id in stopped) { file.delete(); return null }   // Cancel while it was being made ready
@@ -882,6 +885,11 @@ object FileLink {
         put(Progress(id, from, name, size, false, "failed", note = why, group = group))
     }
 
+    private fun g0(p: JSONObject) = p.optString("g")
+
+    /** Files that came whole, by who sent them and what they are: a send that didn't hear so isn't taken twice. */
+    private val came = object : LinkedHashMap<String, Long>() { override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>) = size > 64 }
+
     /** Offers of theirs already answered here (declined, taken, or gone): a queued offer sent again doesn't ask twice. */
     private val answered: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -892,6 +900,12 @@ object FileLink {
         when (p.getString("t")) {
             "offer" -> {
                 if (ins.containsKey(id) || id in answered) return
+                // The same file again after a send lost my "done": it has it. Said so, and not sent twice.
+                if (synchronized(came) { came[from + "|" + p.getString("sha") + "|" + p.getLong("size")] }?.let { System.currentTimeMillis() - it < KEEP_MS } == true) {
+                    answered.add(id)
+                    host?.signal(from, JSONObject().put("t", "done").put("id", id).toString())
+                    return
+                }
                 // Round 19 (interop 3, K19-4): a Kids' Device takes no full-size video. "rules" at once, so the sender's
                 // app sends the smaller relay copy now instead of waiting for an answer.
                 if (p.has("vid") && h.isKidDevice()) { decline(from, id, "rules"); return }
@@ -900,12 +914,14 @@ object FileLink {
                 val g = p.optString("g")
                 val c = p.getJSONArray("c")
                 val vid = p.optInt("vid", 0)
-                val trust = h.trusted(from) && UltraPrivacy.directAllowed   // Ultra privacy: Nearby or Tor only
+                val here = h.routeFor(from, g0(p))
+                val trust = h.trusted(from) && MediaRoute.directMay(here, !UltraPrivacy.directAllowed)   // Ultra privacy: Nearby or Tor only
                 val lan = lanTarget(h.lanAddress(from), c)
-                // Cap f4: Tor can carry it (both say f4, and Tor may start here).
-                val tor = h.hasF4(from) && h.torAllowed()
-                // Cap f5: they want the call relay, and they're Family or trusted here too.
-                val relay = p.optInt("rl") == 1 && h.hasF5(from) && mayAlways(h.badge(from)) && UltraPrivacy.directAllowed
+                // Cap f5: they want the call relay. Taken when they're Family or trusted here too, and this side allows it.
+                val wants = p.optInt("rl") == 1
+                val relay = wants && h.hasF5(from) && MediaRoute.relayMay(here, !UltraPrivacy.directAllowed, mayAlways(h.badge(from)), true)
+                // Cap f4: Tor can carry it (both say f4, and Tor may start here). A sender asking for the relay serves no Tor.
+                val tor = h.hasF4(from) && h.torAllowed() && !wants
                 // A group's file (27.2, 27.3): only for a group we're both in, within its file rules. Dropped, and said.
                 if (g.isNotEmpty()) {
                     val why = h.groupRefusal(g, from, size)
@@ -919,13 +935,16 @@ object FileLink {
                 // Addresses are only swapped with someone trusted; on the same Wi-Fi nothing new is learned; over Tor
                 // neither side learns the other's address.
                 if (!trust && lan == null && !tor && !relay) {
+                    // Cap f5: this side only takes Tor (Ultra privacy, or chosen): their card says what to do.
+                    if (wants) { decline(from, id, "tor"); return }
                     // "why" stays empty: an older sender then says its own words.
                     decline(from, id)
                     if (h.trusted(from) && !UltraPrivacy.directAllowed && ultraToldNow(from))
                         h.notice("${h.nameOf(from)} tried to send you $name (${FileText.size(size)}). With Ultra privacy on it can come on the same Wi-Fi. Ask them to update to send over Tor.")
                     return
                 }
-                if (h.freeBytes() < size + 64L * 1024 * 1024) {
+                // What's already on its way here counts too, so many offers at once can't each pass alone.
+                if (h.freeBytes() < size + 64L * 1024 * 1024 + ins.values.sumOf { it.size }) {
                     decline(from, id, "space")
                     refused(from, id, name, size, g, "Not enough space for it on this phone (${FileText.size(h.freeBytes())} free).")
                     h.notice("${h.nameOf(from)} tried to send you $name, but there isn't enough space.")
@@ -963,8 +982,17 @@ object FileLink {
                 _all.value[id]?.takeIf { it.state == "offered" }?.let { put(it.copy(note = "")) }
             }
             // Cap f5: their relayed address for this file. Only for a transfer with them, only where the relay may carry it.
-            "relay" -> if (outs[id]?.takeIf { it.peer == from }?.relay == true || ins[id]?.takeIf { it.peer == from }?.relay == true)
-                try { relayTo[id] = InetSocketAddress(InetAddress.getByName(p.getString("a")), p.getInt("p")) } catch (_: Exception) {}
+            "relay" -> if ((outs[id]?.takeIf { it.peer == from }?.relay == true || ins[id]?.takeIf { it.peer == from }?.relay == true) && UltraPrivacy.directAllowed)
+                CallLogic.literal(p.getString("a"))?.let { relayTo[id] = InetSocketAddress(it, p.getInt("p")) }
+            // Cap f5: they already have this file. Only from the person it was offered to.
+            "done" -> outs[id]?.takeIf { it.peer == from }?.let { o ->
+                outs.remove(id)
+                o.sock.close()
+                put(Progress(id, o.peer, o.name, o.size, true, "done", o.size, group = o.group))
+                again.remove(id)?.second?.delete()
+                againGroup.remove(id)
+                saveKept()
+            }
             // Cap f4: the sender's one-time onion service for this file.
             "tor" -> ins[id]?.takeIf { it.peer == from && it.tor }?.let { inc ->
                 if (!TorFiles.torOk(p)) return
@@ -990,8 +1018,8 @@ object FileLink {
                     it.sock.close()
                     // Refused (group rules, no space, they said no: 27.4) ends it. 1.42: "no" says "Declined".
                     val why = p.optString("why")
-                    if (why == "no") { videoBack.remove(id); again.remove(id)?.second?.delete(); againGroup.remove(id); fail(id, DECLINED); saveKept() }
-                    else if (why.isNotEmpty()) fail(id, Sharing.declineText(why))
+                    if (why == "no") { videoBack.remove(id); again.remove(id)?.second?.delete(); againGroup.remove(id); fail(id, DECLINED, retry = false); saveKept() }
+                    else if (why.isNotEmpty()) fail(id, Sharing.declineText(why), retry = false)
                     else if (!it.lanOnly) { directIds.add(id); fallBack(id, it.peer, it.file, it.name, Sharing.declineText(""), it.group) }
                     else fallBack(id, it.peer, it.file, it.name, "Couldn't reach them on this Wi-Fi.", it.group)
                 } else {
@@ -1061,16 +1089,18 @@ object FileLink {
         }
     }
 
-    private fun fail(id: String, why: String) {
+    /** [retry]: false for what trying again can't change (they said no, group rules, no space there). */
+    private fun fail(id: String, why: String, retry: Boolean = true) {
         if (id in stopped) return
         if (videoFellBack(id)) return
         _all.value[id]?.let { put(it.copy(state = "failed", note = why)) }
         if (again.containsKey(id)) saveKept()   // its Retry card, with why, comes back after a restart
-        if (!autoRetry(id)) host?.notice(why)
+        if (!retry || !autoRetry(id)) host?.notice(why)
     }
 
     /** Sends a stopped card's file again: who, the file, its name and group (Chat sends it the usual way). */
     @Volatile var resend: ((String, File, String, String) -> Unit)? = null
+    /** By-itself tries so far, by the file's path: each resend is a new transfer of the same file. */
     private val retries = ConcurrentHashMap<String, Int>()
 
     /**
@@ -1081,7 +1111,9 @@ object FileLink {
         val h = host ?: return false
         val t = again[id] ?: return false
         if (!mayAlways(h.badge(t.first)) || resend == null) return false
-        val n = retries.merge(id, 1) { a, b -> a + b } ?: 1
+        val key = t.second.path
+        val n = retries.merge(key, 1) { a, b -> a + b } ?: 1
+        if (n > MediaRoute.AUTO_RETRY_MAX) return false
         work.execute {
             val until = System.currentTimeMillis() + MediaRoute.retryAfter(n - 1)
             while (System.currentTimeMillis() < until) {
@@ -1146,25 +1178,35 @@ object FileLink {
             val viaLan = lan != null && peer == lan
             var route = methodLabel(if (viaLan) "lan" else if (leg != null) "relay" else "direct")
             var toTor = peer == null
+            var relayTried = 0L
             RandomAccessFile(o.file, "r").use { raf ->
                 val chunk = ByteArray(CHUNK)
                 if (peer != null) put(Progress(id, o.peer, o.name, o.size, true, "sending", route = route, group = o.group))
                 while (peer != null && !s.done) {
                     if (id in stopped) return
                     // Ultra privacy turned on: a file going straight over the internet stops now (cap f4: on over Tor).
-                    if (!viaLan && !UltraPrivacy.directAllowed) { if (o.tor) { toTor = true; break }; fail(id, ULTRA_STOPPED); return }
+                    if ((!viaLan || leg != null) && !UltraPrivacy.directAllowed) {
+                        legs.remove(id)?.close(); leg = null
+                        if (o.tor) { toTor = true; break }
+                        fail(id, ULTRA_STOPPED, retry = false); return
+                    }
                     val now = System.currentTimeMillis()
                     // Cap f5: the direct way went quiet, or they moved to the relay: on through it. On it already: a new
                     // allocation before the login ends, and their new address when they renewed theirs.
                     if (o.relay && id !in pausedIds && id !in heldIds) {
                         val l = leg
-                        if (l == null && (now - lastHeard > MediaRoute.SWITCH_MS || relayTo.containsKey(id))) {
+                        val mayTry = now - relayTried >= MediaRoute.RELAY_TRY_EVERY_MS
+                        if (l == null && (now - lastHeard > MediaRoute.SWITCH_MS || relayTo.containsKey(id)) && mayTry) {
+                            relayTried = now
                             relayLeg(id, o.peer, key, 0)?.let { leg = it; sock = it.sock; peer = it.theirs; sock.soTimeout = 50
                                 route = methodLabel("relay"); lastHeard = System.currentTimeMillis() }
                         } else if (l != null) {
                             val to = relayTo[id]
                             if (to != null && to != l.theirs) { l.retarget(to); peer = to; lastHeard = now }
-                            if (l.dueToRenew(now) || now - lastHeard > LONG_IDLE_MS / 2) relayLeg(id, o.peer, key, 0, l)?.let { leg = it; sock = it.sock; peer = it.theirs; sock.soTimeout = 50; l.close() }
+                            if ((l.dueToRenew(now) || now - lastHeard > LONG_IDLE_MS / 2) && mayTry) {
+                                relayTried = now
+                                relayLeg(id, o.peer, key, 0, l)?.let { leg = it; sock = it.sock; peer = it.theirs; sock.soTimeout = 50 }
+                            }
                         }
                     }
                     // Cap f4: quiet too long (they left the Wi-Fi, a router dropped the way through): on over Tor.
@@ -1230,7 +1272,7 @@ object FileLink {
             host?.logFile(if (o.group.isEmpty()) o.peer else "g:${o.group}", o.name, o.size, "", true)
             again.remove(id)?.second?.delete()
             againGroup.remove(id)
-            retries.remove(id)
+            retries.remove(o.file.path)
             saveKept()
         } catch (e: Exception) { fail(id, "That file couldn't be sent.") } finally {
             outs.remove(id); o.sock.close(); legs.remove(id)?.close(); relayTo.remove(id); ended(id); TorRunner.release(id); h?.keepGoing(id, false)
@@ -1310,6 +1352,7 @@ object FileLink {
             }
             val viaLan = inc.lan != null && peer == inc.lan
             var route = methodLabel(if (viaLan) "lan" else if (leg != null) "relay" else "direct")
+            var relayTried = 0L
             val n = pieces(inc.size)
             val r = Receiver(n)
             // Cap f3: what an earlier try left is in; the first ack tells the sender to go on from there.
@@ -1342,7 +1385,8 @@ object FileLink {
                     if (inc.onion != null && System.currentTimeMillis() - lastHeard > QUIET_MS) { toTor = true; break }
                     // Ultra privacy turned on: a file coming straight over the internet stops now (cap f4: on over Tor).
                     // The sender hears so; with cap f3 what came is kept, and it goes on from there when it's sent again.
-                    if (!viaLan && !UltraPrivacy.directAllowed) {
+                    if ((!viaLan || leg != null) && !UltraPrivacy.directAllowed) {
+                        legs.remove(id)?.close(); leg = null
                         if (inc.tor) { toTor = true; break }
                         decline(inc.peer, id)
                         if (f3) keepPart { ULTRA_STOPPED_IN } else fail(id, ULTRA_STOPPED_IN)
@@ -1352,13 +1396,18 @@ object FileLink {
                     // Cap f5: as the sender does (runSender): on through the call relay, or a new allocation before the login ends.
                     if (inc.relay && id !in pausedIds && id !in heldIds) {
                         val l = leg
-                        if (l == null && (now - lastHeard > MediaRoute.SWITCH_MS || relayTo.containsKey(id))) {
+                        val mayTry = now - relayTried >= MediaRoute.RELAY_TRY_EVERY_MS
+                        if (l == null && (now - lastHeard > MediaRoute.SWITCH_MS || relayTo.containsKey(id)) && mayTry) {
+                            relayTried = now
                             relayLeg(id, inc.peer, key, 1)?.let { leg = it; sock = it.sock; peer = it.theirs; sock.soTimeout = 50
                                 route = methodLabel("relay"); lastHeard = System.currentTimeMillis() }
                         } else if (l != null) {
                             val to = relayTo[id]
                             if (to != null && to != l.theirs) { l.retarget(to); peer = to; lastHeard = now }
-                            if (l.dueToRenew(now) || now - lastHeard > LONG_IDLE_MS / 2) relayLeg(id, inc.peer, key, 1, l)?.let { leg = it; sock = it.sock; peer = it.theirs; sock.soTimeout = 50; l.close() }
+                            if ((l.dueToRenew(now) || now - lastHeard > LONG_IDLE_MS / 2) && mayTry) {
+                                relayTried = now
+                                relayLeg(id, inc.peer, key, 1, l)?.let { leg = it; sock = it.sock; peer = it.theirs; sock.soTimeout = 50 }
+                            }
                         }
                     }
                     // Cap f4: quiet this long, the sender goes on over Tor; waiting for its address is the next step.
@@ -1403,7 +1452,10 @@ object FileLink {
                         noteProgress(false, minOf(inc.size, below.toLong() * CHUNK), inc.size)
                     }
                 }
-                peer?.let { to -> if (r.done) repeat(3) { val pk = seal(key, id, DONE, 1, seq++, ByteArray(0)); sock.send(DatagramPacket(pk, pk.size, to)) } }
+                peer?.let { to -> if (r.done) repeat(3) { i ->
+                    val pk = seal(key, id, DONE, 1, seq++, ByteArray(0)); sock.send(DatagramPacket(pk, pk.size, to))
+                    if (leg != null && i < 2) Thread.sleep(150)   // the relay drops a burst more easily than a line
+                } }
                 if (toTor && !r.done) {
                     route = methodLabel("tor", inc.size)
                     when (receiveTor(id, inc, key, r, raf, route)) {
@@ -1419,6 +1471,7 @@ object FileLink {
             val chat = if (inc.group.isEmpty()) h.nameOf(inc.peer) else h.groupName(inc.group)
             val folder = Sharing.folderFor("Muninn", chat)
             val saved = h.saveIn(inc.name, tmp, folder) ?: run { fail(id, "Not enough space to save ${inc.name}."); return }
+            synchronized(came) { came[inc.peer + "|" + inc.sha + "|" + inc.size] = System.currentTimeMillis() }
             put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri, route = route, group = inc.group, folder = Received.shown(folder)))
             h.logFile(if (inc.group.isEmpty()) inc.peer else "g:${inc.group}", saved.name, inc.size, saved.uri, false)
             h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved in ${Received.shown(folder)}" + if (risky(saved.name)) ". $RISKY_NOTE" else "")
@@ -1505,8 +1558,8 @@ object FileLink {
      * One side's way through the call relay: looks like a UDP socket to the transfer's loops, so everything sealed, acked and
      * resumed as on the direct way goes through a TURN allocation. The relay sees only sealed pieces.
      */
-    private class RelaySock(private val turn: io.github.ravenor907.muninn.net.call.TurnClient, private val used: (Long) -> Unit) : DatagramSocket(null as java.net.SocketAddress?) {
-        val box = java.util.concurrent.LinkedBlockingQueue<ByteArray>(4096)
+    private class RelaySock(private val turn: io.github.ravenor907.muninn.net.call.TurnClient, val box: java.util.concurrent.LinkedBlockingQueue<Pair<InetSocketAddress, ByteArray>>,
+                            private val used: (Long) -> Unit) : DatagramSocket(null as java.net.SocketAddress?) {
         @Volatile private var wait = 50
         override fun setSoTimeout(timeout: Int) { wait = timeout }
         override fun getSoTimeout() = wait
@@ -1515,16 +1568,17 @@ object FileLink {
             used(p.length.toLong())
         }
         override fun receive(p: DatagramPacket) {
-            val b = box.poll(wait.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS) ?: throw java.net.SocketTimeoutException()
+            val (from, b) = box.poll(wait.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS) ?: throw java.net.SocketTimeoutException()
             val n = minOf(b.size, p.data.size)
             System.arraycopy(b, 0, p.data, 0, n)
             p.length = n
+            p.socketAddress = from
             used(n.toLong())
         }
         override fun close() { try { turn.close() } catch (_: Exception) {}; super.close() }
     }
 
-    private class Leg(val turn: io.github.ravenor907.muninn.net.call.TurnClient, val sock: DatagramSocket, @Volatile var theirs: InetSocketAddress, val expiresMs: Long) {
+    private class Leg(val turn: io.github.ravenor907.muninn.net.call.TurnClient, val sock: RelaySock, @Volatile var theirs: InetSocketAddress, val expiresMs: Long) {
         fun dueToRenew(now: Long) = expiresMs - now < MediaRoute.RENEW_BEFORE_MS
         fun retarget(to: InetSocketAddress) { turn.permit(to); theirs = to }
         fun close() = try { sock.close() } catch (_: Exception) {}
@@ -1532,35 +1586,43 @@ object FileLink {
 
     /**
      * An allocation for this transfer: my relayed address goes in a sealed `relay` message (again until theirs comes), and
-     * both prove they hear each other with the file's own probes. [old]: a leg being renewed, which goes on until this one is
-     * ready. Null when the relay can't be had; the transfer's own wait then decides what's next.
+     * both prove they hear each other with the file's own probes. [old]: a leg being renewed: it keeps reading into the same
+     * queue for [MediaRoute.HANDOVER_MS], until the other side has the new address. Null when the relay can't be had; the
+     * transfer's own wait then decides what's next.
      */
     private fun relayLeg(id: String, peer: String, key: ByteArray, dir: Int, old: Leg? = null): Leg? {
         val h = host ?: return null
         if (!UltraPrivacy.directAllowed || id in stopped) return null
         val login = try { h.relayLogin() } catch (_: Exception) { null } ?: return null
         if (old == null) _all.value[id]?.let { put(it.copy(state = "connecting", note = "Connecting through the relay…", route = VIA_RELAY)) }
-        val box = arrayOfNulls<RelaySock>(1)
-        val turn = io.github.ravenor907.muninn.net.call.TurnClient(login, { io.github.ravenor907.muninn.net.call.TurnClient.lookup(it) }) { _, data -> box[0]?.box?.offer(data) }
+        val box = old?.sock?.box ?: java.util.concurrent.LinkedBlockingQueue<Pair<InetSocketAddress, ByteArray>>(4096)
+        val turn = io.github.ravenor907.muninn.net.call.TurnClient(login, { io.github.ravenor907.muninn.net.call.TurnClient.lookup(it) }) { from, data -> box.offer(from to data) }
         try {
             if (!turn.start()) { turn.close(); return null }
             val meter = java.util.concurrent.atomic.AtomicLong()
-            val sock = RelaySock(turn) { n -> if (meter.addAndGet(n) >= 1_000_000L) h.relayUsed(meter.getAndSet(0)) }
-            box[0] = sock
+            val sock = RelaySock(turn, box) { n -> if (meter.addAndGet(n) >= 1_000_000L) h.relayUsed(meter.getAndSet(0)) }
             val mineAt = turn.relayed ?: run { sock.close(); return null }
             val message = JSONObject().put("t", "relay").put("id", id).put("a", mineAt.address.hostAddress?.substringBefore('%')).put("p", mineAt.port).toString()
             h.signal(peer, message)
             val until = System.currentTimeMillis() + MediaRoute.WAIT_MS
             var last = System.currentTimeMillis()
-            while (relayTo[id] == null && System.currentTimeMillis() < until && id !in stopped) {
+            while (relayTo[id] == null && System.currentTimeMillis() < until && id !in stopped && UltraPrivacy.directAllowed) {
                 Thread.sleep(200)
                 if (System.currentTimeMillis() - last >= 8_000L) { last = System.currentTimeMillis(); h.signal(peer, message) }
             }
-            val theirs = relayTo[id] ?: run { sock.close(); return null }
+            val theirs = relayTo[id]
+            if (theirs == null || !UltraPrivacy.directAllowed) { sock.close(); return null }
             turn.permit(theirs)
             if (old == null && punch(sock, key, id, dir, listOf(theirs)) == null) { sock.close(); relayTo.remove(id); return null }
             val leg = Leg(turn, sock, theirs, login.expiresMs)
             legs[id] = leg
+            if (old != null) work.execute {
+                // Said once more, and the old allocation lets go once the other side has moved.
+                Thread.sleep(8_000L)
+                if (legs[id] === leg) h.signal(peer, message)
+                Thread.sleep(MediaRoute.HANDOVER_MS - 8_000L)
+                old.close()
+            }
             _all.value[id]?.let { put(it.copy(state = "sending", note = "", route = VIA_RELAY)) }
             return leg
         } catch (e: Exception) { try { turn.close() } catch (_: Exception) {}; return null }

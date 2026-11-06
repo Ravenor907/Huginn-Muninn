@@ -363,6 +363,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun routeFor(peer: String, group: String) = this@Chat.mediaRoute(if (group.isEmpty()) peer else "g:$group")
             override fun relayLogin() = io.github.ravenor907.muninn.net.call.CallManager.fileRelayLogin()
             override fun relayOver() = meter.over()
+            override fun relayStopped() = meter.stopped()
             override fun relayUsed(bytes: Long) = meter.add(bytes)
             override fun asksFirst(peer: String) = peer in flags.all.value.asks
             override fun isKidDevice() = try { io.github.ravenor907.muninn.tv.KidMode.saved(context) } catch (_: Exception) { false }
@@ -422,7 +423,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun writeKept(text: String) { vault.write(File(context.filesDir, "keptparts.json"), text) }
         }
         FileLink.loadKept()
-        FileLink.resumeStopped()
         Link.host = object : Link.Host {
             override fun myKey() = id.publicKey
             override fun myMailbox() = nostr.publicKey
@@ -2630,7 +2630,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val m = chats[k]?.firstOrNull { it.id == msgId }
             if (m == null) { at(now); continue }   // gone: the loop lets it go
             at(tries[msgId]?.next ?: now)
-            if (m.mine && m.state == "sending" && !m.failed) { at(m.time + NetLogic.DELAY_AFTER_MS + 1); at(m.time + NOT_SENT_MS + 1) }
+            if (m.mine && m.state == "sending" && !m.failed) {
+                (m.time + NetLogic.DELAY_AFTER_MS + 1).let { if (it > now) at(it) }
+                at(m.time + NOT_SENT_MS + 1)
+            }
             if (m.mine && m.state != "unsending") at(m.time + DAY + 1)
         }
         return next
@@ -2660,7 +2663,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         var oldest: Long? = null
         for ((msgId, k) in pending) {
             val m = chats[k]?.firstOrNull { it.id == msgId }
-            if (m != null && m.mine && m.state == "sending" && now - m.time <= DAY) oldest = maxOf(oldest ?: 0L, now - m.time)
+            // A text that can go by the internet: a photo or video's paced pieces take their time, and aren't a delay.
+            if (m != null && m.mine && m.state == "sending" && m.photo.isEmpty() && now - m.time <= DAY && backupMailbox(m) != null) oldest = maxOf(oldest ?: 0L, now - m.time)
             // Deleted, moved to a new key, or the chat is gone: nothing more to send.
             if (m == null) { pending.remove(msgId); if (tries.remove(msgId) != null) { outbox.drop(msgId); outbox.drop(UNSEND + msgId) }; continue }
             if (m.mine && m.state == "unsending") {

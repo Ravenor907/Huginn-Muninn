@@ -486,9 +486,9 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     fun forget(key: String) {
         val s = _all.value
         synchronized(notified) { notified.remove(key) }
-        if (key in s.muted || key in s.archived || key in s.unread || key in s.colors || key in s.pinned || key in s.hidden || key in s.cleared || key in s.notify)
+        if (key in s.routes || key in s.asks || key in s.muted || key in s.archived || key in s.unread || key in s.colors || key in s.pinned || key in s.hidden || key in s.cleared || key in s.notify)
             set(s.copy(muted = s.muted - key, archived = s.archived - key, unread = s.unread - key, colors = s.colors - key, pinned = s.pinned - key,
-                hidden = s.hidden - key, cleared = s.cleared - key, notify = s.notify - key))
+                hidden = s.hidden - key, cleared = s.cleared - key, notify = s.notify - key, routes = s.routes - key, asks = s.asks - key))
     }
 
     companion object {

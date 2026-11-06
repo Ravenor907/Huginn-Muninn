@@ -454,14 +454,14 @@ class CallMedia(
         // destination gets the packet once (the relay once per relayed address, not once per relay path).
         // Labs, Voice over two paths: voice also on the relay while it's allocated, next to Wi-Fi or Direct (the receiver
         // keeps the first copy). Off by default.
-        val dual = twoPaths && only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
+        val dual = twoPaths && !peerTv && only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
         val rest = only == null && freeFresh(now) && !dual
         for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest, alsoRelay = dual)) when (dst.kind) {
             // Group video goes peer to peer only, never through the relay (it stays on voice there).
             CallLogic.Kind.RELAY -> if (!(video && videoNoRelay)) turn?.let { t ->
-                // A copy next to a free path never waits on the relay: over TCP or TLS a slow write would hold up this
-                // lock, and so the free path, the pings and the sound coming in.
-                if (dual && targets.any { it.kind != CallLogic.Kind.RELAY }) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
+                // With copies on, nothing waits on the relay here: over TCP or TLS a slow write would hold up this lock, and
+                // so the free path, the pings and the sound coming in.
+                if (twoPaths) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
                 // Pings and pongs keep a standby relay alive; only what else it carries counts as the relay in use.
                 if (only == null) relayUsedAt = now
             }

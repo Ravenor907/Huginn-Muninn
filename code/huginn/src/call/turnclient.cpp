@@ -238,6 +238,7 @@ void RelayCredentials::meter(const QByteArray &identityKey, qint64 mb, std::func
     }
     QJsonObject o = QJsonDocument::fromJson(body(identityKey, workerNow(), QByteArray(RelayConfig::kAppSecret), tok)).object();
     o.insert(QStringLiteral("mb"), double(qMin<qint64>(5000, qMax<qint64>(0, mb))));
+    UltraPrivacy::prepare(&m_net);
     QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/meter")));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     QNetworkReply *r = m_net.post(req, QJsonDocument(o).toJson(QJsonDocument::Compact));

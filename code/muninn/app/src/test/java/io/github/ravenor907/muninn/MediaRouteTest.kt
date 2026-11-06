@@ -20,33 +20,34 @@ class MediaRouteTest {
 
     @Test
     fun theRelayIsForFamilyAndTrustedOnly() {
-        assertTrue(MediaRoute.relayMay(MediaRoute.AUTO, ultra = false, family = true, peerCan = true, over = false))
-        assertFalse("anyone else", MediaRoute.relayMay(MediaRoute.AUTO, false, false, true, false))
-        assertFalse("an older app", MediaRoute.relayMay(MediaRoute.AUTO, false, true, false, false))
-        assertFalse("Ultra privacy", MediaRoute.relayMay(MediaRoute.AUTO, true, true, true, false))
-        assertFalse("Tor chosen", MediaRoute.relayMay(MediaRoute.TOR, false, true, true, false))
-        assertFalse("the month's used", MediaRoute.relayMay(MediaRoute.FASTEST, false, true, true, true))
+        assertTrue(MediaRoute.relayMay(MediaRoute.AUTO, ultra = false, family = true, peerCan = true))
+        assertFalse("anyone else", MediaRoute.relayMay(MediaRoute.AUTO, false, false, true))
+        assertFalse("an older app", MediaRoute.relayMay(MediaRoute.AUTO, false, true, false))
+        assertFalse("Ultra privacy", MediaRoute.relayMay(MediaRoute.AUTO, true, true, true))
+        assertFalse("Tor chosen", MediaRoute.relayMay(MediaRoute.TOR, false, true, true))
     }
 
     @Test
     fun torIsNeverPickedSilentlyForFamily() {
-        assertFalse(MediaRoute.torMay(MediaRoute.AUTO, false, true, true))
-        assertFalse(MediaRoute.torMay(MediaRoute.FASTEST, false, true, true))
-        assertTrue(MediaRoute.torMay(MediaRoute.TOR, false, true, true))
-        assertTrue(MediaRoute.torMay(MediaRoute.AUTO, true, true, true))
+        assertFalse(MediaRoute.torMay(MediaRoute.AUTO, false, true))
+        assertFalse(MediaRoute.torMay(MediaRoute.FASTEST, false, true))
+        assertTrue(MediaRoute.torMay(MediaRoute.TOR, false, true))
+        assertTrue(MediaRoute.torMay(MediaRoute.AUTO, true, true))
         // Someone outside Family and trusted contacts has no other way over the internet; the card says Tor.
-        assertTrue(MediaRoute.torMay(MediaRoute.AUTO, false, false, true))
+        assertTrue(MediaRoute.torMay(MediaRoute.AUTO, false, false))
         assertFalse(MediaRoute.directMay(MediaRoute.TOR, false))
         assertFalse(MediaRoute.directMay(MediaRoute.AUTO, true))
     }
 
     @Test
     fun theMonthsLimitIsWellUnderTheFreeTerabyteAndSaidCalmly() {
-        assertTrue(MediaRoute.LIMIT_BYTES < 1000L * 1_000_000_000L)
+        assertTrue(MediaRoute.STOP_BYTES < 1000L * 1_000_000_000L && MediaRoute.LIMIT_BYTES < MediaRoute.STOP_BYTES)
         assertFalse(MediaRoute.over(MediaRoute.LIMIT_BYTES - 1, 0))
         assertTrue(MediaRoute.over(0, MediaRoute.LIMIT_BYTES))
+        assertFalse(MediaRoute.stopped(0, MediaRoute.LIMIT_BYTES))
+        assertTrue(MediaRoute.stopped(MediaRoute.STOP_BYTES, 0))
         assertEquals("", MediaRoute.meterNote(1000, 0))
-        assertEquals("Through the relay this month: 12 GB of 800 GB.", MediaRoute.meterNote(12_000_000_000L, 3))
+        assertEquals("Relay this month: 12 GB of 800 GB.", MediaRoute.meterNote(12_000_000_000L, 3))
         assertTrue(MediaRoute.meterNote(0, MediaRoute.LIMIT_BYTES).contains("720p"))
         assertEquals("2026-11", MediaRoute.month(1_794_000_000_000L))
     }
@@ -57,6 +58,7 @@ class MediaRouteTest {
         assertTrue(FileLink.relayOk(m("104.30.1.2", 40000)))
         assertTrue(FileLink.relayOk(m("2606:4700::1", 40000)))
         assertFalse(FileLink.relayOk(m("evil.example.com", 40000)))
+        assertFalse(FileLink.relayOk(m("abcd.de", 40000)))
         assertFalse(FileLink.relayOk(m("104.30.1.2", 0)))
         assertFalse(FileLink.relayOk(m("104.30.1.2", 70000)))
     }

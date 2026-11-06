@@ -795,7 +795,7 @@ private fun DevicesPage(app: Muninn) {
             MButton(io.github.ravenor907.muninn.net.MediaRoute.label(c), m, if (route == c) Kind.Accent else Kind.Normal) { route = c; app.chat.mediaRouteAll = c }
         }
         val note = app.chat.meter.note()
-        Help(note.ifEmpty { "Family and trusted people get full quality." })
+        Help(note.ifEmpty { "Family and trusted: full quality" })
         Spacer(Modifier.height(8.dp))
     }
     MoreFold {

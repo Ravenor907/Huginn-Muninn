@@ -451,6 +451,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** The network came back: drop dead connections and connect again now. */
     fun reconnectNow() {
+        spread.wake()
         if (!keepAlive && sockets.isEmpty()) return
         streak.set(0)
         for (url in targets()) if (live[url] != true) {
@@ -816,7 +817,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             // Never opened: this relay can't be reached now (it rests after a few of these, see RelaySpread).
-            if (!open) spread.failed(url, android.os.SystemClock.elapsedRealtime())
+            if (!open && senders[url] === this && online()) spread.failed(url, android.os.SystemClock.elapsedRealtime())
             senders.remove(url, this)
         }
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null); senders.remove(url, this) }
@@ -873,7 +874,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             return live.size
         }
         synchronized(outbox) { outbox.add(msg); while (outbox.size > 200) outbox.removeAt(0) }
-        synchronized(recent) {
+        // A piece of something bigger stays out: a relay coming back mustn't get them all at once, past the pacing.
+        if (again) synchronized(recent) {
             val now = android.os.SystemClock.elapsedRealtime()
             recent.addLast(now to msg)
             while (recent.size > 100 || (recent.isNotEmpty() && now - recent.first().first > RECENT_MS)) recent.removeFirst()
@@ -887,6 +889,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         if (again) {
             spread.add(id, all, if (ok == null && held == null) RelaySpread.LIGHT_ROUNDS else RelaySpread.RETRY_MS.size)
             spreadMsg[id] = msg
+            if (ok != null || held != null) spreadChat.add(id)
         }
         for (url in to) send(url, listOf(msg))
         if (again) spreadOn(id, 0)
@@ -897,6 +900,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** Which relays still owe each event an OK, and the event itself (same id every time). */
     private val spread = RelaySpread()
     private val spreadMsg = ConcurrentHashMap<String, String>()
+    private val spreadChat: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Try [round]: the relays that haven't stored event [id] yet get it again, then the next try is set (none after the last). */
     private fun spreadOn(id: String, round: Int) {
@@ -911,13 +915,14 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         }, wait, TimeUnit.MILLISECONDS)
     }
 
-    /** Every try used: a relay holds it, so the outbox lets it go; none does, and it stays for the next relay that connects. */
+    /** Every try used: a relay holds it, or Chat will send it again, so the outbox lets it go; else it stays for the next relay that connects. */
     private fun spreadDone(id: String) {
-        if (spread.anyStored(id)) {
+        // A message Chat follows goes again as a new event by itself, so an old copy never piles up while offline.
+        if (spread.anyStored(id) || id in spreadChat) {
             val msg = spreadMsg[id]
             if (msg != null) synchronized(outbox) { outbox.remove(msg) }
         }
-        spread.forget(id); spreadMsg.remove(id)
+        spread.forget(id); spreadMsg.remove(id); spreadChat.remove(id)
     }
 
     /** [url] answered "OK false" for [id] with [reason] (see [RelaySpread.refused]). */
@@ -925,7 +930,10 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         if (id.isEmpty()) return
         // A duplicate is stored already: the same as its OK.
         if (reason.startsWith("duplicate")) { storedAt(url, id); return }
-        if (spread.tracked(id) && spread.refused(id, url, reason)) spreadMsg.remove(id)
+        if (spread.tracked(id) && spread.refused(id, url, reason)) {
+            spreadMsg.remove(id)?.let { m -> synchronized(outbox) { outbox.remove(m) } }
+            spreadChat.remove(id)
+        }
     }
 
     /** The id of an outbox entry (["EVENT", {...}]), or "" when it can't be read. */

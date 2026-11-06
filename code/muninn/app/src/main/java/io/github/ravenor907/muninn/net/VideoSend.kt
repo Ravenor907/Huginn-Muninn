@@ -142,18 +142,19 @@ object VideoSend {
      * [k] as a video's sender sees them now: Chat.videoMember, with [GroupVideo.Member.newPath] from their caps, and trust
      * only while this phone may go straight over the internet (Ultra privacy: the same Wi-Fi or Tor only).
      */
-    fun member(chat: Chat, k: String, group: Boolean): GroupVideo.Member = chat.videoMember(k, group).let {
+    fun member(chat: Chat, k: String, group: Boolean, g: String = ""): GroupVideo.Member = chat.videoMember(k, group).let {
         val h = FileLink.host
         // Family and trusted, with an app that can go through the call relay: full quality, whatever the length and the
         // network, until the relay's month is used up or Data saver says otherwise.
-        val family = h != null && FileLink.mayAlways(h.badge(k)) && MediaRoute.relayMay(h.routeFor(k, ""), !UltraPrivacy.directAllowed, true, h.hasF5(k), h.relayOver()) && h.mayDownload()
+        val family = h != null && FileLink.mayAlways(h.badge(k)) && MediaRoute.relayMay(h.routeFor(k, g), !UltraPrivacy.directAllowed, true, h.hasF5(k)) &&
+            h.mayDownload() && !h.relayOver()
         it.copy(trusted = it.trusted && UltraPrivacy.directAllowed, newPath = GroupVideo.NEW_PATH_CAP in chat.capsOf(k) || h?.hasF4(k) == true, family = family)
     }
 
     /** Everyone it would go to, as seen now. [me]: my chat key (left out). */
     fun members(chat: Chat, t: Target, me: String): List<GroupVideo.Member> =
         if (!t.group) listOf(member(chat, t.peer, false))
-        else chat.groups.group(t.g)?.state?.members?.map { it.k }?.filter { it != me }?.map { member(chat, it, true) }.orEmpty()
+        else chat.groups.group(t.g)?.state?.members?.map { it.k }?.filter { it != me }?.map { member(chat, it, true, t.g) }.orEmpty()
 
     /** The plan for [t] now, for a video [ms] long: who gets the full copy, the 720p copy, the relay copy or nothing. */
     fun plan(context: Context, chat: Chat, t: Target, me: String, ms: Int): Map<String, String> =

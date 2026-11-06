@@ -918,6 +918,7 @@ object KidTv {
      */
     private fun wipe(app: Muninn) = synchronized(lock) {
         TvStorage.clear(app)   // every message and the caches (a downloaded update stays)
+        app.identity.preRelease = false   // Updates was the parents' choice; a device on its own follows stable
         setupAsked(app)
         app.contacts.all.value.forEach { app.chat.removeContact(it.chatKey) }
         file(app).delete()

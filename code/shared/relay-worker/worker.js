@@ -262,6 +262,7 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH = /^\d{4}-\d{2}$/;
 // One report (relay.md "Relayed media"): apps report every 200 MB or so, so this is well over a real one.
 export const METER_MAX_MB = 5000;
+export const METER_DAY_MB = 100000;
 
 export class RelayLimits {
   constructor(ctx) {
@@ -319,12 +320,20 @@ export class RelayLimits {
     }
     const q = body && typeof body === "object" ? body : {};
     if (q.meter === true) {
-      if (typeof q.month !== "string" || !MONTH.test(q.month) || !Number.isInteger(q.mb) || q.mb < 0 || q.mb > METER_MAX_MB) {
+      if (typeof q.month !== "string" || !MONTH.test(q.month) || !Number.isInteger(q.mb) || q.mb < 0 || q.mb > METER_MAX_MB
+          || typeof q.day !== "string" || !DAY.test(q.day) || typeof q.id !== "string" || !HEX64.test(q.id)) {
         return json(400, { error: "bad_request" });
       }
       if (q.mb > 0) {
-        this.sql.exec(SQL.meterWipe, q.month);
-        this.sql.exec(SQL.meterAdd, q.month, q.mb);
+        // One install can't say more than METER_DAY_MB a day, so a stolen token can't end the month for everyone.
+        const k = "m" + q.id;
+        const row = this.sql.exec(SQL.read, q.day, k, k, k, k, k, k).toArray()[0];
+        const allowed = Math.min(q.mb, METER_DAY_MB - (row ? Number(row.n) : 0));
+        if (allowed > 0) {
+          this.sql.exec(SQL.bump, q.day, k, allowed);
+          this.sql.exec(SQL.meterWipe, q.month);
+          this.sql.exec(SQL.meterAdd, q.month, allowed);
+        }
       }
       const row = this.sql.exec(SQL.meterRead, q.month).toArray()[0];
       return json(200, { mb: row ? Number(row.mb) : 0 });
@@ -504,7 +513,7 @@ async function handleMeter(request, env, nowSec) {
   try {
     const month = new Date(nowSec * 1000).toISOString().slice(0, 7);
     const res = await env.LIMITS.get(env.LIMITS.idFromName("limits")).fetch("https://limits/meter", {
-      method: "POST", body: JSON.stringify({ meter: true, month, mb }),
+      method: "POST", body: JSON.stringify({ meter: true, month, day: month + new Date(nowSec * 1000).toISOString().slice(7, 10), id, mb }),
     });
     if (res.status !== 200) return json(503, { error: "limits_unavailable" });
     return json(200, await res.json());

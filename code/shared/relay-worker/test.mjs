@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import worker, {
   handle, addressGroup, RelayLimits, SQL, POW_BITS, TOKEN_TTL, powOk, makeToken, legacyOver, resetMemory, dailyMinutes,
   TTL_RENEW, TTL_OLD, ID_MINUTES, YOUNG_IP_MINUTES, LEGACY_ID_MINUTES, LEGACY_IP_MINUTES, LEGACY_POOL_MINUTES, DAILY_MINUTES,
-  HOUR_SHARE, SOFT_SHARE, YOUNG_S, ISOLATE_RATE, REG_PER_IP_DAILY, REG_DAILY, plan,
+  HOUR_SHARE, SOFT_SHARE, YOUNG_S, ISOLATE_RATE, REG_PER_IP_DAILY, REG_DAILY, plan, METER_DAY_MB, METER_MAX_MB,
 } from "./worker.js";
 
 const SECRET = "test-app-secret";
@@ -853,6 +853,14 @@ await test("the month's relayed media: a token adds, the total comes back, bad r
   assert.equal((await call(e, { ...login(ID, { tok: "x".repeat(40) }), mb: 1 }, { path: "/meter" })).status, 401);
   assert.equal((await call(e, { ...login(ID, { tok }), mb: 0 }, { path: "/meter" })).data.mb, 250);
   assert.equal((await handle(req(null, "GET", "/meter"), e, NOW)).status, 405);
+});
+
+await test("one install can't fill the month: a day's reports stop at the cap", async () => {
+  const e = env();
+  const tok = await tokenFor(e, ID);
+  let last;
+  for (let i = 0; i < Math.ceil(METER_DAY_MB / METER_MAX_MB) + 5; i++) last = await call(e, { ...login(ID, { tok }), mb: METER_MAX_MB }, { path: "/meter" });
+  assert.equal(last.data.mb, METER_DAY_MB);
 });
 
 await test("the month's count starts over in a new month, and costs no TURN login", async () => {
