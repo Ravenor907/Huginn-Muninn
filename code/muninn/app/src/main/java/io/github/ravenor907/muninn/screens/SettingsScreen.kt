@@ -787,6 +787,17 @@ private fun DevicesPage(app: Muninn) {
         Help("Each chat gets its own folder inside it.")
         Spacer(Modifier.height(8.dp))
     }
+    Framed("Send media") {
+        // Automatic: straight to them, then the encrypted relay. Most private: over Tor, slower. Each chat can have its own.
+        var route by remember { mutableStateOf(app.chat.mediaRouteAll) }
+        io.github.ravenor907.muninn.ui.ChoiceRow(io.github.ravenor907.muninn.net.MediaRoute.CHOICES.size) { i, m ->
+            val c = io.github.ravenor907.muninn.net.MediaRoute.CHOICES[i]
+            MButton(io.github.ravenor907.muninn.net.MediaRoute.label(c), m, if (route == c) Kind.Accent else Kind.Normal) { route = c; app.chat.mediaRouteAll = c }
+        }
+        val note = app.chat.meter.note()
+        Help(note.ifEmpty { "Family and trusted people get full quality." })
+        Spacer(Modifier.height(8.dp))
+    }
     MoreFold {
         PageRow("App storage", "What Muninn keeps that can go") { SettingsNav.goChat = "appstorage" }
         EraseRows(app)

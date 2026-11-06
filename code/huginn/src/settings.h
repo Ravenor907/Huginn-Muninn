@@ -91,6 +91,7 @@ class Settings : public QObject
     // hours: from and to on the hour (0 to 23), no sounds in between (notifications still show).
     Q_PROPERTY(bool messageSound READ messageSound WRITE setMessageSound NOTIFY changed)
     Q_PROPERTY(bool voiceTwoPaths READ voiceTwoPaths WRITE setVoiceTwoPaths NOTIFY changed)
+    Q_PROPERTY(QString mediaRoute READ mediaRoute WRITE setMediaRoute NOTIFY changed)
     Q_PROPERTY(bool quietHours READ quietHours WRITE setQuietHours NOTIFY changed)
     Q_PROPERTY(int quietFrom READ quietFrom WRITE setQuietFrom NOTIFY changed)
     Q_PROPERTY(int quietTo READ quietTo WRITE setQuietTo NOTIFY changed)
@@ -233,6 +234,13 @@ public:
     static bool messageSoundOn() { return saved(QStringLiteral("messageSound"), true).toBool(); }
     // Labs: each voice packet on the relay as well as a direct path. Off until someone turns it on.
     bool voiceTwoPaths() const { return value("voiceTwoPaths", false).toBool(); }
+    // Send media: Automatic, Fastest or Most private (Tor).
+    QString mediaRoute() const { return mediaRouteNow(); }
+    static QString mediaRouteNow()
+    {
+        const QString v = saved(QStringLiteral("mediaRoute"), QStringLiteral("auto")).toString();
+        return v == QLatin1String("fastest") || v == QLatin1String("tor") ? v : QStringLiteral("auto");
+    }
     static bool voiceTwoPathsOn() { return saved(QStringLiteral("voiceTwoPaths"), false).toBool(); }
     QString micDevice() const { return value("micDevice", "").toString(); }
     QString speakerDevice() const { return value("speakerDevice", "").toString(); }
@@ -325,6 +333,7 @@ public:
     void setUpdateChannel(const QString &v) { set("labs/channel", v == QLatin1String("beta") ? QStringLiteral("beta") : QStringLiteral("stable")); }
     void setMessageSound(bool v) { set("messageSound", v); }
     void setVoiceTwoPaths(bool v) { set("voiceTwoPaths", v); }
+    void setMediaRoute(const QString &v) { set("mediaRoute", v); }
     void setQuietHours(bool v) { set("quietHours", v); }
     void setQuietFrom(int v) { set("quietFrom", ((v % 24) + 24) % 24); }
     void setQuietTo(int v) { set("quietTo", ((v % 24) + 24) % 24); }

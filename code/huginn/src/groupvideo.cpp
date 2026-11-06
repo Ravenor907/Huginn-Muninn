@@ -273,6 +273,8 @@ bool direct(const Member &m, bool unmetered) { return m.sameWifi || (m.trusted &
 
 QString delivery(const Member &m, bool unmetered, int ms)
 {
+    if (fullOk(m) && m.family)
+        return QStringLiteral("full");
     if (fullOk(m) && direct(m, unmetered) && (m.newPath || ms <= kOldFullMaxMs + kSlackMs))
         return QStringLiteral("full");
     if (m.newPath && m.v3)
@@ -322,7 +324,7 @@ QString summary(const QHash<QString, QString> &plan, const std::function<QString
     }
     QStringList out;
     if (!full.isEmpty())
-        out << QStringLiteral("Full size (1080p) to %1, close by or direct.").arg(names(full));
+        out << QStringLiteral("Full quality to %1.").arg(names(full));
     if (!small.isEmpty())
         out << QStringLiteral("A 720p copy to %1 over Tor (slower).").arg(names(small));
     if (!relay.isEmpty())
@@ -752,7 +754,7 @@ bool selfTest()
               && p.value(QStringLiteral("c")) == QLatin1String("small") && p.value(QStringLiteral("h")) == QLatin1String("relay") && p.size() == 4,
           "plan: each member their best path");
     const QString said = summary(p, [](const QString &k) { return k.toUpper(); });
-    check(said.contains(QLatin1String("Full size (1080p) to A")) && said.contains(QLatin1String("720p copy to B and C over Tor"))
+    check(said.contains(QLatin1String("Full quality to A")) && said.contains(QLatin1String("720p copy to B and C over Tor"))
               && said.contains(QLatin1String("to H, whose app is older")),
           "summary");
     check(tooLong(6 * min, plan({wifi, far}, true, 6 * min)) && !tooLong(6 * min, plan({wifi, trusted}, true, 6 * min))

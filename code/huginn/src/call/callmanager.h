@@ -132,6 +132,7 @@ public:
     void ultraOn();
     // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
     void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
+    void relayMeter(qint64 mb, std::function<void(qint64)> done);
     QByteArray relayId();
 
 Q_SIGNALS:

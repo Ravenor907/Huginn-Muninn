@@ -107,6 +107,7 @@ QString clock(int ms);
 struct Member {
     QString k;
     bool sameWifi = false, trusted = false, files = false, v3 = false, kid = false, relayOnly = false, newPath = false;
+    bool family = false;   // Family or trusted, and the call relay can carry it when direct doesn't work
 };
 bool fullOk(const Member &m);
 bool direct(const Member &m, bool unmetered);

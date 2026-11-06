@@ -49,6 +49,9 @@ public:
     // identityKey: this device's chat key (SPKI DER); its SHA-256 is the Worker's "id".
     // done is called exactly once, never from inside get().
     void get(const QByteArray &identityKey, std::function<void(const TurnLogin &login, const QString &why)> done);
+    // Relayed media (relay.md): adds mb to the month's total, 0 only asks. done gets the total in MB, or -1 (no token yet, or
+    // a Worker that doesn't have it).
+    void meter(const QByteArray &identityKey, qint64 mb, std::function<void(qint64)> done);
     // Builds the request body (also used by the self-test); tok is the install token, left out when empty.
     // renew: "rn": 1, this app renews its relay before the login ends (relay.md "Renewal"), so the Worker gives 10 minutes.
     static QByteArray body(const QByteArray &identityKey, qint64 unixSeconds, const QByteArray &secret, const QString &tok = QString(),

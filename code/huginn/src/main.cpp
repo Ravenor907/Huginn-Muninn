@@ -719,6 +719,8 @@ int main(int argc, char *argv[])
     auto *trust = new Trust(chat, &app);
     auto *files = new FileLink(chat, &app);
     files->trusted = [calls](const QString &k) { return calls->trusted(k); };
+    files->relayLogin = [calls](std::function<void(const TurnLogin &, const QString &)> done) { calls->getLogin(std::move(done)); };
+    files->relayMeter = [calls](qint64 mb, std::function<void(qint64)> done) { calls->relayMeter(mb, std::move(done)); };
     auto *linked = new Link(chat, &app);
     chat->setExtras(trust, files, linked);
     // Round 19 (FIX 4, owner decision on calls): Ultra privacy turned on stops whatever already goes straight to someone:

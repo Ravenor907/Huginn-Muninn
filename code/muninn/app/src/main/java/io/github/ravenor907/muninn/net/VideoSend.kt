@@ -143,7 +143,11 @@ object VideoSend {
      * only while this phone may go straight over the internet (Ultra privacy: the same Wi-Fi or Tor only).
      */
     fun member(chat: Chat, k: String, group: Boolean): GroupVideo.Member = chat.videoMember(k, group).let {
-        it.copy(trusted = it.trusted && UltraPrivacy.directAllowed, newPath = GroupVideo.NEW_PATH_CAP in chat.capsOf(k) || FileLink.host?.hasF4(k) == true)
+        val h = FileLink.host
+        // Family and trusted, with an app that can go through the call relay: full quality, whatever the length and the
+        // network, until the relay's month is used up or Data saver says otherwise.
+        val family = h != null && FileLink.mayAlways(h.badge(k)) && MediaRoute.relayMay(h.routeFor(k, ""), !UltraPrivacy.directAllowed, true, h.hasF5(k), h.relayOver()) && h.mayDownload()
+        it.copy(trusted = it.trusted && UltraPrivacy.directAllowed, newPath = GroupVideo.NEW_PATH_CAP in chat.capsOf(k) || h?.hasF4(k) == true, family = family)
     }
 
     /** Everyone it would go to, as seen now. [me]: my chat key (left out). */
@@ -213,7 +217,9 @@ object VideoSend {
         if (full.isNotEmpty()) {
             val f = File(dir, "full-" + System.nanoTime() + ".mp4")
             step("Making the full-size copy", 0f)
-            val why = VideoPick.fullCopy(context, uri, info, f) { step("Making the full-size copy", it) }
+            // Everyone getting it is Family or trusted: the original quality, as it is, when it fits a file.
+            val original = full.all { people[it]?.family == true }
+            val why = VideoPick.fullCopy(context, uri, info, f, original) { step("Making the full-size copy", it) }
             if (why != null) {
                 f.delete()
                 // No full copy: new apps get the 720p copy (up to 5 minutes), older ones the relay copy (up to 20 s).
@@ -299,13 +305,13 @@ object VideoSend {
         bigFile?.delete()
         smallFile?.delete()
         val parts = listOfNotNull(
-            fullNow.size.takeIf { it > 0 && bigFile != null }?.let { "full size to $it" },
+            fullNow.size.takeIf { it > 0 && bigFile != null }?.let { "full quality to $it" },
             small.size.takeIf { it > 0 && smallFile != null }?.let { "a 720p copy over Tor to $it" },
             relay.size.takeIf { it > 0 && clip != null }?.let { "a smaller copy to $it with older apps" },
         )
         val head = when {
             parts.isEmpty() -> "That video didn't send."
-            !t.group && fullNow.isNotEmpty() -> "Sending full size."
+            !t.group && fullNow.isNotEmpty() -> "Sending full quality."
             !t.group && small.isNotEmpty() -> "Sending a 720p copy over Tor. It can take a while."
             !t.group -> "Sending. Its pieces go a few a second, so it can take a few minutes."
             else -> "Sending: " + parts.joinToString(", ") + "."

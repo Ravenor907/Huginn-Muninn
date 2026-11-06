@@ -650,6 +650,15 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                 ToggleRow("Archive", "", key in flags.archived) { app.chat.flags.archive(key, it) }
                 Text("Chat color", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
                 ColorChoices(app, key)
+                // Send media for this chat: as in Settings, or its own.
+                Text("Send media", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+                var route by remember(key) { mutableStateOf(app.chat.mediaRouteOf(key)) }
+                FlowRow(Modifier.padding(top = 6.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DetailChip("As in Settings", route == null) { route = null; app.chat.setMediaRoute(key, null) }
+                    io.github.ravenor907.muninn.net.MediaRoute.CHOICES.forEach { c ->
+                        DetailChip(io.github.ravenor907.muninn.net.MediaRoute.label(c), route == c) { route = c; app.chat.setMediaRoute(key, c) }
+                    }
+                }
                 val others = folders.filter { f -> ROLES.none { it.equals(f.name, true) } }
                 if (others.isNotEmpty()) {
                     Text("Folders", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 4.dp))

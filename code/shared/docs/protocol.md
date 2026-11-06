@@ -3557,3 +3557,35 @@ stream. The SHA-256 is checked over the whole file at the end.
 - A Tor transfer over 1 GB asks the sender first. Rows show the path; Muninn keeps a foreground "Sending file"
   notification while one moves, Huginn keeps going from the tray.
 
+## 32. Media through the call relay (cap f5)
+
+Family groups and trusted contacts get the fewest limits: what they send arrives by itself at full quality. Everyone else's
+files keep the receiving card (section 30) and their size rules. A risky file type keeps its warning either way.
+
+**Caps past 48.** Apps say `f5` at the end of `caps`, after the first 48 tokens. Huginn keeps up to 96 tokens now; an older
+Huginn keeps the first 48 and doesn't know the rest, which is the right answer for it. New tokens always go at the end.
+
+**The route** (Settings, Files, Send media, and each chat's own choice):
+
+- Automatic: the same Wi-Fi, then Trusted direct, then the call relay.
+- Fastest: the same, with 3 s for the direct way instead of 20 s.
+- Most private (Tor): the same Wi-Fi, then Tor. Nothing goes direct or through the relay.
+
+With Ultra privacy on, or when both sides' apps can't do better, the rules of section 30 stand. Someone outside Family and
+trusted contacts has no direct or relay way, so Tor stays their route over the internet, and the card says so.
+
+**On the wire.** An offer that may use the relay carries `"rl": 1`. Either side, once the direct way failed or went quiet
+for 6 s, makes a TURN allocation (as a call does, section 5.6) and sends a sealed `file` message
+`{"t":"relay","id":<file id>,"a":<relayed IP>,"p":<port>}`, again every 8 s until the other's comes, for up to 45 s. `a` is
+always a number, never a name. Each side lets the other's relayed address in and sends the file's own packets (section 14:
+PROBE, DATA, ACK, DONE, HOLD, sealed under the file's key, which the relay never has) from its allocation to that address.
+Proof that both hear each other is the same three probes. Pieces, acks and resume work as on any other path, so a transfer
+can move to the relay part way and goes on from the last piece. A new allocation before the login ends sends `relay`
+again; the other side just moves where its packets go. A receiver takes `rl` only from someone Family or trusted on its own
+side, and never with Ultra privacy on.
+
+**Waiting and stopping.** To Family and trusted contacts an offer waits up to 7 days for a device that's offline, sent again
+every 30 minutes. A send that stops goes again by itself after 1, 5, 15 and then 60 minutes, and goes on from what arrived.
+
+**Video.** To Family and trusted contacts a video goes as the full copy, at any length and on any network (Data saver on a
+metered network still asks). Past the month's limit (relay.md, "Relayed media") they get the 720p copy like anyone not direct.

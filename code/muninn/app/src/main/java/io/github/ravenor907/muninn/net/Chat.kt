@@ -333,6 +333,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         load()
         queueWaiting()
         try { vault.read(s1Store)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { s1Bound[it] = o.optLong(it) } } } catch (_: Exception) {}
+        FileLink.resend = { p, file, n, g -> bg {
+            if (g.isEmpty()) sendFile(p, file, n)?.let { notices.tryEmit(it) }
+            else sendMemberFile(p, file, n, FileLink.preparing(p, n, file.length(), g), g)
+        } }
         FileLink.host = object : FileLink.Host {
             override fun signal(peer: String, json: String) {
                 bg {
@@ -355,6 +359,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun cacheDir(): File = File(context.cacheDir, "files").also { it.mkdirs() }
             override fun notice(text: String) { notices.tryEmit(text) }
             override fun videosOutDir(): File? = try { videosOut() } catch (_: Exception) { null }
+            override fun hasF5(peer: String) = MediaRoute.CAP in capsOf(peer) || envCaps[peer]?.contains(MediaRoute.CAP) == true
+            override fun routeFor(peer: String, group: String) = this@Chat.mediaRoute(if (group.isEmpty()) peer else "g:$group")
+            override fun relayLogin() = io.github.ravenor907.muninn.net.call.CallManager.fileRelayLogin()
+            override fun relayOver() = meter.over()
+            override fun relayUsed(bytes: Long) = meter.add(bytes)
             override fun isKidDevice() = try { io.github.ravenor907.muninn.tv.KidMode.saved(context) } catch (_: Exception) { false }
             override fun mayDownload() = (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() != true
             // Cap f2 (section 27): the same Wi-Fi first, group files and their rules, where files go.
@@ -412,6 +421,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun writeKept(text: String) { vault.write(File(context.filesDir, "keptparts.json"), text) }
         }
         FileLink.loadKept()
+        FileLink.resumeStopped()
         Link.host = object : Link.Host {
             override fun myKey() = id.publicKey
             override fun myMailbox() = nostr.publicKey
@@ -1715,6 +1725,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * relays. Its card shows in the chat at once and says how it goes; nothing fails out of sight. [id]: the card
      * FileLink.preparing made while the file was copied in.
      */
+    /** Settings › Files › Send media, and each chat's own choice (MediaRoute). */
+    var mediaRouteAll: String
+        get() = MediaRoute.clean(prefs.getString(ROUTE_ALL, null))
+        set(v) { prefs.edit().putString(ROUTE_ALL, MediaRoute.clean(v)).apply() }
+    fun mediaRouteOf(chat: String): String? = prefs.getString(ROUTE_CHAT + chat, null)
+    fun setMediaRoute(chat: String, c: String?) { prefs.edit().apply { if (c == null) remove(ROUTE_CHAT + chat) else putString(ROUTE_CHAT + chat, MediaRoute.clean(c)) }.apply() }
+    private fun mediaRoute(chat: String) = MediaRoute.chosen(mediaRouteOf(chat), mediaRouteAll)
+    /** What the call relay carried this month (MediaRoute), this device's count and the one all devices report to the Worker. */
+    val meter by lazy { RelayMeter(context) }
+
     fun sendFile(peerKey: String, file: File, name: String, id: String? = null): String? {
         val clean = cleanFileName(name)
         val cardId = id ?: Proto06.newLogicalId()
@@ -3511,6 +3531,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         /** Round 14: the caps this app said when it last started (outside the vault), to notice going back to stable. */
         const val LAST_CAPS = "lastCaps"
         const val LAST_APP = "lastApp"
+        private const val ROUTE_ALL = "mediaRoute"
+        private const val ROUTE_CHAT = "mediaRoute:"
         /** The chat page with the Labs reports (and what a report's notification opens). */
         const val LABS_PAGE = "labs"
         const val MAX = 2000

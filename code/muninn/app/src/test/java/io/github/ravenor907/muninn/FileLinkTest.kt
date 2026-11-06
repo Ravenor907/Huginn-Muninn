@@ -72,7 +72,7 @@ class FileLinkTest {
         assertEquals(3, FileLink.pieces(2 * FileLink.CHUNK + 1L))
     }
 
-    /** 1.42: every file and video asks first. Only Always (trusted or Family) or the rest of an accepted file don't. */
+    /** Family and trusted contacts' files arrive by themselves, and the rest of an accepted file; everyone else's ask first. */
     @Test
     fun everyFileAsksFirst() {
         val mb = 1024L * 1024

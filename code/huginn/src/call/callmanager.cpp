@@ -333,6 +333,11 @@ void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &
     m_relay->get(relayId(), std::move(done));
 }
 
+void CallManager::relayMeter(qint64 mb, std::function<void(qint64)> done)
+{
+    m_relay->meter(relayId(), mb, std::move(done));
+}
+
 QByteArray CallManager::relayId()
 {
     // The relay Worker counts logins per id. A random id made once and kept in the vault, not the chat key:

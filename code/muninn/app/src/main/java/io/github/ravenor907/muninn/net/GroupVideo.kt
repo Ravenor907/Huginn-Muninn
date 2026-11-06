@@ -216,7 +216,9 @@ object GroupVideo {
      * straight. [newPath]: their app has [NEW_PATH_CAP] (files and the 720p copy over Tor; no relay video).
      */
     data class Member(val k: String, val sameWifi: Boolean, val trusted: Boolean, val files: Boolean, val v3: Boolean,
-                      val kid: Boolean = false, val relayOnly: Boolean = false, val newPath: Boolean = false)
+                      val kid: Boolean = false, val relayOnly: Boolean = false, val newPath: Boolean = false,
+                      /** Family or trusted, and the call relay can carry it when direct doesn't work: full quality, no length limit. */
+                      val family: Boolean = false)
 
     /** Full size, direct (FileLink with "vid"). */
     const val FULL = "full"
@@ -238,6 +240,7 @@ object GroupVideo {
      * copy up to 5 minutes for a new app (kids' devices included); else, for an older app, the relay copy up to 20 s.
      */
     fun delivery(m: Member, unmetered: Boolean, ms: Int): String = when {
+        fullOk(m) && m.family -> FULL
         fullOk(m) && direct(m, unmetered) && (m.newPath || ms <= OLD_FULL_MAX_MS + SLACK_MS) -> FULL
         m.newPath && m.v3 -> if (ms <= SMALL_MAX_MS + SLACK_MS) SMALL else NONE
         ms <= RELAY_MAX_MS + SLACK_MS -> RELAY
@@ -262,7 +265,7 @@ object GroupVideo {
         val relay = of(RELAY)
         val none = of(NONE)
         return listOfNotNull(
-            full.takeIf { it.isNotEmpty() }?.let { "Full size (1080p) to ${names(it)}, close by or direct." },
+            full.takeIf { it.isNotEmpty() }?.let { "Full quality to ${names(it)}." },
             small.takeIf { it.isNotEmpty() }?.let { "A 720p copy to ${names(it)} over Tor (slower)." },
             relay.takeIf { it.isNotEmpty() }?.let { "A smaller copy (720p, up to 20 seconds) to ${names(it)}, whose app is older." },
             none.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: their app is older. Ask them to update." },
@@ -284,7 +287,7 @@ object GroupVideo {
     const val TOO_LONG_TITLE = "Video too long"
     const val TOO_LONG_TEXT = "Videos over the internet can be up to 5 minutes."
     /** The Saved media note under videos. */
-    const val NOTE = "Full size close by. Others get up to 5 minutes."
+    const val NOTE = "Full quality for Family and trusted people. Others get up to 5 minutes."
 
     // ------------------------------------------------------------------ pacing
 

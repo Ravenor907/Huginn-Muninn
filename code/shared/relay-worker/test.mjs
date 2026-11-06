@@ -23,8 +23,16 @@ class FakeSql {
   exec(q, ...b) {
     if (this.fail) throw new Error("storage down");
     const out = [];
-    if (q === SQL.schema) {
+    if (q === SQL.schema || q === SQL.meterSchema) {
       // nothing to do
+    } else if (q === SQL.meterAdd) {
+      this.months = this.months || new Map();
+      this.months.set(b[0], (this.months.get(b[0]) || 0) + b[1]);
+    } else if (q === SQL.meterRead) {
+      const n = this.months && this.months.get(b[0]);
+      if (n !== undefined) out.push({ mb: n });
+    } else if (q === SQL.meterWipe) {
+      for (const m of [...(this.months || new Map()).keys()]) if (m < b[0]) this.months.delete(m);
     } else if (q === SQL.wipe) {
       for (const key of [...this.rows.keys()]) if (key.split("|")[0] < b[0]) { this.rows.delete(key); this.written++; }
     } else if (q === SQL.read) {
@@ -827,6 +835,36 @@ await test("LEGACY_UNTIL ends logins without a token, never those with one", asy
   assert.equal(r.data.error, "update_needed");
   const tok = (await register(e)).data.tok;
   assert.equal((await call(e, login(ID, { tok }))).status, 200);
+});
+
+await test("the month's relayed media: a token adds, the total comes back, bad reports change nothing", async () => {
+  const e = env();
+  const tok = (await tokenFor(e, ID));
+  const one = await call(e, { ...login(ID, { tok }), mb: 200 }, { path: "/meter" });
+  assert.equal(one.status, 200);
+  assert.equal(one.data.mb, 200);
+  assert.equal((await call(e, { ...login(ID, { tok }), mb: 50 }, { path: "/meter" })).data.mb, 250);
+  // 0 only asks.
+  assert.equal((await call(e, { ...login(ID, { tok }), mb: 0 }, { path: "/meter" })).data.mb, 250);
+  // No token, too much at once, not a whole number: refused, nothing counted.
+  assert.equal((await call(e, { ...login(ID), mb: 1 }, { path: "/meter" })).status, 400);
+  assert.equal((await call(e, { ...login(ID, { tok }), mb: 5001 }, { path: "/meter" })).status, 400);
+  assert.equal((await call(e, { ...login(ID, { tok }), mb: 1.5 }, { path: "/meter" })).status, 400);
+  assert.equal((await call(e, { ...login(ID, { tok: "x".repeat(40) }), mb: 1 }, { path: "/meter" })).status, 401);
+  assert.equal((await call(e, { ...login(ID, { tok }), mb: 0 }, { path: "/meter" })).data.mb, 250);
+  assert.equal((await handle(req(null, "GET", "/meter"), e, NOW)).status, 405);
+});
+
+await test("the month's count starts over in a new month, and costs no TURN login", async () => {
+  const e = env();
+  const tok = await tokenFor(e, ID);
+  const calls = upstreamCalls.length;
+  await call(e, { ...login(ID, { tok }), mb: 700 }, { path: "/meter" });
+  const later = NOW + 40 * 86400;
+  const tok2 = await tokenFor(e, ID, later - 86400, later + TOKEN_TTL);
+  const r = await call(e, { ...login(ID, { tok: tok2, now: later }), mb: 1 }, { path: "/meter", now: later });
+  assert.equal(r.data.mb, 1);
+  assert.equal(upstreamCalls.length, calls);
 });
 
 console.log(passed + " tests passed");

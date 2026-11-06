@@ -254,7 +254,7 @@ Rectangle {
             Text {
                 textFormat: Text.PlainText
                 width: parent.width; elide: Text.ElideRight
-                text: sm.videosOff ? "Videos are off while Ultra privacy is on." : "Full size close by. Others get up to 5 minutes."
+                text: sm.videosOff ? "Videos are off while Ultra privacy is on." : "Full quality for Family and trusted people. Others get up to 5 minutes."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
             }
             Text {

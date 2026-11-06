@@ -319,7 +319,100 @@ QString FileLink::methodLabel(const QString &path, qint64 size)
         return TorFiles::nearbyLabel();
     if (path == QLatin1String("direct") || path == QLatin1String("internet"))
         return TorFiles::trustedLabel();
+    if (path == QLatin1String("relay"))
+        return QStringLiteral("Encrypted relay");
     return TorFiles::torLabel(size);
+}
+
+bool FileLink::relayMay(const QString &choice, bool ultra, bool family, bool peerCan, bool over)
+{
+    return !ultra && choice != QLatin1String("tor") && family && peerCan && !over;
+}
+
+bool FileLink::torMay(const QString &choice, bool ultra, bool family, bool peerCan)
+{
+    return ultra || choice == QLatin1String("tor") || !family || !peerCan;
+}
+
+bool FileLink::relayPlan(const QString &peer, const QString &group) const
+{
+    const QString choice = routeFor ? routeFor(peer, group) : QStringLiteral("auto");
+    return relayMay(choice, !UltraPrivacy::directAllowed(), mayAlways(badge(peer)), hasF5 && hasF5(peer), relayOver());
+}
+
+// ------------------------------------------------------------------ the month's relay use
+
+namespace
+{
+QString monthNow()
+{
+    return QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyy-MM"));
+}
+}
+
+void FileLink::meterRoll() const
+{
+    QSettings s = Settings::store();
+    if (s.value(QStringLiteral("relay/month")).toString() != monthNow()) {
+        s.setValue(QStringLiteral("relay/month"), monthNow());
+        s.setValue(QStringLiteral("relay/bytes"), 0);
+        s.setValue(QStringLiteral("relay/shared"), 0);
+        s.setValue(QStringLiteral("relay/waiting"), 0);
+    }
+}
+
+void FileLink::relayUsed(qint64 bytes)
+{
+    m_meterHold += bytes;
+    if (m_meterHold < 1000000)
+        return;
+    meterRoll();
+    QSettings s = Settings::store();
+    s.setValue(QStringLiteral("relay/bytes"), s.value(QStringLiteral("relay/bytes")).toLongLong() + m_meterHold);
+    const qint64 waiting = s.value(QStringLiteral("relay/waiting")).toLongLong() + m_meterHold;
+    s.setValue(QStringLiteral("relay/waiting"), waiting);
+    m_meterHold = 0;
+    if (waiting >= 200 * 1000000LL)
+        reportMeter(waiting);
+}
+
+void FileLink::reportMeter(qint64 bytes) const
+{
+    if (!relayMeter)
+        return;
+    const qint64 mb = bytes / 1000000;
+    QPointer<FileLink> self(const_cast<FileLink *>(this));
+    relayMeter(mb, [self, mb](qint64 total) {
+        if (!self || total < 0)
+            return;
+        QSettings s = Settings::store();
+        s.setValue(QStringLiteral("relay/shared"), total * 1000000);
+        s.setValue(QStringLiteral("relay/waiting"), qMax<qint64>(0, s.value(QStringLiteral("relay/waiting")).toLongLong() - mb * 1000000));
+    });
+}
+
+bool FileLink::relayOver() const
+{
+    meterRoll();
+    const qint64 t = now();
+    if (t - m_meterAsked > 6 * 3600000) {
+        m_meterAsked = t;
+        reportMeter(0);
+    }
+    QSettings s = Settings::store();
+    return qMax(s.value(QStringLiteral("relay/bytes")).toLongLong(), s.value(QStringLiteral("relay/shared")).toLongLong()) >= kRelayLimitBytes;
+}
+
+QString FileLink::relayNote() const
+{
+    meterRoll();
+    QSettings s = Settings::store();
+    const qint64 used = qMax(s.value(QStringLiteral("relay/bytes")).toLongLong(), s.value(QStringLiteral("relay/shared")).toLongLong());
+    if (used >= kRelayLimitBytes)
+        return QStringLiteral("Sending through the relay is near its free limit this month, so relayed videos go as a 720p copy until next month.");
+    if (used >= 1000000000)
+        return QStringLiteral("Through the relay this month: %1 GB of 800 GB.").arg(used / 1000000000);
+    return QString();
 }
 
 QString FileLink::badge(const QString &peer) const
@@ -344,7 +437,7 @@ QString FileLink::reachNote(const QString &peer) const
     if (online && !online())
         return noPathText();
     const bool direct = trusted && trusted(peer) && UltraPrivacy::directAllowed();
-    return direct || !torAllowed || torAllowed() ? QString() : noPathText();
+    return direct || !torAllowed || torAllowed() || relayPlan(peer, QString()) ? QString() : noPathText();
 }
 
 QString FileLink::torWarning(const QString &peer, double size) const
@@ -468,6 +561,19 @@ bool FileLink::nameOk(const QJsonValue &v)
     return true;
 }
 
+bool FileLink::relayOk(const QJsonObject &p)
+{
+    // Their relayed address, numbers only (never a name to look up).
+    const QString a = jstr(p, "a");
+    if (a.size() < 7 || a.size() > 45)
+        return false;
+    for (const QChar c : a)
+        if (!c.isDigit() && !(c >= QLatin1Char('a') && c <= QLatin1Char('f')) && !(c >= QLatin1Char('A') && c <= QLatin1Char('F')) && c != QLatin1Char('.') && c != QLatin1Char(':'))
+            return false;
+    const int port = p.value(QStringLiteral("p")).toInt();
+    return port >= 1 && port <= 65535;
+}
+
 bool FileLink::ok(const QJsonObject &p)
 {
     if (!GroupWire::isLogicalId(jstr(p, "id")))
@@ -496,6 +602,8 @@ bool FileLink::ok(const QJsonObject &p)
     // Cap f4 (section 30): the card asks them now; the sender's one-time onion service.
     if (t == QLatin1String("tor"))
         return TorFiles::torOk(p);
+    if (t == QLatin1String("relay"))
+        return relayOk(p);
     return t == QLatin1String("decline") || t == QLatin1String("done") || t == QLatin1String("wait");
 }
 
@@ -542,6 +650,13 @@ struct FileLink::Xfer {
     // their service's address (theirs), the stream, and its own packet counter; when something last moved; the receiving
     // card's badge and how it comes.
     bool tor = false, seen = false, onTor = false;
+    // Cap f5: the call relay may carry it; its allocation, the other side's relayed address, and how long the direct way gets.
+    bool relay = false, onRelay = false, relayAsking = false, renewing = false, family = false;
+    TurnClient *turn = nullptr;
+    QTimer *relayWait = nullptr;
+    Stun::Address relayTo;
+    qint64 legExpires = 0;
+    int punchMs = kPunchMs;
     TorOnion *onion = nullptr;
     TorStream *stream = nullptr;
     QString onionHost, badge, method;
@@ -578,6 +693,8 @@ FileLink::FileLink(Chat *chat, QObject *parent)
     isContact = [chat](const QString &peer) { return chat->isContact(peer); };
     // Cap f4 (section 30). Muninn says the kids' TV caps (k2), Huginn doesn't: what their app runs on, when known.
     hasF4 = [chat](const QString &peer) { return chat->hasCap(peer, QLatin1String(TorFiles::kCap)); };
+    hasF5 = [chat](const QString &peer) { return chat->hasCap(peer, QStringLiteral("f5")); };
+    routeFor = [chat](const QString &peer, const QString &group) { return chat->mediaRoute(group.isEmpty() ? peer : QStringLiteral("g:") + group); };
     deviceWord = [chat](const QString &peer) {
         return !chat->capsKnown(peer) ? QString() : chat->hasCap(peer, QStringLiteral("k2")) ? QStringLiteral("phone") : QStringLiteral("computer");
     };
@@ -954,10 +1071,15 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     }
     // The path (30.1): Nearby (their app must know the "lan" candidate), Trusted direct, then Tor. Ultra privacy: never
     // straight over the internet (no STUN, no address swapped); Nearby and Tor still work.
-    const bool trust = trusted && trusted(peer) && UltraPrivacy::directAllowed();
+    const QString choice = routeFor ? routeFor(peer, group) : QStringLiteral("auto");
+    const bool ultra = !UltraPrivacy::directAllowed();
+    const bool family = mayAlways(badge(peer));
+    const bool peerCan = hasF5 && hasF5(peer);
+    const bool trust = trusted && trusted(peer) && !ultra && choice != QLatin1String("tor");
     const bool sameWifi = !lanOf(peer).isEmpty() && hasF2 && hasF2(peer);
-    const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal;
-    if (!sameWifi && !trust && !tor) {
+    const bool viaRelay = relayMay(choice, ultra, family, peerCan, relayOver()) && !testLocal;
+    const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal && torMay(choice, ultra, family, peerCan);
+    if (!sameWifi && !trust && !tor && !viaRelay) {
         addFailed(peer, name, fi.size(), noPathText() + QStringLiteral(". Try again when you're on the same Wi-Fi or online."), path, false, QString(), group);
         return QString();
     }
@@ -978,6 +1100,9 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     // Close by and not trusted with each other's internet addresses: only the same Wi-Fi.
     x->lanOnly = !trust;
     x->tor = tor;
+    x->relay = viaRelay;
+    x->family = family;
+    x->punchMs = viaRelay && choice == QLatin1String("fastest") ? kFastestPunchMs : kPunchMs;
     if (x->lanOnly && sameWifi)
         x->route = route;
     x->state = QStringLiteral("connecting");
@@ -1111,7 +1236,7 @@ void FileLink::startSocket(Xfer *x, std::function<void(QJsonArray)> ready)
 
 void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
 {
-    if (cands.isEmpty() && !x->tor) {
+    if (cands.isEmpty() && !x->tor && !x->relay) {
         fallBack(x, QStringLiteral("No internet connection that can go direct. Try on the same Wi-Fi."));
         return;
     }
@@ -1123,6 +1248,8 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
         offer.insert(QStringLiteral("g"), x->group);   // cap f2 (27.2): the group it's for
     if (x->vid > 0)
         offer.insert(QStringLiteral("vid"), x->vid);   // cap v3 (29.3): a full-size video
+    if (x->relay)
+        offer.insert(QStringLiteral("rl"), 1);         // cap f5: the call relay may carry it
     signal(x->peer, offer);
     x->state = QStringLiteral("offered");
     x->note.clear();
@@ -1140,7 +1267,8 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
                                                                                   : QStringLiteral("They're offline. Try again when they're back."));
     });
     // Cap v3: a full-size video to an older app waits only as long as a small file; then its relay copy goes instead.
-    x->wait->start(f4 ? kLongAnswerMs : x->back ? kRelayAfterMs : answerMs(x->size, hasF3(x->peer)));
+    // Family and trusted contacts: a device that's offline gets it when it's back, up to a week.
+    x->wait->start(x->family ? kFamilyWaitMs : f4 ? kLongAnswerMs : x->back ? kRelayAfterMs : answerMs(x->size, hasF3(x->peer)));
     if (f4) {
         x->reoffer = new QTimer(this);
         const qint64 began = now();
@@ -1190,6 +1318,15 @@ void FileLink::ultraOn()
         if (!x || x->ended || x->lanOnly || testLocal)
             continue;
         x->lanOnly = true;
+        // Cap f5: never through the call relay while Ultra privacy is on.
+        if (x->turn) {
+            x->turn->disconnect(this);
+            x->turn->stop();
+            x->turn->deleteLater();
+            x->turn = nullptr;
+        }
+        x->relay = false;
+        x->onRelay = false;
         // Cap f4: Tor carries it from here when it isn't on this Wi-Fi.
         if (x->tor) {
             if (x->probe) {
@@ -1265,6 +1402,8 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         const Stun::Address lan = lanTarget(lanOf(from), cands);
         // Cap f4: Tor can carry it (both say f4, and Tor may start here).
         const bool tor = hasF4 && hasF4(from) && (!torAllowed || torAllowed()) && !testLocal;
+        // Cap f5: they want the call relay, and they're Family or trusted here too.
+        const bool viaRelay = p.value(QStringLiteral("rl")).toInt() == 1 && hasF5 && hasF5(from) && mayAlways(badge(from)) && UltraPrivacy::directAllowed();
         const QString g = jstr(p, "g");
         // The sender's name made safe at once (no hidden direction marks that turn "gpj.scr" into "rcs.jpg", no ":"
         // streams or device names), so what is shown and saved is what the file really is.
@@ -1283,7 +1422,7 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
                 return;
             }
         }
-        if (!trust && !lan.valid() && !tor) {
+        if (!trust && !lan.valid() && !tor && !viaRelay) {
             // Addresses are only swapped with someone trusted: say no (an older sender says its own words).
             signal(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}});
             if (!UltraPrivacy::directAllowed() && trusted && trusted(from) && now() - m_ultraTold.value(from) > 3600000) {
@@ -1320,17 +1459,18 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         }
         x->lanOnly = !trust;
         x->tor = tor;
+        x->relay = viaRelay;
         if (x->lanOnly && lan.valid())
             x->route = QStringLiteral("direct");
         x->mine = false;
         x->dir = 1;
         x->badge = badge(from);
-        x->method = methodLabel(lan.valid() ? QStringLiteral("lan") : trust && !x->theirs.isEmpty() ? QStringLiteral("direct") : QStringLiteral("tor"), size);
+        x->method = methodLabel(lan.valid() ? QStringLiteral("lan") : trust && !x->theirs.isEmpty() ? QStringLiteral("direct") : viaRelay ? QStringLiteral("relay") : QStringLiteral("tor"), size);
         m_x.insert(id, x);
-        // 1.42 (owner): every file and video asks first. Only someone set to Always (trusted or Family) skips the card,
-        // and the rest of a file already accepted (cap f3). Data saver still asks.
+        // Family and trusted contacts' files arrive by themselves, and so does the rest of a file already accepted (cap f3).
+        // Everyone else's ask first. Data saver still asks.
         const bool saving = !testLocal && Settings::dataSaverOn();
-        const bool always = mayAlways(x->badge) && alwaysFrom && alwaysFrom(from);
+        const bool always = mayAlways(x->badge);
         const bool resuming = !partialFor(x).isEmpty();
         if (!(always || resuming) || saving) {
             // Cap f4: the sender hears the card is up ("Waiting for Ana to accept", not "Sends when...").
@@ -1357,6 +1497,9 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
             return;
         }
         m_answered.insert(id);
+        // Cap f4: the sender hears it's there, so a card that waits stops saying so.
+        if (hasF4 && hasF4(from))
+            signal(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("wait")}, {QStringLiteral("id"), id}});
         x->state = QStringLiteral("connecting");
         x->note = QStringLiteral("From %1").arg(who(from));
         put(x, true);
@@ -1367,6 +1510,24 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
     Xfer *x = m_x.value(id);
     if (!x || x->peer != from)
         return;
+    // Cap f5: their relayed address for this file. A new one (they renewed) just moves where packets go.
+    if (t == QLatin1String("relay")) {
+        if (!x->relay || !relayOk(p))
+            return;
+        const QHostAddress h(jstr(p, "a"));
+        if (h.isNull())
+            return;
+        const Stun::Address a = CallNet::fromHost(h, quint16(p.value(QStringLiteral("p")).toInt()));
+        const bool moved = x->relayTo.valid() && !(x->relayTo == a);
+        x->relayTo = a;
+        if (x->turn && x->turn->ready()) {
+            if (!x->onRelay || moved)
+                relayUp(x);
+        } else if (!x->relayAsking && !x->key.isEmpty()) {
+            startRelay(x);
+        }
+        return;
+    }
     // Cap f4: the sender's one-time onion service for a file of theirs.
     if (t == QLatin1String("tor")) {
         if (x->mine || !x->tor || !TorFiles::torOk(p))
@@ -1407,6 +1568,10 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         }
         if (x->wait)
             x->wait->stop();
+        if (x->theirs.isEmpty() && x->relay) {
+            startRelay(x);
+            return;
+        }
         if (x->theirs.isEmpty() && x->tor) {
             startTor(x);
             return;
@@ -1496,6 +1661,11 @@ void FileLink::acceptOffer(Xfer *x)
 // authentic probe that comes back says which address works.
 void FileLink::startPunch(Xfer *x)
 {
+    // Cap f5: no way straight: the call relay, when it may carry this one.
+    if (x->theirs.isEmpty() && x->relay) {
+        startRelay(x);
+        return;
+    }
     // Cap f4: no way straight: Tor (mine: a one-time service; theirs: waits for its address).
     if (x->theirs.isEmpty() && x->tor) {
         startTor(x);
@@ -1512,15 +1682,178 @@ void FileLink::startPunch(Xfer *x)
     x->note = x->lanOnly ? QStringLiteral("Connecting to %1 on this Wi-Fi").arg(who(x->peer)) : QStringLiteral("Connecting straight to %1").arg(who(x->peer));
     put(x, true);
     x->punching = true;
-    x->until = now() + kPunchMs;
+    x->until = now() + x->punchMs;
+    needTick(x);
+    x->tick->start(100);
+    punchTick(x);
+}
+
+void FileLink::needTick(Xfer *x)
+{
+    if (x->tick)
+        return;
     x->tick = new QTimer(this);
     const QString id = x->id;
     connect(x->tick, &QTimer::timeout, this, [this, id] {
         if (Xfer *x = m_x.value(id))
             x->punching ? punchTick(x) : dataTick(x);
     });
+}
+
+// ------------------------------------------------------------------ cap f5: the call relay
+
+// An allocation for this transfer: my relayed address goes in a sealed `relay` message (again until theirs comes), and both
+// prove they hear each other with the file's own probes. The relay sees only sealed pieces.
+void FileLink::startRelay(Xfer *x)
+{
+    if (x->ended || x->turn || x->relayAsking)
+        return;
+    if (!relayLogin || !UltraPrivacy::directAllowed()) {
+        relayGaveUp(x);
+        return;
+    }
+    x->relayAsking = true;
+    x->punching = false;
+    if (!x->moving) {
+        x->state = QStringLiteral("connecting");
+        x->note = QStringLiteral("Connecting through the relay…");
+        put(x, true);
+    }
+    const QString id = x->id;
+    relayLogin([this, id](const TurnLogin &login, const QString &) {
+        Xfer *x = m_x.value(id);
+        if (!x)
+            return;
+        x->relayAsking = false;
+        if (!login.valid())
+            relayGaveUp(x);
+        else
+            openLeg(x, login);
+    });
+}
+
+void FileLink::openLeg(Xfer *x, const TurnLogin &login)
+{
+    auto *t = new TurnClient(login, this);
+    const QString id = x->id;
+    const qint64 expires = login.expiresMs;
+    connect(t, &TurnClient::allocated, this, [this, id, t, expires] {
+        Xfer *x = m_x.value(id);
+        if (!x) {
+            t->stop();
+            t->deleteLater();
+            return;
+        }
+        TurnClient *old = x->turn;
+        x->turn = t;
+        x->legExpires = expires;
+        x->renewing = false;
+        if (old) {
+            old->disconnect(this);
+            old->stop();
+            old->deleteLater();
+        }
+        const QJsonObject msg{{QStringLiteral("t"), QStringLiteral("relay")}, {QStringLiteral("id"), id},
+                              {QStringLiteral("a"), CallNet::toHost(t->relayed()).toString()}, {QStringLiteral("p"), int(t->relayed().port)}};
+        signal(x->peer, msg);
+        if (x->relayTo.valid()) {
+            relayUp(x);
+            return;
+        }
+        // Their address hasn't come: said again every few seconds, for a while.
+        auto *again = new QTimer(this);
+        x->relayWait = again;
+        const qint64 until = now() + kRelayWaitMs;
+        connect(again, &QTimer::timeout, this, [this, id, msg, until] {
+            Xfer *x = m_x.value(id);
+            if (!x)
+                return;
+            if (now() > until) {
+                relayGaveUp(x);
+                return;
+            }
+            signal(x->peer, msg);
+        });
+        again->start(8000);
+    });
+    connect(t, &TurnClient::failed, this, [this, id, t](const QString &) {
+        Xfer *x = m_x.value(id);
+        t->deleteLater();
+        if (!x || x->turn == t)
+            return;
+        if (x->renewing)
+            x->renewing = false;   // the leg in use goes on; asked again on the next tick
+        else
+            relayGaveUp(x);
+    });
+    connect(t, &TurnClient::data, this, [this, id](const Stun::Address &, const QByteArray &bytes) {
+        if (Xfer *x = m_x.value(id))
+            onRelayData(x, bytes);
+    });
+    t->start();
+}
+
+void FileLink::relayUp(Xfer *x)
+{
+    if (x->relayWait) {
+        x->relayWait->deleteLater();
+        x->relayWait = nullptr;
+    }
+    x->turn->addPeer(x->relayTo);
+    x->onRelay = true;
+    x->to = x->relayTo;
+    x->route = QStringLiteral("relay");
+    x->lastHeard = now();
+    if (x->moving) {
+        x->note.clear();
+        put(x, true);
+        return;
+    }
+    x->theirs = {x->relayTo};
+    x->found = false;
+    x->heardBack = 0;
+    x->punching = true;
+    x->until = now() + kPunchMs;
+    needTick(x);
     x->tick->start(100);
     punchTick(x);
+}
+
+void FileLink::relayGaveUp(Xfer *x)
+{
+    x->relay = false;
+    x->onRelay = false;
+    if (x->relayWait) {
+        x->relayWait->deleteLater();
+        x->relayWait = nullptr;
+    }
+    if (x->moving)
+        return;   // the way it's on goes on; silence decides from here
+    if (x->tor)
+        startTor(x);
+    else if (x->mine)
+        fallBack(x, QStringLiteral("Couldn't reach them right now. It goes again by itself."));
+    else
+        fail(x, QStringLiteral("Couldn't connect to %1. It goes on when they send it again.").arg(who(x->peer)));
+}
+
+void FileLink::onRelayData(Xfer *x, const QByteArray &bytes)
+{
+    relayUsed(bytes.size());
+    if (x->key.isEmpty())
+        return;
+    quint8 type = 0;
+    QByteArray payload;
+    if (!open(x->key, x->id, 1 - x->dir, bytes, &type, &payload))
+        return;
+    if (x->punching) {
+        x->to = x->relayTo;
+        x->found = true;
+        if ((type != Probe || ++x->heardBack >= 3) && !startData(x))
+            return;
+    }
+    if (x->moving)
+        takePacket(x, type, payload);
 }
 
 void FileLink::punchTick(Xfer *x)
@@ -1528,6 +1861,10 @@ void FileLink::punchTick(Xfer *x)
     if (now() > x->until) {
         if (x->found)
             startData(x);
+        else if (x->relay && !x->onRelay)
+            startRelay(x);   // cap f5: through the call relay
+        else if (x->onRelay)
+            relayGaveUp(x);
         else if (x->tor)
             startTor(x);   // cap f4: on over Tor
         else if (x->mine)
@@ -1545,8 +1882,14 @@ void FileLink::punchTick(Xfer *x)
 void FileLink::sendPacket(Xfer *x, quint8 type, const QByteArray &payload, const Stun::Address &to)
 {
     const QByteArray p = seal(x->key, x->id, type, x->dir, x->seq++, payload);
-    if (!p.isEmpty() && x->sock)
+    if (p.isEmpty())
+        return;
+    if (x->onRelay && x->turn) {
+        x->turn->send(to, p);
+        relayUsed(p.size());
+    } else if (x->sock) {
         x->sock->writeDatagram(p, CallNet::toHost(to), to.port);
+    }
 }
 
 bool FileLink::startData(Xfer *x)
@@ -1585,6 +1928,24 @@ bool FileLink::startData(Xfer *x)
 void FileLink::dataTick(Xfer *x)
 {
     const qint64 t = now();
+    // Cap f5: the direct way went quiet: on through the call relay. On it already: a new allocation before the login ends.
+    if (x->relay && !x->paused && !x->held) {
+        if (!x->onRelay && !x->turn && !x->relayAsking && t - x->lastHeard > kRelaySwitchMs)
+            startRelay(x);
+        if (x->onRelay && !x->renewing && relayLogin && x->legExpires - t < RelayCredentials::kRenewBeforeMs) {
+            x->renewing = true;
+            const QString id = x->id;
+            relayLogin([this, id](const TurnLogin &login, const QString &) {
+                Xfer *x = m_x.value(id);
+                if (!x)
+                    return;
+                if (login.valid())
+                    openLeg(x, login);
+                else
+                    x->renewing = false;
+            });
+        }
+    }
     // Cap f4: quiet too long (they left the Wi-Fi, a router dropped the way through), or the sender already went on
     // over Tor: on over Tor.
     if (x->tor && !x->paused && !x->held
@@ -1718,12 +2079,20 @@ void FileLink::onDatagram(Xfer *x)
         }
         if (!x->moving)
             continue;
+        if (!takePacket(x, type, payload))
+            return;
+    }
+}
+
+bool FileLink::takePacket(Xfer *x, quint8 type, const QByteArray &payload)
+{
+    {
         x->lastHeard = now();
         // Cap f2 (27.5): they paused, or go on again.
         if (type == Hold && !payload.isEmpty()) {
             x->held = payload.at(0) == 1;
             put(x, true);
-            continue;
+            return true;
         }
         if (x->mine) {
             if (type == Ack && x->held) {
@@ -1744,7 +2113,7 @@ void FileLink::onDatagram(Xfer *x)
             if (x->s->done()) {
                 x->done = x->size;
                 finish(x);
-                return;
+                return false;
             }
         } else if (type == Data && payload.size() > 4) {
             const int i = int(qFromBigEndian<quint32>(payload.constData()));
@@ -1754,17 +2123,18 @@ void FileLink::onDatagram(Xfer *x)
                 if (!x->file->seek(at) || x->file->write(payload.constData() + 4, payload.size() - 4) != payload.size() - 4) {
                     signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), x->id}});
                     fail(x, QStringLiteral("Not enough space to save %1.").arg(x->name));
-                    return;
+                    return false;
                 }
                 if (++x->fresh >= 16 && !x->paused)
                     sendAck(x);
             }
             if (x->r->done()) {
                 receivedAll(x);
-                return;
+                return false;
             }
         }
     }
+    return true;
 }
 
 bool FileLink::prepareData(Xfer *x)
@@ -2069,6 +2439,13 @@ void FileLink::end(Xfer *x)
         x->torWait->deleteLater();
     if (x->reoffer)
         x->reoffer->deleteLater();
+    if (x->relayWait)
+        x->relayWait->deleteLater();
+    if (x->turn) {
+        x->turn->disconnect(this);
+        x->turn->stop();
+        x->turn->deleteLater();
+    }
     UltraPrivacy::releaseTor(x->id);
     if (x->tick)
         x->tick->deleteLater();
@@ -2094,9 +2471,32 @@ void FileLink::fail(Xfer *x, const QString &why, bool tell)
         QFile::remove(x->path);
     }
     put(x, true);
+    const bool again = x->mine && mayAlways(badge(x->peer));
+    const QString id = x->id, path = x->path;
     end(x);
+    // A send to Family or a trusted contact is never a dead end: it goes again by itself, after a wait that grows.
+    if (again && autoRetry(id, path))
+        return;
     if (tell)
         Q_EMIT notice(why);
+}
+
+bool FileLink::autoRetry(const QString &id, const QString &path)
+{
+    if (path.isEmpty() || testLocal || !canRetry(id))
+        return false;
+    static const int waits[] = {60000, 300000, 900000, 3600000};
+    const int n = m_autoTries.value(path);
+    m_autoTries.insert(path, n + 1);
+    QTimer::singleShot(waits[qMin(n, 3)], this, [this, id, path] {
+        if (!canRetry(id))
+            return;
+        if (online && !online())
+            autoRetry(id, path);
+        else
+            retry(id);
+    });
+    return true;
 }
 
 void FileLink::accept(const QString &id)

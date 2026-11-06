@@ -37,7 +37,7 @@ class SendMenuTest {
         assertEquals("1 photo, 2 videos, 1 GIF", pick.summary(1, 2, 1))
         assertEquals("3 GIFs", pick.summary(0, 0, 3))
         assertEquals("", pick.summary(0, 0, 0))
-        assertEquals("Full size close by. Others get up to 5 minutes.", pick.NOTE)
+        assertEquals("Full quality for Family and trusted people. Others get up to 5 minutes.", pick.NOTE)
     }
 
     @Test fun videoLengths() {

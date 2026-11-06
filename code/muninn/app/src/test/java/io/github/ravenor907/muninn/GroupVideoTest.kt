@@ -140,7 +140,7 @@ class GroupVideoTest {
         val plan = GroupVideo.plan(listOf(wifi, trusted, far, oldFar), unmetered = false, ms = 15_000)
         assertEquals(mapOf("a" to GroupVideo.FULL, "b" to GroupVideo.SMALL, "c" to GroupVideo.SMALL, "h" to GroupVideo.RELAY), plan)
         val said = GroupVideo.summary(plan) { it.uppercase() }
-        assertTrue(said, said.contains("Full size (1080p) to A") && said.contains("720p copy to B and C over Tor") && said.contains("to H, whose app is older"))
+        assertTrue(said, said.contains("Full quality to A") && said.contains("720p copy to B and C over Tor") && said.contains("to H, whose app is older"))
         assertEquals("Nobody else is here yet.", GroupVideo.summary(emptyMap()) { it })
         assertEquals("A, B and 3 more", GroupVideo.names(listOf("A", "B", "C", "D", "E")))
         // Never cut: over 5 minutes asks only when someone isn't direct; bigger than 720p asks only when someone gets a copy.
@@ -199,5 +199,16 @@ class GroupVideoTest {
         assertTrue(GroupVideo.CAP in Proto06.caps(Proto06.CAPS))
         // The 720p copy's path is FileLink's Tor cap (f4).
         assertEquals(io.github.ravenor907.muninn.net.TorFiles.CAP, GroupVideo.NEW_PATH_CAP)
+    }
+
+    @Test
+    fun familyGetsFullQualityAnyLengthOnAnyNetwork() {
+        val fam = GroupVideo.Member("a", sameWifi = false, trusted = false, files = true, v3 = true, newPath = true, family = true)
+        assertEquals(GroupVideo.FULL, GroupVideo.delivery(fam, false, 3 * 3_600_000))
+        // A Kids' Device stays on its own copy, whoever it is.
+        assertEquals(GroupVideo.SMALL, GroupVideo.delivery(fam.copy(kid = true), false, 60_000))
+        // Past the relay's month "family" is off: the 720p copy, as for anyone not direct.
+        assertEquals(GroupVideo.SMALL, GroupVideo.delivery(fam.copy(family = false), false, 60_000))
+        assertFalse(GroupVideo.tooLong(3 * 3_600_000, mapOf("a" to GroupVideo.FULL)))
     }
 }

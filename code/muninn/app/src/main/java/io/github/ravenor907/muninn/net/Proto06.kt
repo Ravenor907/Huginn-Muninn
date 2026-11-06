@@ -114,9 +114,9 @@ object Proto06 {
      * What this app says it speaks, next to cap:"r1" (which must stay exactly that). Groups and
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
-    // Every Huginn (1.3 and later) keeps only the first 48 tokens (chatwire.cpp). 48 are said now (the limit), so a new token Huginn
-    // must read goes before "k1", or the total stays at 48 or fewer (Proto06Test checks the count).
-    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 g3 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1 f3 g4 n1 n2 u1 k11 k12 k13 k14 p2 h1 r2 v3 k15 f4 k16"
+    // Older Huginns keep only the first 48 tokens (chatwire.cpp) and ignore the rest, which is safe: a token past them just isn't
+    // known to that app. Huginn keeps up to 96 now, so new tokens go at the end (Proto06Test checks the order and the count).
+    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 g3 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1 f3 g4 n1 n2 u1 k11 k12 k13 k14 p2 h1 r2 v3 k15 f4 k16 f5"
     /** Cap j1: group invite links and "Members can invite" (section 17). */
     const val J1 = "j1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()

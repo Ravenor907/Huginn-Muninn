@@ -21,6 +21,8 @@ class QFile;
 class QTimer;
 class QUdpSocket;
 class StunProbe;
+class TurnClient;
+struct TurnLogin;
 
 // Encrypted file sharing (caps f1, f2, f3 and f4; shared/docs/protocol.md sections 14, 27 and 30), the same as
 // Muninn's FileLink.kt. Never through the relays (1.42). In this order: Nearby (the same Wi-Fi), Trusted direct (below),
@@ -72,6 +74,19 @@ public:
     static constexpr qint64 kAutoBytes = 50LL * 1024 * 1024;
     // Cap f4: quiet this long on Nearby or Trusted direct, it goes on over Tor; a queued offer goes again this often.
     static constexpr int kSwitchMs = 10000;
+    // Cap f5 (MediaRoute.kt has the same): how long the direct way gets on Fastest, how long it may go quiet before the
+    // relay, how long a side waits for the other's relay address, an offline person's wait, and the month's limit.
+    static constexpr int kFastestPunchMs = 3000;
+    static constexpr int kRelaySwitchMs = 6000;
+    static constexpr int kRelayWaitMs = 45000;
+    static constexpr int kFamilyWaitMs = 7 * 24 * 3600000;
+    static constexpr qint64 kRelayLimitBytes = 800 * 1000000000LL;
+    static bool relayOk(const QJsonObject &p);
+    static bool relayMay(const QString &choice, bool ultra, bool family, bool peerCan, bool over);
+    static bool torMay(const QString &choice, bool ultra, bool family, bool peerCan);
+    bool relayPlan(const QString &peer, const QString &group) const;
+    bool relayOver() const;
+    QString relayNote() const;
     static constexpr int kReofferMs = 2 * 3600000;
     // The receiving card's words (the same as Muninn's FileLink): "a ZIP file", the risky types and their note, the trust
     // badges (only Trusted and Family may be set to Always), the queued sender's note, and each path's label.
@@ -303,6 +318,12 @@ public:
     // Cap f4 (section 30): their app says f4; Tor may start here for a file; their trust badge (Trusted, Family, Contact,
     // Not trusted); "phone" or "computer" when known; whether this computer is online.
     std::function<bool(const QString &peer)> hasF4;
+    // Cap f5 (section 32): their app can carry a file over the call relay; "auto", "fastest" or "tor" for this chat; a
+    // login, as a call gets one; the month's relayed media (mb added, 0 only asks; done gets the total in MB, or -1).
+    std::function<bool(const QString &peer)> hasF5;
+    std::function<QString(const QString &peer, const QString &group)> routeFor;
+    std::function<void(std::function<void(const TurnLogin &, const QString &)>)> relayLogin;
+    std::function<void(qint64 mb, std::function<void(qint64)>)> relayMeter;
     std::function<bool()> torAllowed;
     std::function<QString(const QString &peer)> badgeOf;
     std::function<QString(const QString &peer)> deviceWord;
@@ -329,6 +350,21 @@ private:
     void sendOffer(Xfer *x, const QJsonArray &cands);
     void acceptOffer(Xfer *x);
     void startPunch(Xfer *x);
+    void needTick(Xfer *x);
+    // Cap f5: the file through a call relay allocation (protocol.md 32).
+    void startRelay(Xfer *x);
+    void openLeg(Xfer *x, const TurnLogin &login);
+    void relayUp(Xfer *x);
+    void relayGaveUp(Xfer *x);
+    void onRelayData(Xfer *x, const QByteArray &bytes);
+    bool takePacket(Xfer *x, quint8 type, const QByteArray &payload);
+    bool autoRetry(const QString &id, const QString &path);
+    void meterRoll() const;
+    void relayUsed(qint64 bytes);
+    void reportMeter(qint64 bytes) const;
+    QHash<QString, int> m_autoTries;
+    qint64 m_meterHold = 0;
+    mutable qint64 m_meterAsked = 0;
     void punchTick(Xfer *x);
     bool startData(Xfer *x);
     void dataTick(Xfer *x);

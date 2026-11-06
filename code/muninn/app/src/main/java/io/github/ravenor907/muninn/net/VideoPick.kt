@@ -169,9 +169,14 @@ object VideoPick {
 
     /**
      * The full copy (1080p30 at most, any length) of [uri] into [out]: as it is (without its location and camera details)
-     * when it's plain H.264 within the limits, else converted. Never cut. Null when made, else what to say.
+     * when it's plain H.264 within the limits, else converted. Never cut. [original]: for Family and trusted contacts, as it
+     * is at any size a file can be. Null when made, else what to say.
      */
-    suspend fun fullCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, progress: (Float) -> Unit): String? {
+    suspend fun fullCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, original: Boolean = false, progress: (Float) -> Unit): String? {
+        if (original) {
+            if (copy(context, uri, out) && ready(out) && out.length() in 1..FileLink.MAX_BYTES) return null
+            out.delete()
+        }
         if (GroupVideo.fitsFull(info)) {
             if (!copy(context, uri, out)) return "That video can't be read."
             if (ready(out) && out.length() in 1..GroupVideo.FULL_MAX_BYTES) return null

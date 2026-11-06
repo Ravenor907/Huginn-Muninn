@@ -6,6 +6,7 @@
 // Round 19: the plan reads only the file's boxes (no whole-file read on the window's thread); the copy that goes is
 // made off it, with its location and camera details taken out (GroupVideo::scrub), as Huginn does for pictures. One
 // cleaned copy serves everyone getting it by FileLink.
+#include "settings.h"
 #include "chat.h"
 #include "filelink.h"
 #include "groupvideo.h"
@@ -92,6 +93,9 @@ GroupVideo::Member Chat::videoMember(const QString &key, bool group) const
     m.trusted = m_files && m_files->trusted && m_files->trusted(key) && UltraPrivacy::directAllowed();
     m.v3 = hasCap(key, QString::fromLatin1(GroupVideo::kCap));
     m.newPath = hasCap(key, QString::fromLatin1(GroupVideo::kNewPathCap));
+    // Family and trusted, with an app that can go through the call relay: full quality, whatever the length and the network,
+    // until the relay's month is used up or Data saver says otherwise.
+    m.family = m_files && m_files->relayPlan(key, QString()) && !Settings::dataSaverOn();
     return m;
 }
 

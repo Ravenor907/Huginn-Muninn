@@ -143,6 +143,11 @@ public:
     // A new code with an invite good for an hour: a leaked code stops working after that.
     Q_INVOKABLE QString newLink();
     QString netStatus() const;
+    // Send media (Settings › Files, and each chat's own choice): "auto", "fastest" or "tor".
+    QString mediaRoute(const QString &chat) const;
+    Q_INVOKABLE QString mediaRouteLabel(const QString &key) const;
+    Q_INVOKABLE void cycleMediaRoute(const QString &key);
+    Q_INVOKABLE QString relayNote() const;
 
     // Messages
     Q_INVOKABLE QVariantList messagesWith(const QString &key) const;

@@ -248,17 +248,26 @@ const READ_KEYS = 6;
 export const SQL = {
   schema:
     "CREATE TABLE IF NOT EXISTS counts (day TEXT NOT NULL, k TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, k)) WITHOUT ROWID",
+  // The month's relayed media in MB, as apps report it: one row a month, the last two kept.
+  meterSchema: "CREATE TABLE IF NOT EXISTS meter (month TEXT PRIMARY KEY, mb INTEGER NOT NULL) WITHOUT ROWID",
+  meterAdd: "INSERT INTO meter (month, mb) VALUES (?, ?) ON CONFLICT (month) DO UPDATE SET mb = mb + excluded.mb",
+  meterRead: "SELECT mb FROM meter WHERE month = ?",
+  meterWipe: "DELETE FROM meter WHERE month < ?",
   wipe: "DELETE FROM counts WHERE day < ?",
   read: "SELECT k, n FROM counts WHERE day = ? AND k IN (?, ?, ?, ?, ?, ?)",
   bump: "INSERT INTO counts (day, k, n) VALUES (?, ?, ?) ON CONFLICT (day, k) DO UPDATE SET n = n + excluded.n",
 };
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH = /^\d{4}-\d{2}$/;
+// One report (relay.md "Relayed media"): apps report every 200 MB or so, so this is well over a real one.
+export const METER_MAX_MB = 5000;
 
 export class RelayLimits {
   constructor(ctx) {
     this.sql = ctx.storage.sql;
     this.sql.exec(SQL.schema);
+    this.sql.exec(SQL.meterSchema);
     this.wipedBefore = null;
   }
 
@@ -309,6 +318,17 @@ export class RelayLimits {
       return json(400, { error: "bad_request" });
     }
     const q = body && typeof body === "object" ? body : {};
+    if (q.meter === true) {
+      if (typeof q.month !== "string" || !MONTH.test(q.month) || !Number.isInteger(q.mb) || q.mb < 0 || q.mb > METER_MAX_MB) {
+        return json(400, { error: "bad_request" });
+      }
+      if (q.mb > 0) {
+        this.sql.exec(SQL.meterWipe, q.month);
+        this.sql.exec(SQL.meterAdd, q.month, q.mb);
+      }
+      const row = this.sql.exec(SQL.meterRead, q.month).toArray()[0];
+      return json(200, { mb: row ? Number(row.mb) : 0 });
+    }
     const kind = q.kind !== undefined ? q.kind : "legacy";
     if (typeof q.day !== "string" || !DAY.test(q.day) || typeof q.id !== "string" || !HEX64.test(q.id)
         || typeof q.ip !== "string" || !/^[0-9a-f]{32}$/.test(q.ip) || !["legacy", "tok", "reg"].includes(kind)
@@ -471,6 +491,28 @@ export function legacyOver(env, nowSec) {
   return env.LEGACY_UNTIL !== undefined && env.LEGACY_UNTIL !== "" && Number.isFinite(until) && nowSec >= until;
 }
 
+// The month's relayed media (relay.md "Relayed media"): an install with a token adds what it moved ("mb", 0 only asks), and
+// hears the total, so every app can fall back to the 720p copy before the free month is used. Never a login, never a count
+// per install: one number a month.
+async function handleMeter(request, env, nowSec) {
+  const body = await checkRequest(request, env, nowSec);
+  if (body instanceof Response) return body;
+  const { id, tok, mb } = body;
+  if (tok === undefined || !Number.isInteger(mb) || mb < 0 || mb > METER_MAX_MB) return json(400, { error: "bad_request" });
+  const r = await readToken(env, id, tok, nowSec);
+  if (r.v !== "ok") return json(401, { error: r.v === "expired" ? "token_expired" : "bad_token" });
+  try {
+    const month = new Date(nowSec * 1000).toISOString().slice(0, 7);
+    const res = await env.LIMITS.get(env.LIMITS.idFromName("limits")).fetch("https://limits/meter", {
+      method: "POST", body: JSON.stringify({ meter: true, month, mb }),
+    });
+    if (res.status !== 200) return json(503, { error: "limits_unavailable" });
+    return json(200, await res.json());
+  } catch {
+    return json(503, { error: "limits_unavailable" });
+  }
+}
+
 async function handleTurn(request, env, nowSec) {
   const body = await checkRequest(request, env, nowSec);
   if (body instanceof Response) return body;
@@ -547,8 +589,9 @@ const METHOD = JSON.stringify({ error: "method" });
 export async function handle(request, env, nowSec = Math.floor(Date.now() / 1000)) {
   const { pathname } = new URL(request.url);
   const post = request.method === "POST";
-  if (pathname === "/turn" || pathname === "/register") {
+  if (pathname === "/turn" || pathname === "/register" || pathname === "/meter") {
     if (!post) return new Response(METHOD, { status: 405, headers: { "content-type": "application/json", allow: "POST" } });
+    if (pathname === "/meter") return handleMeter(request, env, nowSec);
     return pathname === "/turn" ? handleTurn(request, env, nowSec) : handleRegister(request, env, nowSec);
   }
   if (pathname === "/health") {

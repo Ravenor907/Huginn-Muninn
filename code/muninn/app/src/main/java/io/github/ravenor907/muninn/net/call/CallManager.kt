@@ -494,6 +494,12 @@ object CallManager {
     }
 
     /** HTTPS POST to the relay Worker. (status, body) or null if it couldn't connect. */
+    /** A login for a file going through the call relay (MediaRoute), the same as a call's. */
+    fun fileRelayLogin(): TurnCreds.Login? = host.relayLogin()
+
+    /** Adds to the month's relayed media ([mb], 0 only asks); the month's total in MB, or null. */
+    fun relayMeter(mb: Long): Long? = app?.let { a -> TurnCreds.meter(a.identity.relayId(), mb, { url, body -> post(url, body) }) }
+
     private fun post(url: String, body: String): Pair<Int, String>? {
         return try {
             // 10 s: a slow relay Worker gives up before the 15 s no-connection cutoff, so its retry still has time.

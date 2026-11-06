@@ -26,6 +26,20 @@ object TurnCreds {
         return JSONObject().put("id", id).put("t", tSec).put("sig", sig).apply { if (tok != null) put("tok", tok); if (renew) put("rn", 1) }.toString()
     }
 
+    /**
+     * Relayed media (relay.md): adds [mb] to the month's total, 0 only asks. The total in MB, or null (no token yet, or a
+     * Worker that doesn't have it). Asks nothing of the login cache.
+     */
+    fun meter(identityDer: ByteArray, mb: Long, post: (url: String, body: String) -> Pair<Int, String>?, nowMs: Long = System.currentTimeMillis()): Long? {
+        if (!RelayConfig.configured) return null
+        val id = idOf(identityDer)
+        val tok = tokenFor(try { store?.load() } catch (_: Exception) { null }, id, nowMs / 1000 + offsetS) ?: return null
+        val b = JSONObject(body(identityDer, nowMs / 1000 + offsetS, RelayConfig.APP_SECRET, tok)).put("mb", mb.coerceIn(0, 5000)).toString()
+        val r = post(RelayConfig.WORKER_URL.trimEnd('/') + "/meter", b) ?: return null
+        if (r.first != 200) return null
+        return try { JSONObject(r.second).getLong("mb") } catch (_: Exception) { null }
+    }
+
     /** A call renews its relay this long before the login ends (relay.md "Renewal"). */
     const val RENEW_BEFORE_MS = 120_000L
     /** After a renewal the old allocation still carries media this long, until the peer has the new address. */

@@ -228,6 +228,27 @@ void RelayCredentials::get(const QByteArray &identityKey, std::function<void(con
         fetch();
 }
 
+void RelayCredentials::meter(const QByteArray &identityKey, qint64 mb, std::function<void(qint64)> done)
+{
+    m_identity = identityKey;
+    const QString tok = tokenFor(Settings::store().value(QStringLiteral("relay/token")).toString(), idHex(), workerNow());
+    if (tok.isEmpty() || !RelayConfig::configured()) {
+        QTimer::singleShot(0, this, [done] { done(-1); });
+        return;
+    }
+    QJsonObject o = QJsonDocument::fromJson(body(identityKey, workerNow(), QByteArray(RelayConfig::kAppSecret), tok)).object();
+    o.insert(QStringLiteral("mb"), double(qBound<qint64>(0, mb, 5000)));
+    QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/meter")));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    QNetworkReply *r = m_net.post(req, QJsonDocument(o).toJson(QJsonDocument::Compact));
+    connect(r, &QNetworkReply::finished, this, [r, done] {
+        r->deleteLater();
+        const QJsonObject a = QJsonDocument::fromJson(r->readAll()).object();
+        const bool good = r->error() == QNetworkReply::NoError && a.value(QStringLiteral("mb")).isDouble();
+        done(good ? qint64(a.value(QStringLiteral("mb")).toDouble()) : -1);
+    });
+}
+
 void RelayCredentials::fetch()
 {
     m_busy = true;

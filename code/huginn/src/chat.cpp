@@ -881,6 +881,39 @@ QString Chat::mailboxOf(const QString &key) const
     return c;
 }
 
+QString Chat::mediaRoute(const QString &chat) const
+{
+    const QString own = m_settings.value(QStringLiteral("mediaRoute/") + chat).toString();
+    if (own == QLatin1String("auto") || own == QLatin1String("fastest") || own == QLatin1String("tor"))
+        return own;
+    return Settings::mediaRouteNow();
+}
+
+QString Chat::mediaRouteLabel(const QString &key) const
+{
+    const QString own = m_settings.value(QStringLiteral("mediaRoute/") + key).toString();
+    return own == QLatin1String("auto") ? QStringLiteral("Automatic") : own == QLatin1String("fastest") ? QStringLiteral("Fastest")
+        : own == QLatin1String("tor") ? QStringLiteral("Most private (Tor)") : QStringLiteral("As in Settings");
+}
+
+void Chat::cycleMediaRoute(const QString &key)
+{
+    const QString k = QStringLiteral("mediaRoute/") + key, own = m_settings.value(k).toString();
+    if (own.isEmpty())
+        m_settings.setValue(k, QStringLiteral("auto"));
+    else if (own == QLatin1String("auto"))
+        m_settings.setValue(k, QStringLiteral("fastest"));
+    else if (own == QLatin1String("fastest"))
+        m_settings.setValue(k, QStringLiteral("tor"));
+    else
+        m_settings.remove(k);
+}
+
+QString Chat::relayNote() const
+{
+    return m_files ? m_files->relayNote() : QString();
+}
+
 QString Chat::netStatus() const
 {
     if (m_delayed)
