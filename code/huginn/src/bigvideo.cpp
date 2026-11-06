@@ -141,7 +141,7 @@ void poster(QIODevice *dev, QObject *context, std::function<void(const QByteArra
     // The picture is made on its own thread (a 4K frame's conversion, scaling and JPEG take a while): the window and
     // call sound never wait on it. One frame at a time; one that gives no picture lets the next one try.
     auto taking = std::make_shared<bool>(false);
-    QObject::connect(sink, &QVideoSink::videoFrameChanged, player, [end, taking, ended](const QVideoFrame &frame) {
+    QObject::connect(sink, &QVideoSink::videoFrameChanged, player, [end, taking, ended, player](const QVideoFrame &frame) {
         if (*taking || *ended || !frame.isValid())
             return;
         *taking = true;
