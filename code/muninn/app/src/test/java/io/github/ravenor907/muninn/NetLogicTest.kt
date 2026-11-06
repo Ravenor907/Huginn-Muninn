@@ -203,7 +203,7 @@ class NetLogicTest {
         assertFalse(NetLogic.authClosed(""))
     }
 
-    // ---- 1.47: the sender keeps sending the same event to every relay until each has stored it
+    // ---- the sender keeps sending the same event to every relay until each has stored it
 
     private val five = listOf("wss://a", "wss://b", "wss://c", "wss://d", "wss://e")
 
@@ -257,5 +257,45 @@ class NetLogicTest {
         assertTrue(s.stored("1", "wss://a"))
         s.forget("3"); assertTrue(s.missing("3").isEmpty())
         s.add("", five); s.add("x", emptyList()); assertEquals(1, s.size())
+    }
+
+    @Test
+    fun aDeadRelayRestsAndOneMessageNeverCostsItMoreConnections() {
+        val s = RelaySpread()
+        val t = 1_000_000L
+        repeat(RelaySpread.DOWN_AFTER - 1) { s.failed("wss://e", t) }
+        assertFalse(s.down("wss://e", t))
+        s.failed("wss://e", t)
+        assertTrue(s.down("wss://e", t))
+        assertEquals(five - "wss://e", s.targets(five, t))
+        s.add("ev", five)
+        assertEquals((five - "wss://e").toSet(), s.due("ev", t))
+        // It rests for a while, then it's tried again; an answer ends the rest at once.
+        assertFalse(s.down("wss://e", t + RelaySpread.DOWN_MS))
+        s.failed("wss://a", t); s.failed("wss://a", t); s.failed("wss://a", t)
+        assertTrue(s.down("wss://a", t)); s.reached("wss://a"); assertFalse(s.down("wss://a", t))
+        // Every relay resting: they're all tried, one may be back.
+        five.forEach { u -> repeat(RelaySpread.DOWN_AFTER) { s.failed(u, t) } }
+        assertEquals(five, s.targets(five, t))
+    }
+
+    @Test
+    fun whatNobodyWaitsOnGetsFewerTriesAndAStoredCopyLetsTheOutboxGo() {
+        val s = RelaySpread()
+        s.add("receipt", five, RelaySpread.LIGHT_ROUNDS)
+        assertEquals(10_000L, s.wait("receipt", 0))
+        assertEquals(null, s.wait("receipt", RelaySpread.LIGHT_ROUNDS))
+        assertFalse(s.anyStored("receipt"))
+        s.stored("receipt", "wss://a")
+        assertTrue(s.anyStored("receipt"))
+    }
+
+    @Test
+    fun theDelayedLineIsCalm() {
+        assertFalse(NetLogic.delayed(null, 1_000L))   // nothing waits: never, whatever a relay said
+        assertFalse(NetLogic.delayed(NetLogic.DELAY_AFTER_MS - 1, null))
+        assertTrue(NetLogic.delayed(NetLogic.DELAY_AFTER_MS, null))
+        assertTrue(NetLogic.delayed(1_000L, 1_000L))
+        assertFalse(NetLogic.delayed(1_000L, NetLogic.LIMIT_SHOWS_MS))
     }
 }

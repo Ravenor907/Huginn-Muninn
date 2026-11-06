@@ -100,7 +100,7 @@ object NetLogic {
         count < maxCount && size >= 0 && total + size <= maxTotal
 
     /**
-     * 1.47 (message RCA): a sender counts a message as held once [HELD_RELAYS] relays stored it, but those may not be the
+     * A sender counts a message as held once [HELD_RELAYS] relays stored it, but those may not be the
      * relays this phone keeps open (one in the background, chosen by its own health), so what waits on the others has
      * to be read too: when this phone isn't listening on every relay, catching up and the inbox check read all of them.
      */
@@ -147,31 +147,46 @@ object NetLogic {
     /** Chat keys of groups start with this (Folders.groupKey). */
     const val GROUP_KEY = "g:"
 
+    /** A message no route has taken for this long, or a relay asking us to slow down, shows the calm "delayed" line. */
+    const val DELAY_AFTER_MS = 20_000L
+    const val LIMIT_SHOWS_MS = 120_000L
+
+    /**
+     * Whether "Messages are delayed; they'll send automatically" shows: something of mine has waited [oldestWaitingMs]
+     * (null: nothing waits) for any route, or waits while a relay asked us to slow down [limitedAgoMs] ago (null: none did).
+     */
+    fun delayed(oldestWaitingMs: Long?, limitedAgoMs: Long?): Boolean =
+        oldestWaitingMs != null && (oldestWaitingMs >= DELAY_AFTER_MS || (limitedAgoMs != null && limitedAgoMs in 0 until LIMIT_SHOWS_MS))
+
     /** Relay-side checks (pings) an hour, from [pings] counted over [ms] connected. */
     fun perHour(pings: Int, ms: Long): Int = if (ms <= 0) 0 else (pings * 3_600_000L / ms).toInt()
 }
 
 /**
- * 1.47 (message RCA): every relay gets each event, not just the first two that store it. A receiver in the background
- * listens on one relay chosen by its own health, so the sender keeps sending the same event (same id) to each relay
- * that hasn't stored it yet, on [RETRY_MS], until each has stored it or refused it for good. "Waiting for their phone"
- * still starts at the first relay's OK. Plain Kotlin, so the tests check it.
+ * Every relay gets each message, not just the first two that store it. A receiver in the background listens on one relay
+ * chosen by its own health, so the sender keeps sending the same event (same id) to each relay that hasn't stored it yet,
+ * on [RETRY_MS], until each has stored it or refused it for good. "Waiting for their phone" still starts at the first
+ * relay's OK. A relay that can't be reached ([failed]) rests for [DOWN_MS]: nothing is sent to it until then, so one dead
+ * relay never costs a connection per message. Plain Kotlin, so the tests check it.
  */
 class RelaySpread(private val max: Int = MAX) {
-    private val missing = LinkedHashMap<String, MutableSet<String>>()
+    private class Owed(val total: Int, val left: MutableSet<String>, val rounds: Int)
+    private val missing = LinkedHashMap<String, Owed>()
+    private val fails = HashMap<String, Int>()
+    private val downUntil = HashMap<String, Long>()
 
-    /** Event [id] went to [relays]: each one owes an OK. The oldest is let go past [max]. */
-    @Synchronized fun add(id: String, relays: Collection<String>) {
+    /** Event [id] went to [relays]: each one owes an OK, for [rounds] tries more. The oldest is let go past [max]. */
+    @Synchronized fun add(id: String, relays: Collection<String>, rounds: Int = RETRY_MS.size) {
         if (id.isEmpty() || relays.isEmpty()) return
-        missing[id] = relays.toMutableSet()
+        missing[id] = Owed(relays.size, relays.toMutableSet(), rounds)
         while (missing.size > max) missing.remove(missing.keys.first())
     }
 
     /** [url] stored [id]. True when every relay has it now, or it isn't tracked (nothing more to send). */
     @Synchronized fun stored(id: String, url: String): Boolean {
         val m = missing[id] ?: return true
-        m.remove(url)
-        if (m.isEmpty()) { missing.remove(id); return true }
+        m.left.remove(url)
+        if (m.left.isEmpty()) { missing.remove(id); return true }
         return false
     }
 
@@ -181,25 +196,55 @@ class RelaySpread(private val max: Int = MAX) {
      */
     @Synchronized fun refused(id: String, url: String, reason: String): Boolean {
         val m = missing[id] ?: return true
-        if (reason.startsWith("duplicate") || refusedForGood(reason)) m.remove(url)
-        if (m.isEmpty()) { missing.remove(id); return true }
+        if (reason.startsWith("duplicate") || refusedForGood(reason)) m.left.remove(url)
+        if (m.left.isEmpty()) { missing.remove(id); return true }
         return false
     }
 
     /** The relays that still owe [id] an OK (empty: done or not tracked). */
-    @Synchronized fun missing(id: String): Set<String> = missing[id]?.toSet().orEmpty()
+    @Synchronized fun missing(id: String): Set<String> = missing[id]?.left?.toSet().orEmpty()
+
+    /** The relays [id] goes to on its next try: the ones owing it that aren't resting. */
+    @Synchronized fun due(id: String, now: Long): Set<String> = missing[id]?.left?.filter { !down(it, now) }?.toSet().orEmpty()
 
     @Synchronized fun tracked(id: String): Boolean = missing.containsKey(id)
+
+    /** The wait before try [round] of [id], or null once its tries are used. */
+    @Synchronized fun wait(id: String, round: Int): Long? = missing[id]?.let { if (round < it.rounds) retryMs(round) else null }
+
+    /** At least one relay stored [id]. */
+    @Synchronized fun anyStored(id: String): Boolean = missing[id]?.let { it.left.size < it.total } ?: true
 
     /** Given up on (all tries used): stops being sent. */
     @Synchronized fun forget(id: String) { missing.remove(id) }
 
     @Synchronized fun size(): Int = missing.size
 
+    /** A sending socket to [url] failed to connect: [DOWN_AFTER] in a row and it rests for [DOWN_MS]. */
+    @Synchronized fun failed(url: String, now: Long) {
+        val n = (fails[url] ?: 0) + 1
+        fails[url] = n
+        if (n >= DOWN_AFTER) { downUntil[url] = now + DOWN_MS; fails[url] = 0 }
+    }
+
+    /** [url] answered: it's in use again. */
+    @Synchronized fun reached(url: String) { fails.remove(url); downUntil.remove(url) }
+
+    /** [url] is resting now. */
+    @Synchronized fun down(url: String, now: Long): Boolean = (downUntil[url] ?: 0L) > now
+
+    /** Who a new event goes to: every relay not resting, or all of them when every one is (one may be back). */
+    @Synchronized fun targets(relays: List<String>, now: Long): List<String> = relays.filter { !down(it, now) }.ifEmpty { relays }
+
     companion object {
         const val MAX = 500
         /** When the relays still owing an OK get the same event again: after 10 s, 30 s, 1 min, 5 min and 15 min, then no more. */
         val RETRY_MS = longArrayOf(10_000L, 30_000L, 60_000L, 300_000L, 900_000L)
+        /** Tries for what nobody waits on (a receipt, typing): the first three, then the message's own resend asks again. */
+        const val LIGHT_ROUNDS = 3
+        /** Failed connections in a row before a relay rests. */
+        const val DOWN_AFTER = 3
+        const val DOWN_MS = 10 * 60_000L
 
         /** The wait before try [round] (0 first), or null once every try was used. */
         fun retryMs(round: Int): Long? = RETRY_MS.getOrNull(round)

@@ -18,6 +18,12 @@ object Ticks {
         else -> ""
     }
 
+    /** A status short enough for the line under a message: "Waiting" for any "Waiting for ..."; the full one shows on a tap. */
+    fun short(status: String): String = if (status.startsWith("Waiting for ")) "Waiting" else status
+
+    /** Said once more when a "Waiting" is tapped: why it hasn't been delivered yet, in plain words. */
+    const val WAITING_WHY = "It's safe on the relays. Their phone may be asleep or locked, and picks it up on its own."
+
     /**
      * A group message of mine before anyone has read it: sent [to] these members, [delivered] to these, with
      * [name] for each. Everyone has it: "Delivered". One or two still missing: whose phones. More: how many.

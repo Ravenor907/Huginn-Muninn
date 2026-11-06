@@ -216,7 +216,7 @@ Rectangle {
         if (!m.mine || m.unsent) return ""
         if ((m.readCount || 0) > 0) return ""   // the check mark and the count say it
         if (m.receipt) return " · " + m.receipt
-        return m.state === "sent" ? " · Sent" : m.state === "sending" ? " · Sending" : ""
+        return m.state === "sent" ? " · Waiting" : m.state === "sending" ? " · Sending" : ""
     }
     function selectable(i) { return !!rows[i] && (rows[i].kind === "channel" || rows[i].kind === "header") }
 

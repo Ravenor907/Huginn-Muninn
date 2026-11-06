@@ -365,7 +365,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             val before = askedAt[url] ?: 0L
             val heard = heardAt[url] ?: 0L
             if (PowerLogic.silent(before, heard) && (openedAt[url] ?: 0L) < before) { replace(url, ws); continue }
-            // 1.47: the socket answers, but its inbox request was closed by the relay (or never finished): ask again.
+            // The socket answers, but its inbox request was closed by the relay (or never finished): ask again.
             if (NetLogic.reask(subscribed[url] == true, now - (openedAt[url] ?: now), reaskedAt[url]?.let { now - it })) reaskInbox(url, ws, now)
             // Heard from within the last minute (a message, an answer): it's alive, no need to ask.
             if (!all && NetLogic.aliveRecently(now - heard)) continue
@@ -555,6 +555,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             } } catch (_: Exception) {}
             connectMs[url] = now - (openedAt[url] ?: now)
             heardAt[url] = now
+            spread.reached(url)
             live[url] = true
             liveSince[url] = now
             _connected.value = live.size
@@ -562,7 +563,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             // This relay is reachable again: what still waits, and what was just sent, goes to it on a sending
             // socket of its own, never on this one (relays drop an event they already have).
             val again = ArrayList<String>()
-            // 1.47: only what this relay hasn't stored yet (an untracked one goes as before).
+            // Only what this relay hasn't stored yet (an untracked one goes as before).
             synchronized(outbox) { outbox.forEach { m -> val id = idOfMsg(m); if (!spread.tracked(id) || url in spread.missing(id)) again.add(m) } }
             synchronized(recent) {
                 val now = android.os.SystemClock.elapsedRealtime()
@@ -603,7 +604,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                     }
                 }
                 // The relay ended the inbox request (it may ask to sign in first): what's newer isn't known to be read.
-                // 1.47: closed until signed in (NIP-42): sign in and ask once more a moment later, once per socket, as Huginn
+                // Closed until signed in (NIP-42): sign in and ask once more a moment later, once per socket, as Huginn
                 // does (the relay may not have taken the sign-in yet). Any other close is asked again by the keepalive check.
                 "CLOSED" -> {
                     val sub = a.optString(1)
@@ -770,7 +771,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** A relay said it stored event [id]. */
     private fun storedAt(url: String, id: String) {
         if (id.isEmpty()) return
-        // 1.47: the outbox keeps it while other relays still owe an OK (each gets it again, see [spreadOn]).
+        // The outbox keeps it while other relays still owe an OK (each gets it again, see [spreadOn]).
         if (spread.stored(id, url)) { synchronized(outbox) { outbox.removeAll { it.contains(id) } }; spreadMsg.remove(id) }
         synchronized(lowOutbox) { lowOutbox.removeAll { it.second.contains(id) } }
         stored[id]?.let { w ->
@@ -799,6 +800,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             if (senders[url] !== this) { webSocket.cancel(); return }
+            spread.reached(url)
             synchronized(queue) { open = true; queue.forEach { webSocket.send(it) }; queue.clear() }
         }
 
@@ -807,12 +809,16 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             // "AUTH" is never answered here: signing in would name my mailbox.
             if (a.optString(0) == "OK" && a.optBoolean(2)) storedAt(url, a.optString(1))
             // Cap v3 (29.4): a relay asking us to slow down pauses paced video pieces for a minute.
-            else if (a.optString(0) == "OK" && GroupVideo.isRateLimit(a.optString(3))) VideoPace.limited()
-            // 1.47: refused for good (or a duplicate, which it already has): this relay stops being sent it.
+            else if (a.optString(0) == "OK" && GroupVideo.isRateLimit(a.optString(3))) { limitedAt = android.os.SystemClock.elapsedRealtime(); VideoPace.limited() }
+            // Refused for good (or a duplicate, which it already has): this relay stops being sent it.
             else if (a.optString(0) == "OK") refusedAt(url, a.optString(1), a.optString(3))
         }
 
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { senders.remove(url, this) }
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            // Never opened: this relay can't be reached now (it rests after a few of these, see RelaySpread).
+            if (!open) spread.failed(url, android.os.SystemClock.elapsedRealtime())
+            senders.remove(url, this)
+        }
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null); senders.remove(url, this) }
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { senders.remove(url, this) }
     }
@@ -840,11 +846,15 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
      * reaches whichever relay the other phone listens on. A relay that connects again within [RECENT_MS] gets
      * it too ([recent]). [days] > 0: the event carries a NIP-40 expiration tag ([expiration], the same for every chat).
      *
+     * [again]: false for a piece of something bigger (a photo, a video): it goes once to every relay, and the message's own
+     * resend covers it, so a retry never bursts past the pacing. What nobody waits on ([ok] and [held] null, a receipt or
+     * typing) gets only the first few tries.
+     *
      * [maxRelays] > 0: only that many relays (open ones first). [low]: a linked device's frame (section 15): it waits in an
      * outbox of its own ([LOW_OUTBOX] at most) and isn't in [recent], so it never pushes a real message out.
      */
     fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0,
-                maxRelays: Int = 0, low: Boolean = false): Int {
+                maxRelays: Int = 0, low: Boolean = false, again: Boolean = true): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
         val createdAt = System.currentTimeMillis() / 1000 - Random.nextLong(0, BLUR_S)
@@ -853,7 +863,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         if (days > 0) tags.put(JSONArray().put("expiration").put(expiration(createdAt).toString()))
         val ev = event(KIND, tags, content, Schnorr.newSecret(), createdAt)
         val msg = JSONArray().put("EVENT").put(ev).toString()
-        if (ok != null || held != null) { if (stored.size > 500) stored.clear(); stored[ev.getString("id")] = Waiting(ok, held) }
+        if (ok != null || held != null) stored[ev.getString("id")] = Waiting(ok, held)
         if (low || maxRelays > 0) {
             val to = pickRelays(relays, live.keys, maxRelays)
             if (low) synchronized(lowOutbox) { lowOutbox.add(to to msg); while (lowOutbox.size > LOW_OUTBOX) lowOutbox.removeAt(0) }
@@ -868,35 +878,46 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             recent.addLast(now to msg)
             while (recent.size > 100 || (recent.isNotEmpty() && now - recent.first().first > RECENT_MS)) recent.removeFirst()
         }
-        // Every relay gets it, each on a sending socket of its own: the other phone may be listening on
-        // just one, and not one of mine. 1.47: and every relay keeps getting the same event until it has stored it
-        // (not only until two have), so the one relay a phone in the background listens on always has it.
+        // Every relay gets it, each on a sending socket of its own: the other phone may be listening on just one, and not
+        // one of mine. Every relay keeps getting the same event until it has stored it (not only until two have), so the one
+        // relay a phone in the background listens on always has it. One that can't be reached rests (RelaySpread).
         val all = relays
         val id = ev.getString("id")
-        spread.add(id, all)
-        spreadMsg[id] = msg
-        for (url in all) send(url, listOf(msg))
-        spreadOn(id, 0)
+        val to = spread.targets(all, android.os.SystemClock.elapsedRealtime())
+        if (again) {
+            spread.add(id, all, if (ok == null && held == null) RelaySpread.LIGHT_ROUNDS else RelaySpread.RETRY_MS.size)
+            spreadMsg[id] = msg
+        }
+        for (url in to) send(url, listOf(msg))
+        if (again) spreadOn(id, 0)
         if (sockets.isEmpty()) connect()
         return live.size
     }
 
-    /** 1.47: which relays still owe each event an OK, and the event itself (same id every time). */
+    /** Which relays still owe each event an OK, and the event itself (same id every time). */
     private val spread = RelaySpread()
     private val spreadMsg = ConcurrentHashMap<String, String>()
 
     /** Try [round]: the relays that haven't stored event [id] yet get it again, then the next try is set (none after the last). */
     private fun spreadOn(id: String, round: Int) {
-        val wait = RelaySpread.retryMs(round) ?: run { spread.forget(id); spreadMsg.remove(id); return }
+        val wait = spread.wait(id, round) ?: run { spreadDone(id); return }
         timer.schedule(Runnable {
             try {
                 val msg = spreadMsg[id] ?: return@Runnable
-                val owe = spread.missing(id)
-                if (owe.isEmpty()) { spreadMsg.remove(id); return@Runnable }
-                for (url in owe) send(url, listOf(msg))
+                if (spread.missing(id).isEmpty()) { spreadMsg.remove(id); return@Runnable }
+                for (url in spread.due(id, android.os.SystemClock.elapsedRealtime())) send(url, listOf(msg))
                 spreadOn(id, round + 1)
             } catch (_: Exception) {}
         }, wait, TimeUnit.MILLISECONDS)
+    }
+
+    /** Every try used: a relay holds it, so the outbox lets it go; none does, and it stays for the next relay that connects. */
+    private fun spreadDone(id: String) {
+        if (spread.anyStored(id)) {
+            val msg = spreadMsg[id]
+            if (msg != null) synchronized(outbox) { outbox.remove(msg) }
+        }
+        spread.forget(id); spreadMsg.remove(id)
     }
 
     /** [url] answered "OK false" for [id] with [reason] (see [RelaySpread.refused]). */
@@ -914,7 +935,14 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val recent = ArrayDeque<Pair<Long, String>>()
     /** Event id to what to do once relays have stored it, and which ones have. */
     private class Waiting(val ok: (() -> Unit)?, val held: (() -> Unit)?) { val relays = HashSet<String>() }
-    private val stored = ConcurrentHashMap<String, Waiting>()
+    private val stored: MutableMap<String, Waiting> = java.util.Collections.synchronizedMap(object : LinkedHashMap<String, Waiting>() {
+        // The oldest goes first, so a long video's pieces never cost a text its "Waiting for their phone".
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Waiting>) = size > STORED_MAX
+    })
+    /** When a relay last asked us to slow down (elapsed ms). */
+    @Volatile private var limitedAt = 0L
+    /** How long ago a relay asked us to slow down, or null when none has. */
+    fun limitedAgoMs(): Long? = limitedAt.takeIf { it > 0L }?.let { android.os.SystemClock.elapsedRealtime() - it }
 
     companion object {
         const val KIND = 1059
@@ -940,6 +968,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         const val BLUR_S = 600L
         /** A linked device's frames waiting for a relay, at most (apart from real messages). */
         const val LOW_OUTBOX = 40
+        /** Events still waiting for their first OKs, at most (the oldest stops being followed). */
+        private const val STORED_MAX = 2000
 
         /**
          * [url] (re)connected: a linked device's queued frame meant for [to] goes to it when it's one of them, when

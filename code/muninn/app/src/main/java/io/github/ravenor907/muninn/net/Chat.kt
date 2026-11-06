@@ -182,6 +182,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Cap m1: whose app said it's open, until when (ms). Empty while my own Active status is off. */
     private val _active = MutableStateFlow<Map<String, Long>>(emptyMap())
     val active: StateFlow<Map<String, Long>> = _active.asStateFlow()
+    /** Something of mine hasn't got out yet: the calm "Messages are delayed" line (NetLogic.delayed). Never a notification. */
+    private val _delayed = MutableStateFlow(false)
+    val delayed: StateFlow<Boolean> = _delayed.asStateFlow()
     /** Cap m1: reactions and edits on their way (envelope id to who and when), until a receipt names them. */
     private val mxOut = ConcurrentHashMap<String, Pair<String, Long>>()
     private val mxStore = File(context.filesDir, "mxout.json")
@@ -2585,6 +2588,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun markSent(m: Msg, how: String) {
         update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
         if (m.file.isNotEmpty()) FileLink.relayed(m.id, null, false)
+        if (_delayed.value) wakeRetry()
     }
 
     /**
@@ -2605,7 +2609,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val m = chats[k]?.firstOrNull { it.id == msgId }
             if (m == null) { at(now); continue }   // gone: the loop lets it go
             at(tries[msgId]?.next ?: now)
-            if (m.mine && m.state == "sending" && !m.failed) at(m.time + NOT_SENT_MS + 1)
+            if (m.mine && m.state == "sending" && !m.failed) { at(m.time + NetLogic.DELAY_AFTER_MS + 1); at(m.time + NOT_SENT_MS + 1) }
             if (m.mine && m.state != "unsending") at(m.time + DAY + 1)
         }
         return next
@@ -2632,8 +2636,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (_active.value.values.any { it < now }) _active.update { m -> m.filterValues { it >= now } }
         if (foreground && id.activeStatus && !invisible() && now - activeSent > Rich.ACTIVE_EVERY_MS) { activeSent = now; bg { sendActive(true) } }
         val chats = _private.value
+        var oldest: Long? = null
         for ((msgId, k) in pending) {
             val m = chats[k]?.firstOrNull { it.id == msgId }
+            if (m != null && m.mine && m.state == "sending" && now - m.time <= DAY) oldest = maxOf(oldest ?: 0L, now - m.time)
             // Deleted, moved to a new key, or the chat is gone: nothing more to send.
             if (m == null) { pending.remove(msgId); if (tries.remove(msgId) != null) { outbox.drop(msgId); outbox.drop(UNSEND + msgId) }; continue }
             if (m.mine && m.state == "unsending") {
@@ -2657,6 +2663,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (t == null) { tries[m.id] = Tries(1, now + RETRY[0]); continue }   // after a restart: wait one round
             if (now >= t.next) { t.next = NetLogic.NEVER; bg { attempt(m) } }
         }
+        _delayed.value = NetLogic.delayed(oldest, nostr.limitedAgoMs())
     }
 
     /**
@@ -2750,8 +2757,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val heldLeft = java.util.concurrent.atomic.AtomicInteger(bodies.size)
         val all: (() -> Unit)? = held?.let { done -> { if (heldLeft.decrementAndGet() == 0) done() } }
         // Cap v3 (29.4): a video's pieces go paced (VideoPace), a few a second, so the relays don't block us.
-        if (pace != null) { VideoPace.go(pace, bodies.map { b -> { nostr.publish(mailbox, wrap(peerKey, b), ok, all, keep); Unit } }); return true }
-        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok, all, keep) }
+        if (pace != null) { VideoPace.go(pace, bodies.map { b -> { nostr.publish(mailbox, wrap(peerKey, b), ok, all, keep, again = false); Unit } }); return true }
+        val single = bodies.size == 1
+        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok, all, keep, again = single) }
         return true
     }
 

@@ -243,7 +243,7 @@ public:
     void disconnectAll();
     void redialAll();
     void shutdown();
-    void publish(quint64 token, const QString &mailboxHex, const QString &content, int days, int maxRelays, bool low);
+    void publish(quint64 token, const QString &mailboxHex, const QString &content, int days, int maxRelays, bool low, bool again);
     void warmSenders()
     {
         if (m_down)
@@ -284,7 +284,9 @@ private:
         QString msg, id;
         QStringList relays;           // empty: every relay
         bool low = false;
-        QSet<QString> owe;            // 1.47: relays that haven't stored it yet (empty: not tracked)
+        QSet<QString> owe;            // relays that haven't stored it yet (empty: not tracked)
+        int rounds = 0;               // tries it gets for those relays
+        int total = 0;                // relays it went to first
     };
 
     void open(const QString &url);
@@ -301,6 +303,9 @@ private:
     void takeOk(const QString &id, const QString &url = QString());
     void refusedAt(const QString &id, const QString &url, const QString &reason);
     void spreadOn(const QString &id, int round);
+    void relayFailed(const QString &url);
+    void relayReached(const QString &url);
+    bool relayDown(const QString &url) const;
     void noteSeen(const QByteArray &id);
     qint64 sinceFor(const QString &url) const;
     void storedEvent(const QString &url, const QString &sub, qint64 createdAt);
@@ -323,6 +328,8 @@ private:
     QHash<QString, int> m_retries;
     QHash<QString, Sender> m_senders;
     QList<Out> m_outbox;
+    QHash<QString, int> m_relayFails;           // failed connections in a row, per relay
+    QHash<QString, qint64> m_relayDownUntil;    // a relay that can't be reached rests until this time (ms)
     QHash<QString, quint64> m_okWait;  // event id: Nostr's token for it
     QList<QByteArray> m_seen;
     QSet<QByteArray> m_seenSet;
@@ -511,7 +518,7 @@ void NostrWorker::opened(const QString &url, QWebSocket *ws)
             bool anyLive = false;
             for (const QString &r : o.relays)
                 anyLive = anyLive || (r != url && m_live.contains(r));
-            // 1.47: a message this relay already stored isn't sent to it again.
+            // A message this relay already stored isn't sent to it again.
             if (!o.owe.isEmpty() && !o.owe.contains(url))
                 continue;
             if (o.relays.isEmpty() || o.relays.contains(url) || !anyLive)
@@ -973,6 +980,7 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
                 return;
             }
             s->open = true;
+            relayReached(url);
             for (const QString &m : std::as_const(s->queue))
                 ws->sendTextMessage(m);
             s->queue.clear();
@@ -984,6 +992,10 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
         connect(ws, &QWebSocket::errorOccurred, this, [this, url, ws](QAbstractSocket::SocketError) {
             Busy::ThreadScope busy("relay thread: sending");
             Busy::count(QStringLiteral("relay sending errors: ") + hostOf(url));
+            // Never opened: this relay can't be reached now (it rests after a few of these).
+            const auto s = m_senders.constFind(url);
+            if (s != m_senders.constEnd() && s->ws == ws && !s->open)
+                relayFailed(url);
             dropSender(url, ws);
         });
         // Only "OK" matters here. "AUTH" is never answered: signing in would name this computer's mailbox.
@@ -995,7 +1007,7 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
             // Cap v3 (29.4): a relay asking us to slow down pauses paced video pieces for a minute.
             else if (a.at(0).toString() == QLatin1String("OK") && GroupVideo::isRateLimit(a.at(3).toString()))
                 GroupVideo::noteRateLimited(QDateTime::currentMSecsSinceEpoch());
-            // 1.47: refused for good (or a duplicate, which it already has): this relay stops being sent it.
+            // Refused for good (or a duplicate, which it already has): this relay stops being sent it.
             else if (a.at(0).toString() == QLatin1String("OK"))
                 refusedAt(a.at(1).toString(), url, a.at(3).toString());
         });
@@ -1028,7 +1040,7 @@ void NostrWorker::takeOk(const QString &id, const QString &url)
 {
     if (id.isEmpty())
         return;
-    // 1.47: it stays in the outbox while other relays still owe an OK (each gets it again, see spreadOn). "Sent" still
+    // It stays in the outbox while other relays still owe an OK (each gets it again, see spreadOn). "Sent" still
     // comes from the first OK, below.
     bool done = true;
     for (Out &o : m_outbox)
@@ -1047,7 +1059,29 @@ void NostrWorker::takeOk(const QString &id, const QString &url)
     deliverSoon();
 }
 
-void NostrWorker::publish(quint64 token, const QString &mailboxHex, const QString &content, int days, int maxRelays, bool low)
+void NostrWorker::relayFailed(const QString &url)
+{
+    const int n = m_relayFails.value(url) + 1;
+    if (n >= Nostr::kRelayDownAfter) {
+        m_relayDownUntil.insert(url, QDateTime::currentMSecsSinceEpoch() + Nostr::kRelayDownMs);
+        m_relayFails.remove(url);
+    } else {
+        m_relayFails.insert(url, n);
+    }
+}
+
+void NostrWorker::relayReached(const QString &url)
+{
+    m_relayFails.remove(url);
+    m_relayDownUntil.remove(url);
+}
+
+bool NostrWorker::relayDown(const QString &url) const
+{
+    return m_relayDownUntil.value(url) > QDateTime::currentMSecsSinceEpoch();
+}
+
+void NostrWorker::publish(quint64 token, const QString &mailboxHex, const QString &content, int days, int maxRelays, bool low, bool again)
 {
     if (m_down)
         return;
@@ -1065,10 +1099,15 @@ void NostrWorker::publish(quint64 token, const QString &mailboxHex, const QStrin
     const QString id = ev.value(QStringLiteral("id")).toString();
     const QStringList to = Nostr::pickRelays(Nostr::defaultRelays(), m_live, maxRelays > 0 ? maxRelays : Nostr::kSpread);
     Out out{msg, id, to, low};
-    // 1.47: a real message to every relay is owed an OK by each of them: until it has one, a relay gets it again.
-    const bool spread = !low && maxRelays <= 0;
-    if (spread)
+    // A real message to every relay is owed an OK by each of them: until it has one, a relay gets it again. A piece of
+    // something bigger goes once (the message's own resend covers it, so a retry never bursts past the pacing), and what
+    // nobody waits on (a receipt, typing) gets only the first few tries.
+    const bool spread = !low && maxRelays <= 0 && again;
+    if (spread) {
         out.owe = QSet<QString>(to.cbegin(), to.cend());
+        out.rounds = token ? Nostr::kSpreadRounds : Nostr::kSpreadLightRounds;
+        out.total = int(to.size());
+    }
     m_outbox << out;
     // Each kind has its own cap: a linked device's frames only ever push out older ones of their own.
     int count = 0;
@@ -1087,8 +1126,13 @@ void NostrWorker::publish(quint64 token, const QString &mailboxHex, const QStrin
             m_okWait.clear();
         m_okWait.insert(id, token);
     }
-    // The relays chosen get it, each on a sending socket of its own that never asks for the inbox or signs in.
+    // The relays chosen get it, each on a sending socket of its own that never asks for the inbox or signs in. One that
+    // can't be reached rests (a few failed connections in a row), unless every one is.
+    QStringList awake;
     for (const QString &url : to)
+        if (!relayDown(url))
+            awake << url;
+    for (const QString &url : std::as_const(awake.isEmpty() ? to : awake))
         send(url, {msg});
     if (spread)
         spreadOn(id, 0);
@@ -1098,13 +1142,22 @@ void NostrWorker::publish(quint64 token, const QString &mailboxHex, const QStrin
 
 void NostrWorker::spreadOn(const QString &id, int round)
 {
-    const qint64 wait = Nostr::spreadRetryMs(round);
+    int rounds = 0;
+    bool stored = false;
+    for (const Out &o : std::as_const(m_outbox))
+        if (o.id == id) {
+            rounds = o.rounds;
+            stored = int(o.owe.size()) < o.total;
+        }
+    const qint64 wait = round < rounds ? Nostr::spreadRetryMs(round) : -1;
     if (wait < 0) {
-        // Every try used: it stops being owed (an OK that still comes is harmless).
+        // Every try used: it stops being owed (an OK that still comes is harmless). A relay holds it, so it goes from the
+        // outbox; none does, and it stays for the next relay that connects.
         for (Out &o : m_outbox)
             if (o.id == id)
                 o.owe.clear();
-        m_outbox.removeIf([&id](const Out &o) { return o.id == id && !o.low; });
+        if (stored)
+            m_outbox.removeIf([&id](const Out &o) { return o.id == id && !o.low; });
         return;
     }
     QTimer::singleShot(int(wait), this, [this, id, round] {
@@ -1118,7 +1171,8 @@ void NostrWorker::spreadOn(const QString &id, int round)
             const QString msg = o.msg;
             const QSet<QString> owe = o.owe;
             for (const QString &url : owe)
-                send(url, {msg});
+                if (!relayDown(url))
+                    send(url, {msg});
             spreadOn(id, round + 1);
             return;
         }
@@ -1144,6 +1198,11 @@ void NostrWorker::refusedAt(const QString &id, const QString &url, const QString
         }
     if (done)
         m_outbox.removeIf([&id](const Out &o) { return o.id == id; });
+}
+
+bool Nostr::delayed(qint64 oldestWaitingMs, qint64 limitedAgoMs)
+{
+    return oldestWaitingMs >= 0 && (oldestWaitingMs >= 20000 || (limitedAgoMs >= 0 && limitedAgoMs < 120000));
 }
 
 qint64 Nostr::spreadRetryMs(int round)
@@ -1515,7 +1574,7 @@ int Nostr::publish(const QString &mailboxHex, const QString &content, int days)
     return publishTo(mailboxHex, content, days, {});
 }
 
-int Nostr::publishTo(const QString &mailboxHex, const QString &content, int days, std::function<void()> onStored, int maxRelays, bool low)
+int Nostr::publishTo(const QString &mailboxHex, const QString &content, int days, std::function<void()> onStored, int maxRelays, bool low, bool again)
 {
     // Signed and sent on the relay thread; onStored runs here once a relay has said OK to it.
     quint64 token = 0;
@@ -1527,7 +1586,7 @@ int Nostr::publishTo(const QString &mailboxHex, const QString &content, int days
     }
     if (!m_keysPushed)
         pushKeys();   // a relay opened for it asks for the inbox too, which needs the mailbox
-    post([token, mailboxHex, content, days, maxRelays, low](NostrWorker *w) { w->publish(token, mailboxHex, content, days, maxRelays, low); });
+    post([token, mailboxHex, content, days, maxRelays, low, again](NostrWorker *w) { w->publish(token, mailboxHex, content, days, maxRelays, low, again); });
     return m_live;
 }
 
@@ -1759,9 +1818,12 @@ bool Nostr::threadSelfTest()
         waitFor([] { return false; }, 400);
         check("a page EOSE with no page asked for leaves the cursor alone", !n.m_eoseAt.contains(other));
 
-        // 1.47 (message RCA): every relay keeps getting a message until it has stored it, a few times, then no more.
+        // Every relay keeps getting a message until it has stored it, a few times, then no more.
         check("each relay is sent a message again until it stores it", spreadRetryMs(0) == 10000 && spreadRetryMs(4) == 900000 &&
               spreadRetryMs(5) == -1 && spreadRetryMs(-1) == -1);
+        check("what nobody waits on gets fewer tries", kSpreadLightRounds < kSpreadRounds && spreadRetryMs(kSpreadRounds) == -1);
+        check("the delayed line shows after a wait, or while a relay asks us to slow down", delayed(20000, -1) && !delayed(19999, -1) &&
+              delayed(1000, 5000) && !delayed(1000, 120000) && !delayed(-1, 5000));
         check("only a lasting refusal stops a relay being sent it", refusedForGood(QStringLiteral("blocked: no 1059")) &&
               refusedForGood(QStringLiteral("pow: 20 bits")) && !refusedForGood(QStringLiteral("rate-limited: slow down")) &&
               !refusedForGood(QStringLiteral("auth-required: sign in")) && !refusedForGood(QString()));

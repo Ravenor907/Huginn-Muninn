@@ -144,6 +144,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -793,6 +794,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     Box(Modifier.fillMaxSize().frosted()) {
         // Room under the last row for the + button: its size and both margins, plus a small gap.
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = PLUS_SIZE + PLUS_MARGIN * 2 + 8.dp)) {
+            item(key = "delayed") { DelayedLine(app) }
             // A join by a code or link: the admin's app lets me in when it's next online.
             items(waitingJoins, key = { "w|" + it.g }) { w ->
                 Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -1370,6 +1372,7 @@ private fun Conversation(app: Muninn, key: String) {
         val current = matches.getOrNull(matchAt)
         val albums = remember(msgs) { albumsOf(msgs) }
         val callOf: (io.github.ravenor907.muninn.net.call.CallManager.Log) -> Unit = { l -> io.github.ravenor907.muninn.screens.CallActivity.call(context, l.peerKey) }
+        DelayedLine(app)
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom)) {
             items(msgs.size, key = { msgs[it].id }) { i ->
@@ -1914,17 +1917,28 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
         !m.mine -> ""
         m.state == "unsending" -> "Removing from their phone"
         m.unsent.isNotEmpty() -> ""
-        m.failed -> "Not sent, tap to retry"
+        m.failed -> "Not sent yet, tap to retry"
         // Honest ticks: "Delivered" only once their phone has it, else whose phone it's waiting for.
         else -> io.github.ravenor907.muninn.net.Ticks.private(m.state, theirName)
     }
     val edited = if (m.edited > 0 && m.unsent.isEmpty()) "(edited)" else ""
     // A group message of mine that someone read: the check mark and the count stand in for "Read by 2".
     val showRead = groupRead > 0 && m.mine && m.unsent.isEmpty()
-    val meta = listOf(edited, clock(m.time), if (showRead) "" else status).filter { it.isNotEmpty() }.joinToString(" · ")
+    // A long status ("Waiting for Mom's phone") reads "Waiting" under the message; a tap on it says it in full.
+    val shortStatus = io.github.ravenor907.muninn.net.Ticks.short(status)
+    var fullStatus by remember(m.id) { mutableStateOf(false) }
+    val longStatus = shortStatus != status
+    val meta = listOf(edited, clock(m.time), if (showRead) "" else if (fullStatus) status else shortStatus).filter { it.isNotEmpty() }.joinToString(" · ")
     val metaStyle = tinyStyle.copy(color = if (m.failed) Palette.danger else Palette.textMuted)
     val metaLine: @Composable () -> Unit = {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = if (showRead) Modifier.semantics { contentDescription = "$meta, read by $groupRead" } else Modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = when {
+            showRead -> Modifier.semantics { contentDescription = "$meta, read by $groupRead" }
+            longStatus -> Modifier.clickable(onClickLabel = "Show who it's waiting for") {
+                fullStatus = !fullStatus
+                if (fullStatus) Ui.say(status + ". " + io.github.ravenor907.muninn.net.Ticks.WAITING_WHY)
+            }.semantics { contentDescription = listOf(edited, clock(m.time), status).filter { it.isNotEmpty() }.joinToString(", ") }
+            else -> Modifier
+        }) {
             // Wraps to a second line at a large text size; the read mark keeps its place beside it.
             Text(meta, style = metaStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (showRead) { Spacer(Modifier.width(4.dp)); MIcon("check", Palette.gold, 13.dp, weight = 2.2f); Spacer(Modifier.width(3.dp)); Circled(groupRead) }
@@ -1980,7 +1994,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                         isVoice -> Column(Modifier.padding(start = 8.dp, top = 8.dp, end = 12.dp, bottom = 6.dp)) {
                             name(); quoted()
                             // Mine: length and receipt ("0:04 · Read"). Theirs: length and when it came.
-                            VoiceNote(m, photo!!, Voice.length(m.voice) + " · " + (if (m.mine) status.ifEmpty { clock(m.time) } else clock(m.time)), metaStyle)
+                            VoiceNote(m, photo!!, Voice.length(m.voice) + " · " + (if (m.mine) shortStatus.ifEmpty { clock(m.time) } else clock(m.time)), metaStyle)
                         }
                         isVideo -> Column(Modifier.padding(4.dp)) {
                             Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
@@ -2024,15 +2038,14 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                         }
                         else -> Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             name(); quoted()
-                            // The time (and receipt) sits inline after the text, on its last line.
-                            Row(verticalAlignment = Alignment.Bottom) {
+                            // The text takes the bubble's full width. The time and receipt sit after its last line when they
+                            // fit there, else on a line of their own under it, on the right.
+                            TextWithMeta(metaLine) { onLast ->
                                 if (m.unsent.isNotEmpty()) Text(if (m.unsent == io.github.ravenor907.muninn.net.Groups.REMOVED) "Removed by an admin"
                                     else if (m.mine) "Message deleted by you" else "Message deleted by ${theirName ?: m.unsent}",
                                     style = bodyStyle.copy(color = Palette.textFaint, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
-                                    modifier = Modifier.weight(1f, fill = false))
-                                else Text(m.text, style = bodyStyle, modifier = Modifier.weight(1f, fill = false))
-                                Spacer(Modifier.width(8.dp))
-                                metaLine()
+                                    onTextLayout = onLast)
+                                else Text(m.text, style = bodyStyle, onTextLayout = onLast)
                             }
                             // Cap m2: what a link goes to, made on the sender's phone.
                             if (m.unsent.isEmpty()) m.preview?.let { Box(Modifier.padding(top = 6.dp)) { PreviewCard(it) } }
@@ -2045,6 +2058,46 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
             Box(Modifier.widthIn(max = 560.dp).fillMaxWidth(0.8f)) { ReactionChips(m.reactions, me, m.mine, onReactions) }
         }
     }
+}
+
+/**
+ * A message's text and its time and receipt ([meta]). The text is measured against the bubble's full width, then [meta]
+ * goes after its last line if it fits there, else under the text on the right. Right-to-left text always takes the second.
+ */
+@Composable
+private fun TextWithMeta(meta: @Composable () -> Unit, text: @Composable (onLast: (androidx.compose.ui.text.TextLayoutResult) -> Unit) -> Unit) {
+    // The last line's width (px), or -1 for right-to-left; written while the text is measured, read right after.
+    val last = remember { floatArrayOf(0f) }
+    val gap = 8.dp
+    androidx.compose.ui.layout.Layout(content = {
+        text { r ->
+            val n = r.lineCount - 1
+            val rtl = n >= 0 && r.getParagraphDirection(r.getLineStart(n)) == androidx.compose.ui.text.style.ResolvedTextDirection.Rtl
+            last[0] = if (n < 0) 0f else if (rtl) -1f else r.getLineRight(n) - r.getLineLeft(n)
+        }
+        meta()
+    }) { items, c ->
+        val loose = c.copy(minWidth = 0, minHeight = 0)
+        val t = items[0].measure(loose)
+        val m = items[1].measure(loose)
+        val gapPx = gap.roundToPx()
+        val end = last[0].toInt() + gapPx + m.width
+        val beside = last[0] >= 0f && end <= c.maxWidth
+        val w = (if (beside) maxOf(t.width, end) else maxOf(t.width, m.width)).coerceIn(c.minWidth, c.maxWidth)
+        val h = if (beside) maxOf(t.height, m.height) else t.height + m.height
+        layout(w, h) {
+            t.placeRelative(0, 0)
+            m.placeRelative(w - m.width, h - m.height)
+        }
+    }
+}
+
+/** The calm line while something of mine hasn't got out yet. It never notifies, and goes by itself once things move. */
+@Composable
+private fun DelayedLine(app: Muninn) {
+    val delayed by app.chat.delayed.collectAsState()
+    if (delayed) Text("Messages are delayed; they'll send automatically", style = Type.small.copy(color = Palette.textMuted),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
 }
 
 /** Decodes a JPEG, no bigger than [max] pixels on the long side. */
@@ -2910,6 +2963,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             MButton("Add people", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "plus") { ChatNav.open = "$key/add" }
         }
         val gAlbums = remember(msgs) { albumsOf(msgs.map { asMsg(app, it) }) }
+        DelayedLine(app)
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom)) {
             items(msgs.size, key = { msgs[it].id }) { i ->

@@ -883,6 +883,8 @@ QString Chat::mailboxOf(const QString &key) const
 
 QString Chat::netStatus() const
 {
+    if (m_delayed)
+        return QStringLiteral("Messages are delayed; they'll send automatically");
     return internet() > 0 ? QStringLiteral("Internet: connected") : QStringLiteral("Internet: offline");
 }
 
@@ -931,15 +933,16 @@ bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, con
                 if (!self)
                     return;
                 if (!self->m_moving)
-                    self->m_nostr->publishTo(mailbox, self->wrap(key, body), keep, ok);
+                    self->m_nostr->publishTo(mailbox, self->wrap(key, body), keep, ok, 0, false, false);
                 if (last)
                     self->m_paced.remove(pace);
             });
         }
         return true;
     }
+    const bool single = bodies.size() == 1;
     for (const QByteArray &b : bodies)
-        m_nostr->publishTo(mailbox, wrap(key, b), keep, ok);
+        m_nostr->publishTo(mailbox, wrap(key, b), keep, ok, 0, false, single);
     return true;
 }
 
@@ -2935,12 +2938,15 @@ void Chat::retryLoop()
         if (!route(k).isEmpty() && !deliver(k, m_unsentKeeps.value(k), mailboxOf(k)).isEmpty())
             m_unsentKeeps.remove(k);
     QList<QPair<QString, QString>> due, unsends, late;
+    qint64 oldestWaiting = -1;
     for (auto it = m_private.begin(); it != m_private.end(); ++it)
         for (const QVariant &v : it.value()) {
             const QVariantMap m = v.toMap();
             const QString id = str(m, "id");
             if (!m.value(QStringLiteral("mine")).toBool() || m_trash.contains(it.key()))
                 continue;
+            if (str(m, "state") == QLatin1String("sending") && t0 - m.value(QStringLiteral("time")).toLongLong() <= kDay)
+                oldestWaiting = qMax(oldestWaiting, t0 - m.value(QStringLiteral("time")).toLongLong());
             if (str(m, "state") == QLatin1String("unsending")) {
                 Tries &t = m_tries[id];
                 if (t.next == 0)
@@ -2973,6 +2979,15 @@ void Chat::retryLoop()
         }
     for (const auto &l : late)
         update(l.first, l.second, [](QVariantMap &x) { x.insert(QStringLiteral("failed"), true); });
+    {
+        // The calm line in place of the status, never a notification; it goes by itself once things move.
+        const qint64 limited = GroupVideo::rateLimitedAt();
+        const bool delayed = Nostr::delayed(oldestWaiting, limited > 0 ? t0 - limited : -1);
+        if (delayed != m_delayed) {
+            m_delayed = delayed;
+            emit changed();
+        }
+    }
     for (const auto &d : due)
         attempt(d.first, d.second);
     groupRetry();

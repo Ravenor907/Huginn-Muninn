@@ -105,7 +105,8 @@ public:
     // The same, with more say: onStored runs once the first relay answers OK to it (NIP-20 ["OK", id, true, ...]), never
     // before; maxRelays > 0 sends it to at most that many relays (open ones first; kSpread otherwise); low marks a linked device's frame
     // (section 15), which waits in an outbox of its own (kMaxLowOutbox) and never pushes a real message out of the main one.
-    int publishTo(const QString &mailboxHex, const QString &content, int days, std::function<void()> onStored, int maxRelays = 0, bool low = false);
+    // again: false for a piece of something bigger (it goes once, the message's own resend covers it).
+    int publishTo(const QString &mailboxHex, const QString &content, int days, std::function<void()> onStored, int maxRelays = 0, bool low = false, bool again = true);
     static constexpr int kMaxOutbox = 200;
     // How many relays an event goes to unless asked otherwise.
     // Every relay: a phone saving battery listens on only one of them, so a message must be on all.
@@ -119,9 +120,18 @@ public:
     static constexpr int kLinkRelays = 0;
     // The relays an event limited to n goes to: the open ones first (in list order), then the rest.
     static QStringList pickRelays(const QStringList &all, const QSet<QString> &live, int n);
-    // 1.47 (message RCA): every relay keeps getting the same event until it has stored it, not only until the first OK:
+    // Every relay keeps getting the same event until it has stored it, not only until the first OK:
     // the wait before try round (0 first), or -1 once every try was used (10 s, 30 s, 1 min, 5 min, 15 min).
     static qint64 spreadRetryMs(int round);
+    static constexpr int kSpreadRounds = 5;
+    // Tries for what nobody waits on (a receipt, typing): the message's own resend asks again.
+    static constexpr int kSpreadLightRounds = 3;
+    // Failed connections in a row before a relay rests, and for how long, so one dead relay never costs a connection a message.
+    static constexpr int kRelayDownAfter = 3;
+    static constexpr qint64 kRelayDownMs = 10 * 60 * 1000;
+    // "Messages are delayed": something of mine has waited this long for any route, or waits while a relay asked us to slow
+    // down limitedAgoMs ago (either -1: none).
+    static bool delayed(qint64 oldestWaitingMs, qint64 limitedAgoMs);
     // An "OK false" reason after which that relay will never take the event (blocked, invalid, pow, restricted, error).
     // "rate-limited", "auth-required" and unknown reasons may pass later; "duplicate" means it has it.
     static bool refusedForGood(const QString &reason);

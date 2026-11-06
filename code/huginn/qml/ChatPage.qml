@@ -267,10 +267,10 @@ Rectangle {
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
     function stateLabel(m) {
         if (!m.mine) return ""
-        if (m.failed) return " · Not sent, tap to retry"
+        if (m.failed) return " · Not sent yet, tap to retry"
         if (m.state === "unsending") return " · Removing from their phone"
         if (m.unsent) return ""
-        return m.state === "read" ? " · Read" : m.state === "delivered" ? " · Delivered" : m.state === "sent" ? " · Sent" : m.state === "sending" ? " · Sending" : ""
+        return m.state === "read" ? " · Read" : m.state === "delivered" ? " · Delivered" : m.state === "sent" ? " · Waiting" : m.state === "sending" ? " · Sending" : ""
     }
     // Discord-style grouping: the same person again within 7 minutes shows no name or picture.
     function groupedAt(i) {

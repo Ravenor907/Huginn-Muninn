@@ -625,6 +625,7 @@ private:
     // Cap v3 (29.4): video relay pieces leave paced, a few a second in all; one queue per key ("member|message").
     GroupVideo::Pacer m_videoPacer;
     QSet<QString> m_paced;
+    bool m_delayed = false;   // something of mine hasn't got out yet (Nostr::delayed)
     qint64 m_pacerLimitSeen = 0;
     QList<QJsonObject> pieces(const QVariantMap &m);
     QList<QByteArray> sealedFor(const QString &key, const QString &id, const QVariantMap &m);

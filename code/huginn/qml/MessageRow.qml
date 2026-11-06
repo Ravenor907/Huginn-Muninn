@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Huginn
 
 // Shared by groups and 1:1 chats (threads and pins).
@@ -169,11 +170,22 @@ Rectangle {
                 }
             }
             Text {
+                id: metaText
                 textFormat: Text.PlainText
                 anchors.baseline: whoText.baseline
+                // Elided before it ever runs off a narrow window; the whole line shows on hover and to a screen reader.
+                width: Math.min(implicitWidth, Math.max(0, col.width - whoText.width - Theme.px(36)))
+                elide: Text.ElideRight
                 text: host.clock(msg.m.time) + (msg.m.isEdited ? " · (edited)" : "") + host.stateLabel(msg.m)
                 color: msg.m.failed ? Theme.danger : msg.m.mine && msg.m.state === "read" ? msg.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                readonly property string fullStatus: msg.m.mine && msg.m.state === "sent" && msg.host && msg.host.openName
+                    ? "Waiting for " + msg.host.openName + "'s device. It's safe on the relays, and arrives when it's next online." : text
+                Accessible.name: fullStatus
+                HoverHandler { id: metaHover }
+                ToolTip.visible: metaHover.hovered && (metaText.truncated || fullStatus !== text)
+                ToolTip.text: fullStatus
+                ToolTip.delay: 400
             }
             // Mine and read: a check mark and how many have read it, in a circle.
             Loader {
