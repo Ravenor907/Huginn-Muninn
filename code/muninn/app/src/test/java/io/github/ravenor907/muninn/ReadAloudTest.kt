@@ -123,7 +123,7 @@ class ReadAloudTest {
         assertNull(KidVoice.of(JSONObject()))
         assertNull(KidVoice.of(JSONObject().put("voice", "x")))
         // Sent only to a device with k15, and only once a parent picked one.
-        assertEquals("m", KidVoice.toSend("m", true))
+        assertEquals("f", KidVoice.toSend("m", true))   // Male is retired: Female goes instead
         assertNull(KidVoice.toSend("m", false))
         assertNull(KidVoice.toSend("", true))
         assertEquals("k15", KidVoice.CAP)
