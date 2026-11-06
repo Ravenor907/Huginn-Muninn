@@ -822,7 +822,10 @@ class CallMedia(
                     if (zeroFrames > 12) zeroFrames = 0
                 } else zeroFrames = 0
                 if (tv != null && !tv.capture(raw, pcm)) continue
-                if (muted) continue   // pings go on; no audio while muted (5.5)
+                // A video shared into the call: its sound goes out under the voice (lower while this side talks).
+                val shared = CallShare.sendQ.poll()
+                if (muted && shared == null) continue   // pings go on; no audio while muted (5.5)
+                if (shared != null) { if (muted) pcm.fill(0); CallShare.mix(pcm, shared, CallShare.talking(pcm)) }
                 if (frames++ % 25 == 0) opusTuning().let { (b, l) -> enc.tune(b, l) }   // twice a second
                 val p = enc.encode(pcm, keepSilence = true) ?: continue
                 // DTX: one silence packet every 400 ms, so the other side's decoder makes comfort noise (5.5).
@@ -862,6 +865,9 @@ class CallMedia(
                 // Their volume here (cap g2: 0 to 200 %), read for every frame after the speaking ring. Mute for me is for
                 // rooms only: a 1:1 call always plays them.
                 io.github.ravenor907.muninn.net.ModLogic.applyGain(pcm, Opus.FRAME, io.github.ravenor907.muninn.net.PeopleSound.gainOf(peerKey, room = false))
+                // The video this side shares plays here too, through the call's own sound (so the echo canceller knows it),
+                // lower while they talk.
+                CallShare.localQ.poll()?.let { CallShare.mix(pcm, it, s) }
                 val len = if (tv != null) tv.render(pcm, out) else Opus.FRAME
                 t.write(out, 0, len)   // blocking: the audio clock paces this loop
             }

@@ -123,6 +123,32 @@
      "text": "Landscape with 3-button navigation: nothing sits under the bar or the camera cutout."
     }
    ]
+  },
+  {
+   "id": "m8",
+   "title": "Calls and videos",
+   "checks": [
+    {
+     "id": "m8.1",
+     "text": "A video of 1 to 3 minutes to a Family member pops up in their chat by itself and plays when tapped."
+    },
+    {
+     "id": "m8.2",
+     "text": "In a video call, Share video: pick a video. It plays large on the other phone or the Kids' TV, with its sound under your voices. Pause, Play and Stop work."
+    },
+    {
+     "id": "m8.3",
+     "text": "Kids' TV in a call: press Home. The call screen comes right back and the call goes on."
+    },
+    {
+     "id": "m8.4",
+     "text": "A video call on a weak connection: the picture gets smaller instead of freezing, and sharpens again when the connection recovers."
+    },
+    {
+     "id": "m8.5",
+     "text": "Labs mode: hold the raven at the top for 7 seconds. It buzzes and opens Report a bug with the screenshot and the activity log."
+    }
+   ]
   }
  ]
 }

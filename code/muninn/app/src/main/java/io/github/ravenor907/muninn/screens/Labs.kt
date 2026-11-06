@@ -81,6 +81,7 @@ object Labs {
         taps.clear()
         val now = !app.identity.labs
         app.identity.labs = now
+        io.github.ravenor907.muninn.net.ActivityLog.on = now
         // Off: back on the Stable channel too (what's installed stays until the next release).
         if (!now) app.identity.preRelease = false
         changed++
@@ -100,11 +101,19 @@ object Labs {
         })
     }
 
-    /** Report a bug: takes a picture of this app's own window as it is now, then opens the report screen. */
-    fun report(context: Context, start: String = "") {
+    /** The activity log taken with the screenshot (hold the raven 7 seconds), or "" (Report a bug in the menus). */
+    @Volatile var log: String = ""
+
+    /**
+     * Report a bug: takes a picture of this app's own window as it is now, then opens the report screen. [withLog]: the
+     * raven held 7 seconds in Labs mode, so the activity log goes with it too.
+     */
+    fun report(context: Context, start: String = "", withLog: Boolean = false) {
         val activity = activityOf(context)
         shot = null
         prefill = start
+        log = if (withLog) (context.applicationContext as? Muninn)?.let { logNow(it) }.orEmpty() else ""
+        io.github.ravenor907.muninn.net.ActivityLog.add("labs", "bug report started" + if (withLog) " (raven held)" else "")
         val open: () -> Unit = { SettingsNav.goChat = "labsreport" }
         if (activity == null) { open(); return }
         capture(activity) { b -> shot = b; open() }
@@ -126,6 +135,31 @@ object Labs {
         try {
             PixelCopy.request(a.window, b, { result -> done(if (result == PixelCopy.SUCCESS) b else drawn()) }, Handler(Looper.getMainLooper()))
         } catch (e: Exception) { done(drawn()) }
+    }
+
+    /** The activity log with the facts that explain it: version, device, network, privacy and update settings. */
+    private fun logNow(app: Muninn): String {
+        val c: Context = app
+        val cm = c.getSystemService(android.net.ConnectivityManager::class.java)
+        val caps = try { cm?.getNetworkCapabilities(cm.activeNetwork) } catch (_: Exception) { null }
+        val net = when {
+            caps == null -> "no network"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobile data"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            else -> "other"
+        } + if (caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false) ", metered" else ""
+        val pm = c.getSystemService(android.os.PowerManager::class.java)
+        val free = try { c.filesDir.usableSpace / (1024 * 1024) } catch (_: Exception) { -1L }
+        val head = listOf(
+            "Muninn ${app.updater.current} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) · ${Build.MANUFACTURER} ${Build.MODEL}",
+            "Network: $net · Battery Saver: ${if (pm?.isPowerSaveMode == true) "on" else "off"} · Free space: $free MB",
+            "Ultra privacy: ${if (io.github.ravenor907.muninn.net.UltraPrivacy.on) "on" else "off"} · Updates: ${if (app.identity.preRelease) "Pre-release" else "Stable"}" +
+                " · Kids' Device: ${if (io.github.ravenor907.muninn.tv.KidMode.saved(c)) "yes" else "no"}",
+            "Taken ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", java.util.Locale.US).format(java.util.Date())}",
+            "",
+        )
+        return io.github.ravenor907.muninn.net.ActivityLog.dump(head)
     }
 
     fun info(app: Muninn) = LabsWire.info("muninn", app.updater.current, "Android ${Build.VERSION.RELEASE}",
@@ -172,9 +206,11 @@ internal fun LabsReportScreen(app: Muninn) {
     val shot = remember { Labs.shot }
     val image = remember(shot) { shot?.asImageBitmap() }
     var include by remember { mutableStateOf(shot != null) }
+    val log = remember { Labs.log }
+    var includeLog by remember { mutableStateOf(log.isNotEmpty()) }
     var text by remember { mutableStateOf(Labs.prefill.take(LabsWire.MAX_TEXT).also { Labs.prefill = "" }) }
     var sending by remember { mutableStateOf(false) }
-    fun close() { Labs.shot = null; ChatNav.open = "" }
+    fun close() { Labs.shot = null; Labs.log = ""; ChatNav.open = "" }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar("Report a bug") { close() }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -183,6 +219,7 @@ internal fun LabsReportScreen(app: Muninn) {
                     modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).border(1.dp, Palette.line, Corner))
                 ToggleRow("Include screenshot", "Only Muninn's own screen", include) { include = it }
             }
+            if (log.isNotEmpty()) ToggleRow("Include activity log", "What Muninn did lately: screens, messages and files moving, calls. Never what anyone wrote.", includeLog) { includeLog = it }
             Field(text, { if (it.length <= LabsWire.MAX_TEXT) text = it }, "What happened?", Modifier.heightIn(min = 120.dp), single = false)
             Text("${text.length} / ${LabsWire.MAX_TEXT}", style = Type.small)
             Text("Sent encrypted to ${LabsWire.NAME}, with the app version, Android version and phone model.", style = Type.small)
@@ -192,7 +229,7 @@ internal fun LabsReportScreen(app: Muninn) {
             val bmp = if (include) shot else null
             Thread {
                 val jpeg = bmp?.let { Photos.screenshot(it) }
-                app.chat.sendLabsReport(text, jpeg, Labs.info(app)) { ok ->
+                app.chat.sendLabsReport(text, jpeg, Labs.info(app), if (includeLog) log else "") { ok ->
                     Handler(Looper.getMainLooper()).post {
                         sending = false
                         if (ok) { Ui.say("Report sent. Thank you."); close() } else Ui.say("Couldn't send. Try again.", true)
@@ -226,7 +263,13 @@ private fun ReportCard(app: Muninn, r: LabsInbox.Report) {
         Text(who, style = Type.big)
         Text(listOf(r.app.replaceFirstChar { it.uppercase() }, r.version, r.os, r.model).filter { it.isNotBlank() }.joinToString(" · "), style = Type.small)
         Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(r.at)), style = Type.small)
-        Text(r.text, style = Type.normal, modifier = Modifier.padding(top = 8.dp))
+        val parts = remember(r.id) { LabsWire.split(r.text) ?: (r.text to "") }
+        Text(parts.first, style = Type.normal, modifier = Modifier.padding(top = 8.dp))
+        if (parts.second.isNotEmpty()) {
+            var showLog by remember(r.id) { mutableStateOf(false) }
+            MButton(if (showLog) "Hide activity log" else "Show activity log (${parts.second.lines().size} lines)", Modifier.padding(top = 8.dp)) { showLog = !showLog }
+            if (showLog) Text(parts.second, style = Type.small.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), modifier = Modifier.padding(top = 6.dp))
+        }
         if (shot != null) Image(shot, contentDescription = "Screenshot", contentScale = ContentScale.Fit,
             modifier = Modifier.padding(top = 8.dp).fillMaxWidth().heightIn(max = 480.dp).border(1.dp, Palette.line, Corner))
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

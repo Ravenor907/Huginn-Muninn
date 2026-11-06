@@ -60,6 +60,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.launch
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -84,16 +85,46 @@ val Corner: androidx.compose.ui.graphics.Shape get() = LookShapes.corner
  */
 @Composable
 fun Brand(onLogo: (() -> Unit)? = null, title: String = "MUNINN", @Suppress("UNUSED_PARAMETER") centered: Boolean = true,
-          trailing: @Composable RowScope.() -> Unit = {}) {
+          onHold: (() -> Unit)? = null, trailing: @Composable RowScope.() -> Unit = {}) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     Box(Modifier.fillMaxWidth().bar().heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         contentAlignment = Alignment.Center) {
-        val tap by androidx.compose.runtime.rememberUpdatedState(onLogo)
-        val logo = Modifier.size(30.dp).pointerInput(Unit) { detectTapGestures(onTap = { RavenCall.play(ctx, firstOnly = tap != null); tap?.invoke() }) }
+        val logo = Modifier.size(30.dp).raven({ RavenCall.play(ctx, firstOnly = onLogo != null); onLogo?.invoke() }, onHold)
         Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.align(Alignment.CenterStart).then(logo))
         // The same room on both sides (the raven's and the buttons'), so the title sits in the true middle.
         FitLine(title, Type.title, Modifier.fillMaxWidth().padding(horizontal = 64.dp), Alignment.Center)
         Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) { trailing() }
+    }
+}
+
+/** Labs: how long the raven is held for a bug report. */
+const val HOLD_FOR_REPORT_MS = 7_000L
+
+/**
+ * The raven: [onTap] on a tap; with [onHold] (Labs mode), held for [HOLD_FOR_REPORT_MS] it buzzes once and runs that
+ * instead (a bug report with a screenshot and the activity log), and letting go after it isn't a tap.
+ */
+fun Modifier.raven(onTap: () -> Unit, onHold: (() -> Unit)?): Modifier = androidx.compose.ui.composed {
+    val tap by androidx.compose.runtime.rememberUpdatedState(onTap)
+    val hold by androidx.compose.runtime.rememberUpdatedState(onHold)
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var fired by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    pointerInput(Unit) {
+        detectTapGestures(onPress = {
+            fired = false
+            val h = hold
+            if (h != null) {
+                val job = scope.launch {
+                    kotlinx.coroutines.delay(HOLD_FOR_REPORT_MS)
+                    fired = true
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    h()
+                }
+                tryAwaitRelease()
+                job.cancel()
+            }
+        }, onTap = { if (!fired) tap() })
     }
 }
 
@@ -376,7 +407,10 @@ object Ui {
         }
         ask.value = a
     }
-    fun say(text: String, bad: Boolean = false) { toast.value = text to bad }
+    fun say(text: String, bad: Boolean = false) {
+        io.github.ravenor907.muninn.net.ActivityLog.add(if (bad) "said (problem)" else "said", text)
+        toast.value = text to bad
+    }
 
     /** Questions the lock put aside unanswered, oldest first, shown again once it's opened. */
     private val parked = ArrayList<Ask>()

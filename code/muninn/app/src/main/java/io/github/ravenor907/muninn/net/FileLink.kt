@@ -288,6 +288,9 @@ object FileLink {
     /** What a card keeps from before (its chat, route, folder, when it began) and what it shows now (paused, pace). */
     @Synchronized private fun put(p: Progress) {
         val old = _all.value[p.id]
+        if (old == null || old.state != p.state || old.route != p.route && p.route.isNotEmpty())
+            ActivityLog.add("file", "${ActivityLog.id(p.id)} ${if (p.mine) "out" else "in"} ${p.state} ${p.route} ${FileText.size(p.size)}" +
+                (if (p.state == "failed") " (${p.note})" else ""))
         val merged = if (old == null) p else p.copy(group = p.group.ifEmpty { old.group }, route = p.route.ifEmpty { old.route },
             folder = p.folder.ifEmpty { old.folder }, relay = p.relay || old.relay, time = old.time)
         val paused = p.id in pausedIds

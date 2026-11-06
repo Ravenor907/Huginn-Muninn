@@ -45,6 +45,21 @@ object LabsWire {
     /** The text of a report: trimmed, at most [MAX_TEXT] characters (Proto06.chars, as the rest of chat counts them). */
     fun textOk(text: String): Boolean = text.isNotBlank() && Proto06.chars(text) <= MAX_TEXT
 
+    /** Where a report's activity log starts (the raven held 7 seconds in Labs mode), after what the person wrote. */
+    const val LOG_MARK = "\n\n[Activity log]\n"
+    const val MAX_LOG = ActivityLog.MAX_CHARS
+
+    /** What went: the person's words, and the activity log after [LOG_MARK] when there is one. */
+    fun withLog(text: String, log: String): String = if (log.isBlank()) text else text + LOG_MARK + log.take(MAX_LOG)
+
+    /** (what they wrote, the activity log or "") from a report as it came; null when either part is too long or empty. */
+    fun split(full: String): Pair<String, String>? {
+        val at = full.indexOf(LOG_MARK)
+        val text = (if (at < 0) full else full.substring(0, at)).trim()
+        val log = if (at < 0) "" else full.substring(at + LOG_MARK.length)
+        return if (textOk(text) && log.length <= MAX_LOG) text to log else null
+    }
+
     /**
      * A report's clear fields: the room, the reply route (chat key and mailbox), the name, the id and "lb".
      * Nothing else about the device (no device id, no caps list). The seal adds "cap" and the sealed text.

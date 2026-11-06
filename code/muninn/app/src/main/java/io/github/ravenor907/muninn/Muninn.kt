@@ -77,6 +77,20 @@ class Muninn : Application() {
         // A panic lock from before the process ended stays on: no names on any notification until unlocked.
         io.github.ravenor907.muninn.ui.Panic.restore(this, vault.hasPassword)
         identity = Identity(this, vault)
+        // Labs: the activity log for bug reports runs only in Labs mode.
+        io.github.ravenor907.muninn.net.ActivityLog.on = identity.labs
+        val crashed = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            io.github.ravenor907.muninn.net.ActivityLog.add("crash", "${t.name}: ${e.javaClass.simpleName} ${e.message.orEmpty()}")
+            crashed?.uncaughtException(t, e)
+        }
+        scope.launch {
+            var last = ""
+            io.github.ravenor907.muninn.net.call.CallManager.call.collect { u ->
+                val now = if (u == null) "none" else "${io.github.ravenor907.muninn.net.ActivityLog.id(u.callId)} ${u.phase}" + (if (u.video) " video" else "")
+                if (now != last) { last = now; io.github.ravenor907.muninn.net.ActivityLog.add("call", now) }
+            }
+        }
         io.github.ravenor907.muninn.ui.Access.apply {
             size = identity.uiSize; text = identity.textSize; contrast = identity.highContrast
             colorVision = identity.colorVision; reduceMotion = identity.reduceMotion; look = io.github.ravenor907.muninn.ui.Looks.of(identity.look)

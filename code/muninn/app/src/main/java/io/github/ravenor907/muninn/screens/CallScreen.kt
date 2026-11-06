@@ -84,6 +84,7 @@ private object CallColors {
 
 /** Call screen line icons (24-unit paths, drawn like MIcon). */
 private object CallIcons {
+    const val share = "M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7 M16 6l-4-4-4 4 M12 2v13"
     const val down = "M6 9l6 6 6-6"
     const val shield = "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"
     const val micOff = "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5 11a7 7 0 0 0 14 0 M12 18v3 M4 4l16 16"
@@ -229,6 +230,21 @@ private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (Strin
             }
         }
         else -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            // Share a video into the call: it plays in the camera's place for them, its sound under the voices.
+            val share by io.github.ravenor907.muninn.net.call.CallShare.state.collectAsState()
+            val shareCtx = androidx.compose.ui.platform.LocalContext.current
+            val pickVideo = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
+                if (uri != null) io.github.ravenor907.muninn.net.call.CallShare.start(shareCtx, uri, "a video")?.let { io.github.ravenor907.muninn.ui.Ui.say(it, true) }
+            }
+            val canShare = c.phase == Phase.LIVE && video.possible && !io.github.ravenor907.muninn.tv.TvMic.active
+            if (share.on) Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Text("Sharing a video · " + io.github.ravenor907.muninn.net.Voice.length(share.atMs.toInt().coerceAtLeast(1)) +
+                    (if (share.ms > 0) " of " + io.github.ravenor907.muninn.net.Voice.length(share.ms.toInt()) else ""),
+                    style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(end = 10.dp))
+                io.github.ravenor907.muninn.ui.MButton(if (share.paused) "Play" else "Pause", icon = if (share.paused) "play" else "pause") {
+                    io.github.ravenor907.muninn.net.call.CallShare.pause(!share.paused)
+                }
+            }
             // Wraps onto two lines when four don't fit (a small phone at a large size).
             androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -238,6 +254,11 @@ private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (Strin
                 if (c.video) Round(if (video.cameraOn) CallIcons.camera else CallIcons.cameraOff, if (video.cameraOn) "Camera off" else "Camera",
                     if (video.cameraOn) Palette.accent else Palette.coolTint, if (video.cameraOn) Palette.ground else Palette.text, 68.dp, on = video.cameraOn) {
                     onCamera(!video.cameraOn)
+                }
+                if (canShare) Round(CallIcons.share, if (share.on) "Stop video" else "Share video", if (share.on) Palette.accent else Palette.coolTint,
+                    if (share.on) Palette.ground else Palette.text, 68.dp, on = share.on) {
+                    if (share.on) io.github.ravenor907.muninn.net.call.CallShare.stop()
+                    else pickVideo.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.VideoOnly))
                 }
                 if (c.video && video.cameraOn) Round(CallIcons.flip, "Flip", Palette.coolTint, Palette.text, 68.dp) { CallManager.switchCamera() }
                 else Round(CallIcons.message, "Message", Palette.coolTint, Palette.text, 68.dp) { onMessage(c.peerKey) }

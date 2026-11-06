@@ -129,6 +129,28 @@ class Vp8Encoder(val width: Int, val height: Int, fps: Int, kbps: Int) : AutoClo
         drain(out)
     }
 
+    /** One I420 frame ([y] width x height, [u] and [v] a quarter each) in; what's ready comes out through [out]. */
+    fun encodeI420(y: ByteArray, u: ByteArray, v: ByteArray, out: (ByteArray, Boolean) -> Unit) {
+        val i = codec.dequeueInputBuffer(10_000)
+        if (i >= 0) {
+            val dst = codec.getInputImage(i)
+            if (dst != null) {
+                val src = arrayOf(y, u, v)
+                for (p in 0..2) {
+                    val d = dst.planes[p]
+                    val w = if (p == 0) width else width / 2
+                    val h = if (p == 0) height else height / 2
+                    copyPlane(java.nio.ByteBuffer.wrap(src[p]), w, 1, d.buffer, d.rowStride, d.pixelStride, w, h)
+                }
+            } else {
+                val b = codec.getInputBuffer(i)!!
+                b.clear(); b.put(y, 0, width * height); b.put(u, 0, width * height / 4); b.put(v, 0, width * height / 4)
+            }
+            codec.queueInputBuffer(i, 0, width * height * 3 / 2, (System.nanoTime() - started) / 1000, 0)
+        }
+        drain(out)
+    }
+
     private fun copyPlane(src: java.nio.ByteBuffer, srs: Int, sps: Int, dst: java.nio.ByteBuffer, drs: Int, dps: Int, w: Int, h: Int) {
         if (sps == 1 && dps == 1) {
             val row = ByteArray(w)
@@ -445,6 +467,7 @@ object CallVideo {
     fun want(s: CallSession, on: Boolean) { if (s === session) update { it.copy(cameraOn = on && cameraHere()) } }
 
     fun detach() {
+        CallShare.callEnded()
         session?.mediaNow?.setVideoSending(VideoWire.CAMERA, false)
         session = null
         readyFor = null
@@ -461,7 +484,17 @@ object CallVideo {
         remote.frame(data, key, rotation)
     }
 
-    fun onKeyWanted(s: CallSession, stream: Int) { if (s === session && stream == VideoWire.CAMERA) keyWanted = true }
+    fun onKeyWanted(s: CallSession, stream: Int) { if (s === session && stream == VideoWire.CAMERA) { keyWanted = true; CallShare.keyWanted = true } }
+
+    /** The call a video can be shared into now (video both ways, this device films), or null. */
+    fun shareable(): CallSession? = session?.takeIf { _state.value.possible && cameraHere() }
+
+    /** A shared video takes the camera's place while it plays ([on]), and gives it back after. */
+    fun sharing(on: Boolean) {
+        val s = session ?: return
+        if (on) { stopCamera(); s.mediaNow?.setVideoSending(VideoWire.CAMERA, true); s.mediaNow?.videoStarted() }
+        else if (_state.value.cameraOn) rebind() else s.mediaNow?.setVideoSending(VideoWire.CAMERA, false)
+    }
 
     fun onPeerVideo(s: CallSession, camera: Boolean) { if (s === session) update { it.copy(peerCamera = camera) } }
 
@@ -539,7 +572,7 @@ object CallVideo {
     private fun onCameraFrame(img: ImageProxy, prof: VideoWire.Profile) {
         val s = session ?: return
         val m = s.mediaNow ?: return
-        if (!_state.value.cameraOn) return
+        if (!_state.value.cameraOn || CallShare.active) return
         val now = System.currentTimeMillis()
         // The profile's frame rate at most, kept on a schedule: a 30 fps camera gives 20 or 24 a second, not every other frame (15).
         val every = 1000L / prof.fps

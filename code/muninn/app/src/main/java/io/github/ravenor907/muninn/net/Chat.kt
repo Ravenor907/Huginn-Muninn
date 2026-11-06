@@ -1624,7 +1624,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val plain = ChatWire.open(o, sk, id.keys, null, ChatCrypto::newKeyPair, id.publicKey) ?: return 403 to "{}"
         if (room == "photo") return labs.piece(fromKey, msgId, o.optInt("i", -1), o.optInt("n"), plain, now) to "{}"
         val text = String(plain, Charsets.UTF_8).trim()
-        if (!LabsWire.textOk(text)) return 400 to "{}"
+        if (LabsWire.split(text) == null) return 400 to "{}"
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
         val r = LabsInbox.Report(msgId, fromKey, name, mailbox, lb.optString("app"), lb.optString("v"), lb.optString("os"), lb.optString("model"),
             text, now, lb.optString("s"))
@@ -1637,9 +1637,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * Sends a Labs report: [text], and [jpeg] (a screenshot already stripped of metadata) if given. Sealed v1 to the
      * Labs key like a first message, to its mailbox over the internet only. [done]: true once relays hold all of it.
      */
-    fun sendLabsReport(text: String, jpeg: ByteArray?, info: JSONObject, done: (Boolean) -> Unit) {
-        val t = text.trim()
-        if (!LabsWire.textOk(t) || isLabs()) { done(false); return }
+    fun sendLabsReport(text: String, jpeg: ByteArray?, info: JSONObject, log: String = "", done: (Boolean) -> Unit) {
+        val words = text.trim()
+        if (!LabsWire.textOk(words) || isLabs()) { done(false); return }
+        val t = LabsWire.withLog(words, log)
         bg {
             if (Move.locked) { done(false); return@bg }
             val sk = sharedKey(LabsWire.KEY)
@@ -2888,7 +2889,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val before = map[peer] ?: return@edit false
         var changed = false
         var again = false
-        val after = before.map { if (it.id == msgId) f(it).also { n -> if (n != it) changed = true; again = n.mine && !n.big && (n.state == "sending" || n.state == "unsending") } else it }
+        val after = before.map { if (it.id == msgId) f(it).also { n -> if (n != it) changed = true; again = n.mine && !n.big && (n.state == "sending" || n.state == "unsending")
+            if (n.state != it.state || n.failed != it.failed) ActivityLog.add("message", "${ActivityLog.id(n.id)} ${if (n.mine) "out" else "in"} ${n.state}" +
+                (if (n.failed) " not sent" else "") + (if (n.via.isNotEmpty()) " via ${n.via}" else "")) } else it }
         if (changed) map[peer] = after
         if (changed && again) queue(peer, msgId)
         changed
@@ -3512,6 +3515,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         map[peer] = placePart(list, m, System.currentTimeMillis())
         true
     }.also { added ->
+        if (added) ActivityLog.add("message", "${ActivityLog.id(m.id)} ${if (m.mine) "out new" else "in arrived"}" + (if (m.via.isNotEmpty()) " via ${m.via}" else "") +
+            when { m.big -> " (video in chat)"; m.video > 0 -> " (video)"; m.voice > 0 -> " (voice)"; m.photo.isNotEmpty() -> " (photo)"; else -> "" })
         if (added && m.mine && m.state.isNotEmpty()) queue(peer, m.id)
         if (added && isContact(peer)) bg { Link.onMessage(peer, nameOf(peer), m) }
         // A chat deleted earlier is back on the list now that a message came or went.

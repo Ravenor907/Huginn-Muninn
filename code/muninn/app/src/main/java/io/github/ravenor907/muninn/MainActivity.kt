@@ -84,6 +84,7 @@ import io.github.ravenor907.muninn.screens.TransferScreen
 import io.github.ravenor907.muninn.ui.Ask
 import io.github.ravenor907.muninn.ui.AskDialog
 import io.github.ravenor907.muninn.ui.Brand
+import io.github.ravenor907.muninn.ui.raven
 import io.github.ravenor907.muninn.ui.IconAction
 import io.github.ravenor907.muninn.ui.Kind
 import io.github.ravenor907.muninn.ui.MButton
@@ -376,6 +377,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        io.github.ravenor907.muninn.net.ActivityLog.add("app", "in the background")
         recents()
         if (Build.VERSION.SDK_INT < 33 && app.vault.hasPassword) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         super.onPause()
@@ -406,6 +408,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onResume() {
+        io.github.ravenor907.muninn.net.ActivityLog.add("app", "on screen")
         super.onResume()
         secure()
         recents()
@@ -512,6 +515,17 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Root() {
+        // Labs: where the person is, for the activity log (a chat by a short id, never its name).
+        val openNow = io.github.ravenor907.muninn.screens.ChatNav.open
+        LaunchedEffect(tab, openNow) {
+            val where = when {
+                openNow.isEmpty() -> ""
+                openNow.startsWith("g:") -> " > group " + io.github.ravenor907.muninn.net.ActivityLog.id(openNow.removePrefix("g:"))
+                openNow.length > 40 -> " > chat " + io.github.ravenor907.muninn.net.ActivityLog.id(openNow)
+                else -> " > $openNow"
+            }
+            io.github.ravenor907.muninn.net.ActivityLog.add("screen", tab + where)
+        }
         // Kids' TV: its own screens, with no lock and no sign in.
         if (io.github.ravenor907.muninn.tv.KidMode.on(app)) { io.github.ravenor907.muninn.tv.TvRoot(app); return }
         val ready by app.ready.collectAsState()
@@ -706,7 +720,8 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().fitBars()) {
             // Only the raven, the name and the valknut. On Chats the name is centred; in Settings the raven counts taps (Labs).
             val header: @Composable () -> Unit = { Brand(onLogo = if (tab == "settings") ({ io.github.ravenor907.muninn.screens.Labs.tap(app) }) else null,
-                title = title(tab).uppercase(), centered = tab == "chat") {
+                title = title(tab).uppercase(), centered = tab == "chat",
+                onHold = if (io.github.ravenor907.muninn.screens.Labs.on(app)) ({ io.github.ravenor907.muninn.screens.Labs.report(this@MainActivity, withLog = true) }) else null) {
                 SettingsButton(if (tab == "settings") "Close settings" else "Settings", tab == "settings") { toggleSettings() }
             } }
             if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
@@ -896,9 +911,8 @@ class MainActivity : ComponentActivity() {
             Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 // Settings: the raven, which counts taps (Labs). No ripple and nothing announced, as on phones.
                 if (onRaven != null) {
-                    val tap by androidx.compose.runtime.rememberUpdatedState<() -> Unit>(onRaven)
                     Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(26.dp)
-                        .pointerInput(Unit) { detectTapGestures(onTap = { tap() }) })
+                        .raven(onRaven, if (io.github.ravenor907.muninn.screens.Labs.on(app)) ({ io.github.ravenor907.muninn.screens.Labs.report(this@MainActivity, withLog = true) }) else null))
                     Spacer(Modifier.width(10.dp))
                 }
                 Text(text.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
