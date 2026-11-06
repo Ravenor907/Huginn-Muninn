@@ -168,8 +168,8 @@ object TvMic {
         /** One 20 ms frame from the microphone ([captureFrame] samples) into [out] (the call's 20 ms). True if [out] is full. */
         fun capture(input: ShortArray, out: ShortArray): Boolean {
             val p = proc
-            // A processor that was closed under a running call gives nothing: the plain conversion keeps the voice going.
-            val n = (if (p != null) p.capture(input, captureFrame, out) else 0).takeIf { it > 0 } ?: convert(input, captureFrame, out)
+            // As in 1.44 (the last version whose TV calls had sound): the processor's own answer, never mixed with a plain copy.
+            val n = if (p != null) p.capture(input, captureFrame, out) else convert(input, captureFrame, out)
             if (n < out.size) return false
             gain.process(out, n)
             measure(out, n)
@@ -179,8 +179,7 @@ object TvMic {
         /** One decoded 20 ms frame of the call into [out] ([playFrame] samples) for the speaker. Returns its length. */
         fun render(pcm: ShortArray, out: ShortArray): Int {
             val p = proc ?: return convert(pcm, pcm.size, out)
-            // Closed under a running call: 0 would leave the speaker loop writing nothing (no sound, no audio clock).
-            return p.render(pcm, pcm.size, out).takeIf { it > 0 } ?: convert(pcm, pcm.size, out)
+            return p.render(pcm, pcm.size, out)   // as in 1.44
         }
 
         /** Without [TvVoice]: a plain copy, or (should the library stop) picking or repeating samples. */

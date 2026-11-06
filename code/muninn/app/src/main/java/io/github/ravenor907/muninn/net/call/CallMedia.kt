@@ -779,16 +779,10 @@ class CallMedia(
     private fun openMic(src: Int, minIn: Int): AudioRecord? {
         // A TV gets a roomy 200 ms buffer: a weak CPU that falls behind for a moment loses nothing.
         val inBytes = if (io.github.ravenor907.muninn.tv.TvMic.active) maxOf(minIn * 2, micRate / 5 * 2) else maxOf(minIn, Opus.FRAME * 2 * 4)
+        // As in 1.44, the last version whose TV calls had sound: the plain recorder. 1.46's "private" capture
+        // (setPrivacySensitive) is gone: TV calls were silent both ways from then on.
         val rec = try {
-            if (Build.VERSION.SDK_INT >= 30) {
-                // Private capture: no other app (a cast app, the Assistant, a voice search) can take the call's microphone
-                // and leave it recording silence. VOICE_COMMUNICATION (a phone) is private already; a Kids' TV records
-                // from VOICE_RECOGNITION or MIC, which are not, so another app with a screen on top won the microphone.
-                AudioRecord.Builder().setAudioSource(src)
-                    .setAudioFormat(AudioFormat.Builder().setSampleRate(micRate).setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                    .setBufferSizeInBytes(inBytes).setPrivacySensitive(true).build()
-            } else AudioRecord(src, micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inBytes)
+            AudioRecord(src, micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inBytes)
         } catch (e: Exception) { null }
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return null }
         // Kids' TV: echo canceller, noise suppression and gain (TvVoice), or a louder microphone without it.
@@ -814,7 +808,6 @@ class CallMedia(
         var lastSent = 0L
         var frames = 0
         var zeroFrames = 0
-        val errors = CallLogic.MicErrors()
         // The microphone's 20 ms at its own rate (a Kids' TV may run it at 48 kHz).
         val tv = tvGain
         val raw = if (tv != null && tv.captureFrame != Opus.FRAME) ShortArray(tv.captureFrame) else pcm
@@ -824,10 +817,8 @@ class CallMedia(
                 var got = 0
                 var failed = false
                 while (got < raw.size && !stopped) { val n = rec.read(raw, got, raw.size - got); if (n <= 0) { failed = true; break }; got += n }
-                // A read error (the recorder stopped or lost its input) returns at once: without a pause this loop spun at
-                // audio priority and never recovered. Now it waits a moment and, after about half a second of errors,
-                // quietly starts the same recorder again (at most every 2 s). No message: it must not interrupt.
-                if (errors.read(!failed, System.currentTimeMillis()) && !stopped) try { rec.stop(); rec.startRecording() } catch (_: Exception) {}
+                // A read error returns at once: a short pause so this loop never spins at audio priority. Nothing is
+                // restarted (as in 1.44: restarting the recorder is what a TV's microphone handles worst).
                 if (failed && !stopped) { try { Thread.sleep(20) } catch (_: InterruptedException) { break } }
                 if (got < raw.size) continue
                 // Another app took the microphone (for example a video cast to a Kids' TV): Android hands this app
