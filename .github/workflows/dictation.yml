@@ -1,0 +1,76 @@
+name: Publish dictation
+
+# Puts Huginn's dictation model (Accessibility, Dictation: code/shared/docs/dictation.md) on the "dictation-1"
+# pre-release, once. Never replaces a file already there: a new model goes out as dictation-2. Every file in the
+# package must match its line in code/shared/dictation.sha256, and the upstream downloads must match theirs below.
+on:
+  workflow_dispatch:
+  # Also runs when this file changes on beta, so it works before it reaches main.
+  push:
+    branches: [beta]
+    paths: ['.github/workflows/dictation.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-dictation
+  cancel-in-progress: false
+
+jobs:
+  dictation:
+    name: Publish dictation
+    runs-on: ubuntu-latest
+    env:
+      TAG: dictation-1
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Download Moonshine Tiny and Silero VAD (checked)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work out/dictation-1
+          get() { curl -fsSL --retry 5 --retry-delay 5 -o "$2" "$1" || { echo "::error title=Download failed::$1"; exit 1; }; }
+          m=https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models
+          get "$m/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2" work/moonshine.tar.bz2
+          get "$m/silero_vad.onnx" out/dictation-1/silero_vad.onnx
+          echo "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2  work/moonshine.tar.bz2" | sha256sum -c -
+          tar -xjf work/moonshine.tar.bz2 -C work
+          d=work/sherpa-onnx-moonshine-tiny-en-int8
+          for f in preprocess.onnx encode.int8.onnx uncached_decode.int8.onnx cached_decode.int8.onnx tokens.txt; do cp "$d/$f" out/dictation-1/; done
+          cp "$d/LICENSE" out/dictation-1/LICENSE-moonshine.txt
+      - name: Every file matches code/shared/dictation.sha256
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -E '^[0-9a-f]{64}  ' code/shared/dictation.sha256 > want.txt
+          (cd out/dictation-1 && sha256sum -c ../../want.txt)
+          [ "$(ls out/dictation-1 | wc -l)" = "$(wc -l < want.txt)" ] || { echo "::error title=Dictation::files and lines differ"; exit 1; }
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd out && find dictation-1 -type f | LC_ALL=C sort > ../list.txt)
+          tar --format=ustar --mtime=@0 --owner=0 --group=0 --numeric-owner --mode='u=rw,go=r' -C out -T list.txt -cf dictation-1.tar
+          echo "dictation-1.tar: $(stat -c %s dictation-1.tar) bytes"
+      - name: Publish the dictation-1 pre-release (never replacing a file)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx dictation-1.tar; then echo "Already published; left as it is."
+            else gh release upload "$TAG" dictation-1.tar; fi
+            gh release edit "$TAG" --prerelease --latest=false
+          else
+            gh release create "$TAG" dictation-1.tar --prerelease --latest=false --title "Dictation 1" \
+              --notes "Speech to text for Huginn's Dictation (Accessibility). Not an app release: Huginn downloads this file only when Dictation is turned on, and keeps it only when every file matches code/shared/dictation.sha256. Moonshine Tiny (MIT, Useful Sensors) and Silero VAD (MIT)."
+          fi
+      - name: GitHub's latest release is still a version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ -n "$tag" ] && ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+$'; then
+            echo "::error title=Latest release::GitHub's latest release is $tag, not a version."; exit 1
+          fi
