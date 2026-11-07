@@ -10,12 +10,12 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.displayCutoutPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -199,7 +199,7 @@ private fun SavedMediaScreen(p: SavedMedia.Picked, onChange: (SavedMedia.Picked)
     val kinds = p.items.map { it.kind }
     val shown = Photos.Pick.shown(kinds, filter)
     val chosen = p.order.map { p.items[it] }
-    Column(Modifier.fillMaxSize().background(Palette.ground).windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.statusBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout))) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().displayCutoutPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction("close", "Close", Palette.gold) { onClose() }
             Text("Saved media", style = Type.big.copy(fontSize = 21.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f).padding(start = 12.dp))
