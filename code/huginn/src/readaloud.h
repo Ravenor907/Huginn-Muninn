@@ -21,6 +21,7 @@ class QNetworkReply;
 class QThread;
 class QFile;
 class QCryptographicHash;
+class QLibrary;
 class QTextToSpeech;
 class VoiceEngine;
 
@@ -184,6 +185,12 @@ public:
     static bool safeName(const QString &name);
     // Command line --readaloud-selftest (CI): the rules above, and that the bundled engine loads.
     static bool selfTest();
+    // The bundled speech engine (sherpa-onnx), loaded once for the life of Huginn from its own folder only, and only
+    // when it is the version sherpatts.h and sherpaasr.h match. Read aloud and Dictation share it. Null (and [why])
+    // when it isn't there or is another version. Safe from any thread.
+    static QLibrary *engineLibrary(QString *why);
+    // The engine's file is in this copy of Huginn (without loading it).
+    static bool engineFilePresent();
 
     static constexpr int kMaxPiece = 400;
     static constexpr int kMaxText = 4000;

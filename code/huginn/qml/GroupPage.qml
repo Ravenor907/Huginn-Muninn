@@ -1747,11 +1747,14 @@ Rectangle {
     function boxOptions(box) {
         const items = [{ name: "Send", icon: "send", url: "send" }, { name: "Emoji", icon: "smile", url: "emoji" },
                        { name: "Camera, media, file or poll", icon: "attach", url: "picture" }]
+        // Dictation, once it's on and downloaded: speech to text at the cursor.
+        if (box.dictateShown) items.push({ name: box.dictating ? "Stop dictating" : "Dictate", icon: "dictate", url: "dictate" })
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
             if (a === "send") box.enter()
             else if (a === "emoji") box.toggleEmoji()
+            else if (a === "dictate") box.toggleDictation()
             else if (a === "picture") pickPicture()
             else if (a === "cancel") box.cancelBanner()
             else if (a === "leave") box.leave()

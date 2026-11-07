@@ -48,6 +48,7 @@
 #include "perfcheck.h"
 #include "wifiselftest.h"
 #include "readaloud.h"
+#include "dictation.h"
 #include "dailyverse.h"
 #include "sharing.h"
 #include "proof.h"
@@ -316,8 +317,11 @@ int main(int argc, char *argv[])
     }
     if (args.isSet(releaseSigTest))
         return selfTested(Updater::selfTest(args.value(releaseSigTest)));
-    if (args.isSet(readAloudTest))
-        return selfTested(ReadAloud::selfTest());
+    if (args.isSet(readAloudTest)) {
+        // Dictation shares Read aloud's engine, so its rules and the engine's speech to text are checked here too.
+        const bool a = ReadAloud::selfTest(), b = Dictation::selfTest();
+        return selfTested(a && b);
+    }
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
     if (args.isSet(ratchetTest))
@@ -1125,6 +1129,17 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "AppStorage", appStorage);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Perf", perf);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "DailyVerse", dailyVerse);
+    // Dictation (shared/docs/dictation.md): the microphone in every message box, speech to text on this computer. Never
+    // during a call or voice room (one that starts stops it), and it closes when the lock goes up.
+    auto *dictation = new Dictation(&app);
+    dictation->setBlocker([calls, rooms] { return calls->inCall() || rooms->inRoom(); });
+    QObject::connect(calls, &CallManager::changed, dictation, [calls, dictation] { if (calls->inCall()) dictation->stop(); });
+    QObject::connect(rooms, &RoomManager::changed, dictation, [rooms, dictation] { if (rooms->inRoom()) dictation->stop(); });
+    QObject::connect(vault, &Vault::changed, dictation, [vault, dictation] { if (vault->locked()) dictation->cancel(); });
+    QObject::connect(vault, &Vault::lockedNow, dictation, &Dictation::cancel);
+    QObject::connect(vault, &Vault::panicked, dictation, &Dictation::cancel);
+    QObject::connect(vault, &Vault::aboutToErase, dictation, &Dictation::cancel);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Dictation", dictation);
 
     // Closed cleanly once everything below (the window, the engine) has gone; a run that never gets here shows in crash.log.
     struct CleanExit {
@@ -1193,6 +1208,8 @@ int main(int argc, char *argv[])
     QObject::connect(updater, &Updater::aboutToRestart, chat, &Chat::flushSaves);
     // A longer video still being kept or saved stops first (waited for, about 2 s), then everything is saved.
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::stopBigThreads);
+    // Dictation's microphone closes and its recognizer is let go of on its own thread (about 2 s at most).
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, dictation, &Dictation::shutdown);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::flushSaves);
     // Saved: from here on, a copy that finds this one stuck while closing may ask it to end itself (SingleInstance::markClosing).
     if (!quiet)

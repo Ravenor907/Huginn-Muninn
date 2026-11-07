@@ -19,6 +19,8 @@
 #include <QLibrary>
 #include <QMediaDevices>
 #include <QMediaPlayer>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QNetworkAccessManager>
 #include <QNetworkInformation>
 #include <QNetworkReply>
@@ -262,48 +264,19 @@ public:
 private:
     bool load(QString *why)
     {
-        if (m_lib.isLoaded() && m_create)
+        if (m_create)
             return true;
-#ifdef Q_OS_WIN
-        // ONNX Runtime first, from lib\ by its full path: a different onnxruntime.dll elsewhere (Windows has one) is never used.
-        const QString ort = QCoreApplication::applicationDirPath() + QStringLiteral("/lib/onnxruntime.dll");
-        if (QFileInfo::exists(ort) && loadPinned(ort)) {
-            m_ort.setFileName(ort);
-            m_ort.load();
-        }
-#endif
-        for (const QString &c : engineCandidates()) {
-            if (!QFileInfo::exists(c))
-                continue;
-#ifdef Q_OS_WIN
-            if (!loadPinned(c))
-                continue;
-#endif
-            m_lib.setFileName(c);
-            if (m_lib.load())
-                break;
-        }
-        if (!m_lib.isLoaded()) {
-            if (why) *why = QStringLiteral("The speech engine isn't in this copy of Huginn") + (m_lib.errorString().isEmpty() ? QString() : QStringLiteral(" (") + m_lib.errorString() + QStringLiteral(")"));
+        // The one copy of the engine, loaded and version-checked once (shared with Dictation).
+        QLibrary *lib = ReadAloud::engineLibrary(why);
+        if (!lib)
             return false;
-        }
-        m_create = reinterpret_cast<SherpaOnnxCreateOfflineTtsFn>(m_lib.resolve("SherpaOnnxCreateOfflineTts"));
-        m_destroy = reinterpret_cast<SherpaOnnxDestroyOfflineTtsFn>(m_lib.resolve("SherpaOnnxDestroyOfflineTts"));
-        m_generate = reinterpret_cast<SherpaOnnxOfflineTtsGenerateFn>(m_lib.resolve("SherpaOnnxOfflineTtsGenerate"));
-        m_free = reinterpret_cast<SherpaOnnxDestroyOfflineTtsGeneratedAudioFn>(m_lib.resolve("SherpaOnnxDestroyOfflineTtsGeneratedAudio"));
+        m_create = reinterpret_cast<SherpaOnnxCreateOfflineTtsFn>(lib->resolve("SherpaOnnxCreateOfflineTts"));
+        m_destroy = reinterpret_cast<SherpaOnnxDestroyOfflineTtsFn>(lib->resolve("SherpaOnnxDestroyOfflineTts"));
+        m_generate = reinterpret_cast<SherpaOnnxOfflineTtsGenerateFn>(lib->resolve("SherpaOnnxOfflineTtsGenerate"));
+        m_free = reinterpret_cast<SherpaOnnxDestroyOfflineTtsGeneratedAudioFn>(lib->resolve("SherpaOnnxDestroyOfflineTtsGeneratedAudio"));
         if (!m_create || !m_destroy || !m_generate || !m_free) {
             if (why) *why = QStringLiteral("The speech engine is missing a part");
             m_create = nullptr;
-            m_lib.unload();
-            return false;
-        }
-        // Only the exact version sherpatts.h was copied from: another one's structs could differ.
-        const auto version = reinterpret_cast<SherpaOnnxGetVersionStrFn>(m_lib.resolve("SherpaOnnxGetVersionStr"));
-        const QByteArray have = version ? QByteArray(version()) : QByteArray();
-        if (have != HUGINN_SHERPA_ONNX_VERSION) {
-            if (why) *why = QStringLiteral("The speech engine is a different version (%1)").arg(have.isEmpty() ? QStringLiteral("unknown") : QString::fromLatin1(have));
-            m_create = nullptr;
-            m_lib.unload();
             return false;
         }
         return true;
@@ -387,10 +360,6 @@ private:
     }
 
     std::shared_ptr<std::atomic<quint64>> m_token;
-    QLibrary m_lib;
-#ifdef Q_OS_WIN
-    QLibrary m_ort;
-#endif
     SherpaOnnxCreateOfflineTtsFn m_create = nullptr;
     SherpaOnnxDestroyOfflineTtsFn m_destroy = nullptr;
     SherpaOnnxOfflineTtsGenerateFn m_generate = nullptr;
@@ -401,6 +370,58 @@ private:
     float m_width = 0.0f;
     QTimer *m_idle;
 };
+
+// ------------------------------------------------------------------ the engine's library, for Read aloud and Dictation
+
+QLibrary *ReadAloud::engineLibrary(QString *why)
+{
+    // Loaded once for the life of Huginn (unloading ONNX Runtime while its threads wind down isn't safe), from any
+    // thread: Read aloud's and Dictation's engines each ask on their own.
+    static QMutex guard;
+    static QLibrary *lib = nullptr;
+    QMutexLocker hold(&guard);
+    if (lib)
+        return lib;
+    auto *l = new QLibrary;
+#ifdef Q_OS_WIN
+    // ONNX Runtime first, from lib\ by its full path: a different onnxruntime.dll elsewhere (Windows has one) is never used.
+    static QLibrary ort;
+    const QString ortPath = QCoreApplication::applicationDirPath() + QStringLiteral("/lib/onnxruntime.dll");
+    if (!ort.isLoaded() && QFileInfo::exists(ortPath) && loadPinned(ortPath)) {
+        ort.setFileName(ortPath);
+        ort.load();
+    }
+#endif
+    for (const QString &c : engineCandidates()) {
+        if (!QFileInfo::exists(c))
+            continue;
+#ifdef Q_OS_WIN
+        if (!loadPinned(c))
+            continue;
+#endif
+        l->setFileName(c);
+        if (l->load())
+            break;
+    }
+    if (!l->isLoaded()) {
+        if (why) *why = QStringLiteral("The speech engine isn't in this copy of Huginn") + (l->errorString().isEmpty() ? QString() : QStringLiteral(" (") + l->errorString() + QStringLiteral(")"));
+        delete l;
+        return nullptr;
+    }
+    // Only the exact version sherpatts.h and sherpaasr.h were copied from: another one's structs could differ.
+    const auto version = reinterpret_cast<SherpaOnnxGetVersionStrFn>(l->resolve("SherpaOnnxGetVersionStr"));
+    const QByteArray have = version ? QByteArray(version()) : QByteArray();
+    if (have != HUGINN_SHERPA_ONNX_VERSION) {
+        if (why) *why = QStringLiteral("The speech engine is a different version (%1)").arg(have.isEmpty() ? QStringLiteral("unknown") : QString::fromLatin1(have));
+        l->unload();
+        delete l;
+        return nullptr;
+    }
+    lib = l;
+    return lib;
+}
+
+bool ReadAloud::engineFilePresent() { return engineFileThere(); }
 
 // ------------------------------------------------------------------ ReadAloud
 

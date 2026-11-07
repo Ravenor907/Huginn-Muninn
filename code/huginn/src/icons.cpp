@@ -69,7 +69,9 @@ const QHash<QString, QString> &paths()
         {QStringLiteral("sidebar"), QStringLiteral("M3 5h18v14H3z M9 5v14")},
         {QStringLiteral("headphones"), QStringLiteral("M4 16v-4a8 8 0 0 1 16 0v4 M4 14h3v6H4z M17 14h3v6h-3z")},
         {QStringLiteral("deafened"), QStringLiteral("M4 16v-4a8 8 0 0 1 16 0v4 M4 14h3v6H4z M17 14h3v6h-3z M3 3l18 18")},
-        {QStringLiteral("micoff"), QStringLiteral("M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5 11a7 7 0 0 0 14 0 M12 18v3 M3 3l18 18")},
+        // Dictation: a small microphone with lines of text beside it (speech to text, not a voice message).
+        {QStringLiteral("dictate"), QStringLiteral("M7 3a2.5 2.5 0 0 1 2.5 2.5v5a2.5 2.5 0 0 1-5 0v-5A2.5 2.5 0 0 1 7 3z M2.5 10a4.5 4.5 0 0 0 9 0 M7 14.5v3.5 M14 7h7 M14 11h7 M14 15h5")},
+        {QStringLiteral("micoff"),QStringLiteral("M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5 11a7 7 0 0 0 14 0 M12 18v3 M3 3l18 18")},
         {QStringLiteral("video"), QStringLiteral("M3 7h12v10H3z M15 11l6-3v8l-6-3z")},
         {QStringLiteral("keyboard"), QStringLiteral("M3 7h18v10H3z M6.5 10.5h1 M10 10.5h1 M13.5 10.5h1 M17 10.5h1 M7 14h10")},
         {QStringLiteral("moon"), QStringLiteral("M19 14.5A8 8 0 1 1 9.5 5a6.5 6.5 0 0 0 9.5 9.5z")},

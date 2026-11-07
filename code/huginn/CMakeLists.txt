@@ -114,6 +114,8 @@ qt_add_executable(huginn
     src/wifiselftest.cpp src/wifiselftest.h
     # Read aloud (shared/docs/voices.md): the natural voices, with the speech engine loaded at run time.
     src/readaloud.cpp src/readaloud.h src/sherpatts.h
+    # Dictation (shared/docs/dictation.md): speech to text in the message box, with the same engine.
+    src/dictation.cpp src/dictation.h src/sherpaasr.h
     src/dailyverse.cpp src/dailyverse.h
     # 1:1 calls (shared/docs/protocol.md section 5: TURN relay over the internet, direct between trusted
     # contacts, video and screen share between two c2 apps, 5.8)
@@ -355,9 +357,10 @@ endforeach()
 qt_add_resources(huginn "huginn_havamal" PREFIX "/huginn" BASE ${CMAKE_CURRENT_SOURCE_DIR}/../shared
     FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/havamal.json ${CMAKE_CURRENT_SOURCE_DIR}/../shared/beta-tests.json)
 
-# Read aloud: the voices' SHA-256 (code/shared/voices.sha256), served as :/huginn/voices.sha256.
+# Read aloud: the voices' SHA-256 (code/shared/voices.sha256), served as :/huginn/voices.sha256. Dictation: its model's
+# (code/shared/dictation.sha256), served as :/huginn/dictation.sha256.
 qt_add_resources(huginn "huginn_voices" PREFIX "/huginn" BASE ${CMAKE_CURRENT_SOURCE_DIR}/../shared
-    FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/voices.sha256)
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/voices.sha256 ${CMAKE_CURRENT_SOURCE_DIR}/../shared/dictation.sha256)
 # The computer's own voice for Read aloud until the natural one is downloaded (Qt TextToSpeech, when this Qt has it).
 find_package(Qt6 QUIET COMPONENTS TextToSpeech)
 if(TARGET Qt6::TextToSpeech)
@@ -439,8 +442,10 @@ if(WIN32)
 endif()
 install(FILES packaging/io.github.ravenor907.Huginn.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES packaging/io.github.ravenor907.Huginn.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
-# Read aloud's speech engine (bundled by the Flatpak manifest) and the natural voices: their licenses.
+# Read aloud's speech engine (bundled by the Flatpak manifest), the natural voices and Dictation's model (Moonshine and
+# Silero VAD): their licenses.
 install(FILES ../shared/licenses/sherpa-onnx-Apache-2.0.txt ../shared/licenses/onnxruntime-MIT.txt ../shared/licenses/natural-voices.txt
+              ../shared/licenses/moonshine-MIT.txt ../shared/licenses/silero-vad-MIT.txt
         DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/io.github.ravenor907.Huginn)
 install(FILES packaging/io.github.ravenor907.Huginn-256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps RENAME io.github.ravenor907.Huginn.png)
 install(FILES packaging/io.github.ravenor907.Huginn-512.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps RENAME io.github.ravenor907.Huginn.png)

@@ -8,6 +8,9 @@ import Huginn
 // Steam's keyboard comes up; the page then routes the buttons here (see boxButton in the pages).
 // The microphone on the right: press and hold to record a voice message, let go to send, drag off it
 // or press Esc to cancel (a controller holds Y on the conversation instead).
+// Dictation (Settings › Look › Accessibility, once it's downloaded): the microphone with lines beside the emoji. Tap it
+// (or Ctrl+Shift+S, or Dictate in the box's options on a controller) and speak; the words come in at the cursor after
+// each short pause. Tap again (or Esc) to stop. Never during a call.
 Item {
     id: box
     property string placeholder: ""
@@ -60,8 +63,8 @@ Item {
         p.cancel()
         Ui.say("The chat changed, so that message wasn't sent.", true)
     }
-    onTargetChanged: dropAbove()
-    Component.onDestruction: dropAbove()
+    onTargetChanged: { dropAbove(); dropDictation() }
+    Component.onDestruction: { dropAbove(); dropDictation() }
     // Characters typed (shown from 1,800; more than 2,000 don't send).
     readonly property int typedCount: field.length < Ui.messageMax - 200 ? field.length : Ui.textLength(field.text.trim())
     readonly property bool hasFocus: field.activeFocus
@@ -103,9 +106,43 @@ Item {
         field.cursorPosition = head.length
         field.forceActiveFocus()
     }
+    // ---- Dictation: speech to text at the cursor, all on this computer (src/dictation.h).
+    readonly property bool dictateShown: Dictation.shown
+    readonly property bool callLive: Calls.inCall || Rooms.inRoom
+    // The sessions this box started: only their words come in here.
+    property var dictSessions: []
+    readonly property bool dictating: Dictation.tour || (Dictation.listening && dictSessions.indexOf(Dictation.session) >= 0)
+    function toggleDictation() {
+        if (Dictation.tour) return
+        if (box.dictating) { Dictation.stop(); return }
+        if (box.callLive) { Ui.say("Not during a call.", true); return }
+        if (Voice.recording) { Ui.say("Finish the voice message first.", true); return }
+        const why = Dictation.start()
+        if (why !== "") { Ui.say(why, true); return }
+        box.dictSessions = box.dictSessions.concat([Dictation.session]).slice(-8)
+    }
+    // The chat changed or the box went: listening stops, and nothing still on its way comes in.
+    function dropDictation() {
+        if (box.dictating && !Dictation.tour) Dictation.cancel()
+        box.dictSessions = []
+    }
+    // Words heard: in at the cursor (a space first after a word), without taking the focus, so no keyboard pops up.
+    function dictated(t) {
+        const at = field.cursorPosition
+        const add = Dictation.join(field.text.substring(0, at), t)
+        if (add === "") return
+        field.insert(at, add)
+        field.cursorPosition = at + add.length
+    }
+    Connections {
+        target: Dictation
+        function onHeard(session, text) { if (box.dictSessions.indexOf(session) >= 0) box.dictated(text) }
+        function onProblem(session, text) { if (box.dictSessions.indexOf(session) >= 0) Ui.say(text, true) }
+    }
     // Press and hold on the microphone.
     function micDown() {
         if (box.voiceTo === "" || Voice.recording) return
+        if (box.dictating) Dictation.stop()
         if (!Voice.start(box.voiceTo)) { Ui.say("The microphone isn't available right now.", true); return }
         box.micHeld = true
     }
@@ -251,6 +288,12 @@ Item {
                         if (event.key === Qt.Key_Escape && box.micHeld) {
                             box.micUp(false)
                             event.accepted = true
+                        } else if (event.key === Qt.Key_Escape && box.dictating) {
+                            box.toggleDictation()
+                            event.accepted = true
+                        } else if (event.key === Qt.Key_S && (event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier) && box.dictateShown) {
+                            box.toggleDictation()
+                            event.accepted = true
                         } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
                             box.enter()
                             event.accepted = true
@@ -296,13 +339,61 @@ Item {
             }
             Icon {
                 id: emojiIcon
-                anchors.right: micIcon.visible ? micIcon.left : parent.right; anchors.rightMargin: Theme.px(14)
+                anchors.right: dictIcon.visible ? dictIcon.left : micIcon.visible ? micIcon.left : parent.right; anchors.rightMargin: Theme.px(14)
                 anchors.bottom: parent.bottom; anchors.bottomMargin: (Theme.px(46) - size) / 2
                 name: "smile"; size: Theme.px(20); color: emojiHover.hovered || picker.visible ? Theme.text : Theme.textMuted
                 Accessible.role: Accessible.Button
                 Accessible.name: "Emoji"
                 HoverHandler { id: emojiHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: picker.visible = !picker.visible }
+            }
+            // Dictation: tap to start, tap again to stop. Listening shows in the accent, with a ring that pulses.
+            Rectangle {
+                id: dictIcon
+                readonly property bool off: box.callLive && !box.dictating
+                visible: box.dictateShown
+                anchors.right: micIcon.visible ? micIcon.left : parent.right; anchors.rightMargin: Theme.px(micIcon.visible ? 4 : 8)
+                anchors.bottom: parent.bottom; anchors.bottomMargin: (Theme.px(46) - height) / 2
+                width: Theme.px(32); height: width
+                radius: Theme.radius
+                color: box.dictating ? Theme.accentFill : dictArea.containsMouse && !off ? Theme.tile : "transparent"
+                border.width: box.dictating ? 1 : 0
+                border.color: box.accent
+                opacity: off ? 0.4 : 1
+                Accessible.role: Accessible.Button
+                Accessible.name: box.dictating ? "Stop dictating" : "Dictate"
+                Accessible.description: off ? "Not during a call" : ""
+                Rectangle {
+                    id: dictPulse
+                    anchors.fill: parent
+                    radius: parent.radius
+                    color: "transparent"
+                    border.width: Theme.px(2)
+                    border.color: box.accent
+                    visible: box.dictating
+                    opacity: 0.6
+                    SequentialAnimation on opacity {
+                        running: dictPulse.visible && Theme.motion
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 0.7; to: 0.1; duration: 700; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: 0.1; to: 0.7; duration: 700; easing.type: Easing.InOutQuad }
+                    }
+                }
+                Icon {
+                    anchors.centerIn: parent
+                    name: "dictate"; size: Theme.px(20)
+                    color: box.dictating ? box.accent : dictArea.containsMouse && !dictIcon.off ? Theme.text : Theme.textMuted
+                }
+                MouseArea {
+                    id: dictArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: dictIcon.off ? Qt.ArrowCursor : Qt.PointingHandCursor
+                    onClicked: box.toggleDictation()
+                }
+                ToolTip.visible: dictArea.containsMouse
+                ToolTip.delay: 400
+                ToolTip.text: dictIcon.off ? "Not during a call" : box.dictating ? "Stop dictating (Ctrl+Shift+S)" : "Dictate (Ctrl+Shift+S)"
             }
             // Press and hold to record; let go on it to send, off it to cancel.
             Rectangle {

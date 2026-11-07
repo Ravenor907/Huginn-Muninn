@@ -298,6 +298,9 @@ Rectangle {
             { group: "Accessibility", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
             // Read aloud: one row, opening its own page (ReadAloudPage.qml: the voice, its speed, download, delete).
             { group: "Accessibility", kind: "button", key: "readAloud", title: "Read aloud", live: "aloudRow", label: "Open" },
+            // Dictation: speech to text in the message box, off until turned on. On asks first, then downloads the model
+            // once (about 125 MB); off deletes it (src/dictation.h). Its line says what it is, then the download's progress.
+            { group: "Accessibility", kind: "toggle", key: "on", dictation: true, hide: !Dictation.offered, title: "Dictation", live: "dictation" },
             // Daily Hávamál: a verse a day at the top of the chat list, off until it's turned on (src/dailyverse.h).
             { group: "Daily Hávamál", kind: "toggle", key: "verseOn", verse: true, title: "Daily Hávamál", note: "A verse a day at the top of your chats" },
             // 1.43: In order, or Random (no verse again until all 165 have shown).
@@ -386,6 +389,9 @@ Rectangle {
               note: "Alba (CC BY 4.0), a Piper voice by Michael Hansen" },
             { group: "Credits and licenses", kind: "info", title: "Speech engine",
               note: "sherpa-onnx (Apache-2.0), ONNX Runtime (MIT) and eSpeak NG (GPL-3.0). License texts: " + (System.portable ? "lib/licenses beside Huginn.exe" : "share/licenses in the app") },
+            // Dictation's model, downloaded when it's turned on (code/shared/licenses/moonshine-MIT.txt, silero-vad-MIT.txt).
+            { group: "Credits and licenses", kind: "info", title: "Speech to text",
+              note: "Moonshine Tiny by Useful Sensors (MIT) and Silero VAD by the Silero Team (MIT)" },
             // Ultra privacy's Tor (code/shared/licenses/Tor-BSD-3-Clause.txt).
             { group: "Credits and licenses", kind: "info", title: "Tor",
               note: "Ultra privacy. The Tor Project (BSD-3-Clause), with libevent (BSD-3-Clause), OpenSSL (Apache-2.0) and zlib" },
@@ -752,6 +758,7 @@ Rectangle {
         readonly property bool danger: page.dangerKeys.indexOf(r.key) >= 0
         // A live status line (Tor's progress, the voice download) is read here, not in the rows (see page.ultraOn).
         readonly property string noteText: r.live === "ultra" ? UltraPrivacy.statusLine : r.live === "aloud" ? ReadAloud.status
+                                         : r.live === "dictation" ? Dictation.status
                                          : r.live === "aloudRow" ? page.aloudSummary() : (r.note || "")
         // Wide choices go under the words when there isn't room beside them; a picker then takes the full width
         // (and becomes a dropdown only if even that is too narrow, see Segmented).
@@ -1135,13 +1142,14 @@ Rectangle {
         })
     }
     // Where a toggle's value lives.
-    function source(r) { return r.ultra ? UltraPrivacy : r.aloud ? ReadAloud : r.verse ? DailyVerse : r.vault ? Vault : r.chat ? Chat : Settings }
+    function source(r) { return r.ultra ? UltraPrivacy : r.aloud ? ReadAloud : r.dictation ? Dictation : r.verse ? DailyVerse : r.vault ? Vault : r.chat ? Chat : Settings }
     // A switch as it shows (invert: it reads the other way round from the setting).
     function switchOn(r) { return !!source(r)[r.key] !== !!r.invert }
     // A switch flipped.
     function flip(r) {
         if (r.key === "eraseAfterTries") { eraseSwitch(); return }
         if (r.ultra) { flipUltra(); return }
+        if (r.dictation) { flipDictation(); return }
         const o = source(r)
         o[r.key] = !o[r.key]
     }
@@ -1163,6 +1171,15 @@ Rectangle {
     function changeUnlockPassword() {
         if (!Vault.hasLock || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
         Ui.main.askLock("Unlock password", "Confirm it's you first", "spare", () => { if (Vault.startUnlockPasswordChange()) Ui.openPage("chat", {}) })
+    }
+    // Dictation: on only after saying what it downloads (and that nothing said leaves this computer); off at once, and
+    // the model is deleted.
+    function flipDictation() {
+        if (Dictation.on) { Dictation.on = false; Ui.say("Dictation is off. Its download was deleted."); return }
+        Ui.sure("Download speech to text (about 125 MB)?", "It runs on this computer; nothing you say leaves it.", "Download", () => {
+            Dictation.on = true
+            Ui.say(Dictation.ready ? "Dictation is on." : "Dictation is on. Downloading speech to text.")
+        })
     }
     // Ultra privacy: on only after what it does, then every downside, then Turn on; off at once.
     function flipUltra() {

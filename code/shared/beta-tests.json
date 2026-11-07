@@ -143,6 +143,10 @@
     {
      "id": "m8.5",
      "text": "Labs mode: hold the raven at the top for 7 seconds. It buzzes and opens Report a bug with the screenshot and the activity log."
+    },
+    {
+     "id": "m8.6",
+     "text": "Huginn: Settings, Accessibility, Dictation on: it downloads once. Then the microphone in the message box turns speech into text."
     }
    ]
   }

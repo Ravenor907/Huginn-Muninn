@@ -36,6 +36,7 @@ Item {
             ["Mark the chat as read", "Esc"],
             ["Paste a picture to send it", "Ctrl+V"],
             ["Mention someone in a group", "@name"],
+            ["Dictate, once it's on", "Ctrl+Shift+S"],
             ["Find in this chat", "Ctrl+F"] ] }],
         [{ title: "CALLS AND VOICE", keys: [
             // Which work while a game is in front: only Mute and Deafen (GlobalKeys); the rest need Huginn in front.

@@ -672,8 +672,10 @@ jobs:
           l="$d/lib/licenses"
           mkdir -p "$l/vcpkg" "$l/qt"
           cp code/shared/licenses/Qt-LGPL-3.0.txt code/shared/licenses/FFmpeg-LGPL-2.1.txt "$l/"
-          # Read aloud: the speech engine (sherpa-onnx, ONNX Runtime) and the natural voices' licenses.
+          # Read aloud: the speech engine (sherpa-onnx, ONNX Runtime) and the natural voices' licenses. Dictation: its
+          # model's (Moonshine, Silero VAD).
           cp code/shared/licenses/sherpa-onnx-Apache-2.0.txt code/shared/licenses/onnxruntime-MIT.txt code/shared/licenses/natural-voices.txt "$l/"
+          cp code/shared/licenses/moonshine-MIT.txt code/shared/licenses/silero-vad-MIT.txt "$l/"
           vroot="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/installed/x64-windows/share"
           for c in "$vroot"/*/copyright; do
             [ -f "$c" ] || continue

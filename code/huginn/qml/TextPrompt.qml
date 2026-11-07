@@ -33,6 +33,39 @@ Item {
     signal accepted(string text)
     signal cancelled()
 
+    // Dictation in a message written here (a chat's message in game mode, an edit): the microphone in the field, LT on
+    // a controller, Ctrl+Shift+S on a keyboard. The words come in at the cursor after each short pause (src/dictation.h).
+    readonly property bool dictateHere: visible && limit > 0 && !multiLine && !password && Dictation.shown
+    readonly property bool callLive: Calls.inCall || Rooms.inRoom
+    property var dictSessions: []
+    readonly property bool dictating: dictateHere && (Dictation.tour || (Dictation.listening && dictSessions.indexOf(Dictation.session) >= 0))
+    function toggleDictation() {
+        if (!dictateHere || Dictation.tour) return
+        if (dictating) { Dictation.stop(); return }
+        if (callLive) { Ui.say("Not during a call.", true); return }
+        if (Voice.recording) { Ui.say("Finish the voice message first.", true); return }
+        const why = Dictation.start()
+        if (why !== "") { Ui.say(why, true); return }
+        dictSessions = dictSessions.concat([Dictation.session]).slice(-8)
+    }
+    // Closed or opened for something else: listening stops, and nothing still on its way comes in.
+    function dropDictation() {
+        if (dictSessions.length && Dictation.listening && dictSessions.indexOf(Dictation.session) >= 0 && !Dictation.tour) Dictation.cancel()
+        dictSessions = []
+    }
+    function dictated(t) {
+        const at = field.cursorPosition
+        const add = Dictation.join(field.text.substring(0, at), t)
+        if (add === "") return
+        field.insert(at, add)
+        field.cursorPosition = at + add.length
+    }
+    Connections {
+        target: Dictation
+        function onHeard(session, text) { if (prompt.dictSessions.indexOf(session) >= 0) prompt.dictated(text) }
+        function onProblem(session, text) { if (prompt.dictSessions.indexOf(session) >= 0) Ui.say(text, true) }
+    }
+
     visible: false
     anchors.fill: parent
 
@@ -51,6 +84,7 @@ Item {
         openWith(t, ctx, initial, confirm, callback, isPassword, keepSpaces, [], "", "")
     }
     function openWith(t, ctx, initial, confirm, callback, isPassword, keepSpaces, opts, pick, optsLabel) {
+        dropDictation()
         raw = !!keepSpaces
         multiLine = false
         label = ""
@@ -91,6 +125,7 @@ Item {
         // Too long to send: say so and keep it here, never cut.
         if (limit > 0 && Ui.textLength(t) > limit) { Ui.say(Ui.tooLongText(Ui.textLength(t)), true); return }
         if (drafts[draftKey] !== undefined) { const d = Object.assign({}, drafts); delete d[draftKey]; drafts = d }
+        dropDictation()
         visible = false
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()
@@ -104,6 +139,7 @@ Item {
     property string draftKey: ""
     function cancel() {
         if (!password && typed.length > 0) { const d = Object.assign({}, drafts); d[draftKey] = typed; drafts = d }
+        dropDictation()
         visible = false
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()
@@ -195,6 +231,7 @@ Item {
                 width: parent.width
                 height: Math.max(Theme.px(40), implicitHeight)
                 leftPadding: Theme.px(10)
+                rightPadding: prompt.dictateHere ? Theme.px(44) : Theme.px(10)
                 color: Theme.text
                 selectionColor: Theme.accentFill
                 selectedTextColor: Theme.text
@@ -207,9 +244,63 @@ Item {
                     color: Theme.groundDeep
                     border.color: field.activeFocus ? Theme.accent : Theme.line
                 }
+                Keys.onPressed: event => {
+                    if (event.key === Qt.Key_S && (event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier) && prompt.dictateHere) {
+                        prompt.toggleDictation()
+                        event.accepted = true
+                    }
+                }
                 Keys.onReturnPressed: prompt.accept()
                 Keys.onEnterPressed: prompt.accept()
                 Keys.onEscapePressed: prompt.cancel()
+                // Dictation: tap to start, tap again to stop. Listening shows in the accent, with a ring that pulses.
+                Rectangle {
+                    id: dictBtn
+                    readonly property bool off: prompt.callLive && !prompt.dictating
+                    visible: prompt.dictateHere
+                    anchors.right: parent.right; anchors.rightMargin: Theme.px(4)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Theme.px(32); height: width
+                    radius: Theme.radius
+                    color: prompt.dictating ? Theme.accentFill : dictBtnArea.containsMouse && !off ? Theme.tile : "transparent"
+                    border.width: prompt.dictating ? 1 : 0
+                    border.color: Theme.accent
+                    opacity: off ? 0.4 : 1
+                    Accessible.role: Accessible.Button
+                    Accessible.name: prompt.dictating ? "Stop dictating" : "Dictate"
+                    Accessible.description: off ? "Not during a call" : ""
+                    Rectangle {
+                        id: dictBtnPulse
+                        anchors.fill: parent
+                        radius: parent.radius
+                        color: "transparent"
+                        border.width: Theme.px(2)
+                        border.color: Theme.accent
+                        visible: prompt.dictating
+                        opacity: 0.6
+                        SequentialAnimation on opacity {
+                            running: dictBtnPulse.visible && Theme.motion
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 0.7; to: 0.1; duration: 700; easing.type: Easing.InOutQuad }
+                            NumberAnimation { from: 0.1; to: 0.7; duration: 700; easing.type: Easing.InOutQuad }
+                        }
+                    }
+                    Icon {
+                        anchors.centerIn: parent
+                        name: "dictate"; size: Theme.px(20)
+                        color: prompt.dictating ? Theme.accent : dictBtnArea.containsMouse && !dictBtn.off ? Theme.text : Theme.textMuted
+                    }
+                    MouseArea {
+                        id: dictBtnArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: dictBtn.off ? Qt.ArrowCursor : Qt.PointingHandCursor
+                        onClicked: prompt.toggleDictation()
+                    }
+                    ToolTip.visible: dictBtnArea.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: dictBtn.off ? "Not during a call" : prompt.dictating ? "Stop dictating (Ctrl+Shift+S)" : "Dictate (Ctrl+Shift+S)"
+                }
             }
             // Several lines: wraps, scrolls past about eight lines.
             ScrollView {
@@ -353,8 +444,11 @@ Item {
     readonly property bool canPaste: visible && (multiLine ? area.canPaste : field.canPaste)
     readonly property bool ltTalks: TalkKey.padButton === "lt" && Settings.pushToTalk && Rooms.inRoom
     readonly property string moreKey: !canPaste ? "x" : ltTalks ? "down" : "lt"
+    // LT dictates in a message (never when the prompt has more words on LT, or LT talks in a voice room).
+    readonly property bool ltDictates: dictateHere && !moreLabel.length && !ltTalks
     readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }].concat(System.keyboardAvailable ? [{ key: "y", label: "Keyboard" }] : [],
-        canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: moreKey, label: moreLabel }] : [])
+        canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: moreKey, label: moreLabel }] : [],
+        ltDictates ? [{ key: "lt", label: dictating ? "Stop" : "Dictate" }] : [])
     function handleButton(b) {
         switch (b) {
         case "a": case "start": accept(); return true
@@ -364,7 +458,10 @@ Item {
             if (canPaste) { const f = multiLine ? area : field; f.forceActiveFocus(); f.paste() }
             else if (moreLabel.length) moreOpen = !moreOpen
             return true
-        case "lt": if (moreLabel.length && moreKey !== "down") moreOpen = !moreOpen; return true
+        case "lt":
+            if (ltDictates) toggleDictation()
+            else if (moreLabel.length && moreKey !== "down") moreOpen = !moreOpen
+            return true
         case "down": if (moreLabel.length && moreKey === "down") moreOpen = !moreOpen; return true
         case "left": case "right":
             if (choices.length) {

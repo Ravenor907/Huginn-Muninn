@@ -1984,6 +1984,9 @@ Window {
         readonly property var steps: [
             { page: "dms", file: "00-direct-messages" },
             { page: "dms", zone: "messages", file: "01-conversation" },
+            // Dictation (shown for the tour only, nothing recorded or downloaded): the microphone in the message box,
+            // listening; then in the prompt at the top on a handheld.
+            { page: "dms", zone: "messages", dictation: true, file: "01b-dictation" },
             { page: "dms", rail: true, file: "02-rail" },
             { page: "files", file: "03-files" },
             { page: "settings", file: "05-settings" },
@@ -2104,6 +2107,7 @@ Window {
             { page: "settings", handheld: true, deck: true, file: "87b-handheld-settings" },
             { page: "dms", zone: "messages", draftPrompt: true, handheld: true, deck: true, file: "87c-handheld-draft-prompt" },
             { page: "dms", zone: "messages", draftPrompt: true, handheld: true, file: "87d-handheld-draft-prompt-1080p" },
+            { page: "dms", zone: "messages", draftPrompt: true, dictation: true, handheld: true, deck: true, file: "87e-handheld-dictation-prompt" },
             // Open on a received program whose name hides what it is: asked first, never run by one click.
             { page: "dms", zone: "messages", openProgram: true, file: "88-open-program" },
             // Round 17 (B1): Back up (and Move, Restore, linking) asks for the current lock first.
@@ -2139,6 +2143,7 @@ Window {
                 app.width = 1920; app.height = 1080
                 System.setTourHandheld(false); app.tourLegend = false
                 DailyVerse.tour = false
+                Dictation.tour = false
                 stop(); System.tourFinished(); return
             }
             const s = steps[step]
@@ -2156,6 +2161,7 @@ Window {
             app.tourLegend = !!s.handheld
             Settings.labs = s.labs ? true : savedLabs
             DailyVerse.tour = !!s.verse
+            Dictation.tour = !!s.dictation
             const args = { tour: true }
             if (s.section) args.section = s.section
             if (s.more) args.more = true
