@@ -1247,7 +1247,9 @@ private fun Conversation(app: Muninn, key: String) {
             withContext(Dispatchers.Main) { then() }
         }
     }
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) sendAsFile(uri) }
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        // A picture or video picked as a file still goes as a picture or video in the chat (the Send sheet), never a file card.
+        if (uri != null) { if (isMedia(context, uri)) SavedMedia.load(context.applicationContext, vt, listOf(uri)) else sendAsFile(uri) } }
     fun jumpTo(id: String) {
         val i = msgs.indexOfFirst { it.id == id }
         if (i < 0) Ui.say("That message isn't here any more.") else scope.launch { list.animateScrollToItem(i) }
@@ -1448,7 +1450,7 @@ private fun Conversation(app: Muninn, key: String) {
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${if (r.mine) "yourself" else name}", preview(r), "reply") { replyTo = null } } }
         Composer(text, { text = it; app.chat.typingTo(key, it.isNotBlank()) }, if (editing != null) "Edit your message" else "Message $name", onPhoto = {
             attaching = true
-        }, onImage = { uri -> scope.launch {
+        }, onMedia = savedMedia, onImage = { uri -> scope.launch {
             // From the keyboard (a GIF or sticker picked in Gboard): a GIF goes at once, a picture asks like a picked photo.
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
         } }, voice = if (editing != null) null else VoiceHooks(
@@ -1580,7 +1582,7 @@ private fun editFits(text: String): Boolean {
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, voice: VoiceHooks? = null,
+private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, onMedia: (() -> Unit)? = null, voice: VoiceHooks? = null,
                      banner: (@Composable () -> Unit)? = null, onImage: ((Uri) -> Unit)? = null, tight: Boolean = false, onSend: () -> Unit) {
     val onImageSet = onImage != null
     val context = LocalContext.current
@@ -1662,7 +1664,10 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     }
     Row(Modifier.fillMaxWidth().padding(start = if (onPhoto != null) 6.dp else 12.dp, end = 10.dp, top = if (tight) 4.dp else 8.dp, bottom = if (tight) 4.dp else 12.dp),
         verticalAlignment = Alignment.Bottom) {
-        if (onPhoto != null) { IconAction("plus", "Attach", Palette.textMuted, size = 24.dp) { onPhoto() }; Spacer(Modifier.width(4.dp)) }
+        if (onPhoto != null) IconAction("plus", "Attach", Palette.textMuted, size = 24.dp) { onPhoto() }
+        // Pictures and videos one tap away, right beside the box (the + still has the camera, files and polls).
+        if (onMedia != null) IconAction("image", "Photos and videos", Palette.textMuted, size = 24.dp) { onMedia() }
+        if (onPhoto != null || onMedia != null) Spacer(Modifier.width(4.dp))
         val shape = io.github.ravenor907.muninn.ui.LookShapes.composer
         Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(shape).background(Palette.field).hcBorder(shape).padding(start = 16.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -3015,7 +3020,8 @@ private fun GroupConversation(app: Muninn, g: String) {
             }, onFile = null) { gifs = gifs - p; p.done() }
         }
         // Cap f2: a file to everyone in the group, by the best route to each; its cards show here and in Transfers.
-        val pickGroupFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) sendFileFrom(app, context, scope, key, uri) }
+        val pickGroupFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) { if (isMedia(context, uri)) SavedMedia.load(context.applicationContext, vt, listOf(uri)) else sendFileFrom(app, context, scope, key, uri) } }
         if (attaching) AttachDialog(onCamera = { camera = "photo" }, onSaved = savedMedia, onPoll = { polling = true },
             onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickGroupFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } },
             ) { attaching = false }
@@ -3043,7 +3049,7 @@ private fun GroupConversation(app: Muninn, g: String) {
         // Keyed by channel (round 17): typing just before a switch never lands in the other channel.
         if (!grp.readOnly && !adminsOnlyHere) androidx.compose.runtime.key(draftKey) { Composer(text, { text = it }, if (editing != null) "Edit your message" else "Message #$chName", banner = banner, onPhoto = {
             attaching = true
-        }, onImage = { uri -> scope.launch {
+        }, onMedia = savedMedia, onImage = { uri -> scope.launch {
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
         } }, voice = if (editing != null) null else VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
@@ -3638,4 +3644,10 @@ private fun ForwardMessage(app: Muninn, text: String, media: Chat.Msg?, done: ()
             if (err != null) Ui.say(err, true) else Ui.say("Sent to $who.")
         }
     }, onCancel = done)
+}
+
+/** A picture or video by its type, so a file pick of one goes the picture or video way. */
+private fun isMedia(context: android.content.Context, uri: Uri): Boolean {
+    val t = try { context.contentResolver.getType(uri) } catch (_: Exception) { null } ?: return false
+    return t.startsWith("image/") || t.startsWith("video/")
 }

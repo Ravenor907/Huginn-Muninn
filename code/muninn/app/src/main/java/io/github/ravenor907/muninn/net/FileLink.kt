@@ -1025,8 +1025,9 @@ object FileLink {
                 ins[id] = inc
                 val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
                 val badge = h.badge(from)
-                // Family and trusted contacts' files arrive by themselves; a Kids' Device asks unless set to Always.
-                val always = mayAlways(badge) && !h.asksFirst(from) && (!h.isKidDevice() || h.alwaysFrom(from))
+                // Family's files always arrive by themselves (never an Accept, whatever was once chosen); trusted contacts'
+                // do too unless set to ask, and on a Kids' Device only when set to Always.
+                val always = badge == BADGE_FAMILY || (mayAlways(badge) && !h.asksFirst(from) && (!h.isKidDevice() || h.alwaysFrom(from)))
                 // Cap f3: the rest of a file already accepted (it stopped part way) doesn't ask again.
                 val resuming = partialFor(from, inc.sha, size, g) != null
                 val method = methodLabel(if (lan != null) "lan" else if (direct.isNotEmpty()) "direct" else if (relay) "relay" else "tor", size)

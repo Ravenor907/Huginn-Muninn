@@ -238,7 +238,7 @@ internal object KidHoldStore {
 internal fun KidVideo(app: Muninn, m: Chat.Msg, onClose: () -> Unit) {
     // Opened off the main thread: a video can be large.
     val bytes by produceState<ByteArray?>(null, m.photo) { value = withContext(Dispatchers.IO) { try { app.chat.photo(m.photo) } catch (_: Throwable) { null } } }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val b = bytes
         if (b == null) Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             MIcon("video", Palette.textMuted, 72.dp)

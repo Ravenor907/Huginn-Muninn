@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -177,7 +179,9 @@ internal fun rememberSavedMedia(app: Muninn, target: VideoSend.Target, onGif: (U
         catch (_: Exception) { Ui.say("This phone has no photo picker.", true) }
     }
     if (picked != null) Dialog(onDismissRequest = { SavedMedia.close(target) },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
+        // Drawn edge to edge with the bars' own room kept (Android 15 and later ignore "fits the system windows" for a
+        // dialog, which put the Send bar under the navigation bar on a Pixel).
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         SavedMediaScreen(picked, onChange = { SavedMedia.set(target, it) }, onAddMore = launch, onClose = { SavedMedia.close(target) }) { chosen ->
             SavedMedia.close(target)
             SavedMedia.send(app, target, chosen, onGif)
@@ -195,7 +199,7 @@ private fun SavedMediaScreen(p: SavedMedia.Picked, onChange: (SavedMedia.Picked)
     val kinds = p.items.map { it.kind }
     val shown = Photos.Pick.shown(kinds, filter)
     val chosen = p.order.map { p.items[it] }
-    Column(Modifier.fillMaxSize().background(Palette.ground)) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.statusBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout))) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction("close", "Close", Palette.gold) { onClose() }
             Text("Saved media", style = Type.big.copy(fontSize = 21.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f).padding(start = 12.dp))

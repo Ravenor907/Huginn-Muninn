@@ -1633,10 +1633,11 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         x->badge = badge(from);
         x->method = methodLabel(lan.valid() ? QStringLiteral("lan") : trust && !x->theirs.isEmpty() ? QStringLiteral("direct") : viaRelay ? QStringLiteral("relay") : QStringLiteral("tor"), size);
         m_x.insert(id, x);
-        // Family and trusted contacts' files arrive by themselves, and so does the rest of a file already accepted (cap f3).
-        // Everyone else's ask first. Data saver still asks.
+        // Family's files always arrive by themselves (never an Accept, whatever was once chosen); trusted contacts' do too
+        // unless set to ask, and so does the rest of a file already accepted (cap f3). Everyone else's ask first. Data saver
+        // still asks.
         const bool saving = !testLocal && Settings::dataSaverOn();
-        const bool always = mayAlways(x->badge) && !(asksFirst && asksFirst(from));
+        const bool always = x->badge == QLatin1String("Family") || (mayAlways(x->badge) && !(asksFirst && asksFirst(from)));
         const bool resuming = !partialFor(x).isEmpty();
         if (!(always || resuming) || saving) {
             // Cap f4: the sender hears the card is up ("Waiting for Ana to accept", not "Sends when...").
