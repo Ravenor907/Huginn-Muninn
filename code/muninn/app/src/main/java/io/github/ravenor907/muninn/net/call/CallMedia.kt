@@ -338,7 +338,7 @@ class CallMedia(
         synchronized(counters) { bytesIn += data.size }
         if (kind == CallLogic.Kind.RELAY) relayBytes.addAndGet(data.size + RELAY_OVERHEAD.toLong())
         when (o.type) {
-            CallCrypto.AUDIO -> { countAudio(o.ts); jitter.put(o.ts, o.payload) }
+            CallCrypto.AUDIO -> { health.came.incrementAndGet(); countAudio(o.ts); jitter.put(o.ts, o.payload) }
             CallCrypto.PING -> path(kind, from)?.let { send(CallCrypto.PONG, o.payload, only = it) }
             CallCrypto.PONG -> synchronized(pings) { pings.remove(CallCrypto.hex(o.payload)) }?.let { sentAt ->
                 val r = System.currentTimeMillis() - sentAt
@@ -458,6 +458,7 @@ class CallMedia(
         val k = keys ?: return
         val s = seq++
         val p = try { CallCrypto.seal(k, offerer, tag, type, s, System.currentTimeMillis() - started, payload) } catch (e: Exception) { return }
+        if (type == CallCrypto.AUDIO) health.sent.incrementAndGet()
         val now = System.currentTimeMillis()
         val targets = only?.let { listOf(it) } ?: paths.filter { it.live(now) }.ifEmpty { if (video) emptyList() else paths.filter { it.kind != CallLogic.Kind.DIRECT || directOn } }
         // Up to 3 UDP paths (Wi-Fi first, then Direct, then the lowest round trip) plus Bluetooth; each distinct
@@ -516,6 +517,20 @@ class CallMedia(
             val next = VideoWire.rung(rate[0].kbps, rate[0].cap, rung)
             if (next != rung) { rung = next; rungAt = now; post { events.onProfile() } }
         }
+    }
+
+    /** The call's sound, counted: a Kids' TV tells its parents when a call had none (CallHealth). */
+    private val health = CallHealth()
+
+    /** Kids' TV, a call of 8 s or more where sound didn't go or didn't play: what happened, to its parents, once. */
+    private fun sayHealth() {
+        try {
+            if (!io.github.ravenor907.muninn.tv.TvMic.active || externalAudio) return
+            val secs = (System.currentTimeMillis() - started) / 1000
+            val text = health.problem(secs, playRate, track?.playState ?: -1) ?: return
+            val app = context.applicationContext as? io.github.ravenor907.muninn.Muninn ?: return
+            for (k in io.github.ravenor907.muninn.tv.KidTv.state.value.parents) app.chat.sendPrivate(k, text)
+        } catch (_: Exception) {}
     }
 
     @Volatile private var rung = 0
@@ -801,7 +816,7 @@ class CallMedia(
         val rec = try {
             AudioRecord(src, micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inBytes)
         } catch (e: Exception) { null }
-        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return null }
+        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { health.tried += "$src no open"; rec?.release(); return null }
         // Kids' TV: echo canceller, noise suppression and gain (TvVoice), or a louder microphone without it.
         tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId, micRate, playRate, Opus.RATE)
         if (io.github.ravenor907.muninn.tv.TvMic.platformEffects()) {
@@ -810,7 +825,8 @@ class CallMedia(
             if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = CallManager.noiseRemoval(context) && io.github.ravenor907.muninn.tv.TvMic.platformNoise() } } catch (e: Exception) { null }
         }
         val ok = try { rec.startRecording(); rec.recordingState == AudioRecord.RECORDSTATE_RECORDING } catch (e: Exception) { false }
-        if (ok) return rec
+        health.tried += if (ok) "$src ok" else "$src no start"
+        if (ok) { health.mic = src; return rec }
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
         aec = null; ns = null
         if (tvGain != null) { io.github.ravenor907.muninn.tv.TvMic.release(tvGain); tvGain = null }
@@ -896,7 +912,8 @@ class CallMedia(
                 // lower while they talk.
                 CallShare.localQ.poll()?.let { CallShare.mix(pcm, it, s) }
                 val len = if (tv != null) tv.render(pcm, out) else Opus.FRAME
-                t.write(out, 0, len)   // blocking: the audio clock paces this loop
+                val w = t.write(out, 0, len)   // blocking: the audio clock paces this loop
+                if (w > 0 && n > 0) health.played.incrementAndGet() else if (w < 0) health.writeErr = w
             }
         } catch (_: Exception) {
         } finally {
@@ -949,6 +966,7 @@ class CallMedia(
         try { lan?.close() } catch (_: Exception) {}
         try { turn?.close() } catch (_: Exception) {}
         try { renewing?.close() } catch (_: Exception) {}
+        sayHealth()
         relayBytes.getAndSet(0).takeIf { it > 0 }?.let { n -> try { (context.applicationContext as io.github.ravenor907.muninn.Muninn).chat.meter.add(n) } catch (_: Exception) {} }
         bluetooth?.onMedia(null)
         // Let the audio threads leave read() and write() before their objects go.
