@@ -195,9 +195,7 @@ internal fun rememberSavedMedia(app: Muninn, target: VideoSend.Target, onGif: (U
 private fun SavedMediaScreen(p: SavedMedia.Picked, bars: androidx.compose.foundation.layout.WindowInsets, onChange: (SavedMedia.Picked) -> Unit, onAddMore: () -> Unit, onClose: () -> Unit,
                              onSend: (List<SavedMedia.Item>) -> Unit) {
     BackHandler { onClose() }
-    var filter by remember { mutableStateOf("all") }
-    val kinds = p.items.map { it.kind }
-    val shown = Photos.Pick.shown(kinds, filter)
+    val shown = p.items.indices.toList()
     val chosen = p.order.map { p.items[it] }
     Column(Modifier.fillMaxSize().background(Palette.ground)
         .windowInsetsPadding(bars.only(androidx.compose.foundation.layout.WindowInsetsSides.Top + androidx.compose.foundation.layout.WindowInsetsSides.Horizontal))) {
@@ -209,21 +207,10 @@ private fun SavedMediaScreen(p: SavedMedia.Picked, bars: androidx.compose.founda
             MButton("Send", kind = Kind.Accent, enabled = chosen.isNotEmpty(), icon = "send") { onSend(chosen) }
         }
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(Photos.Pick.selected(chosen.size), style = Type.big)
-                val s = Photos.Pick.summary(chosen.count { it.kind == Photos.Pick.PHOTO }, chosen.count { it.kind == Photos.Pick.VIDEO },
-                    chosen.count { it.kind == Photos.Pick.GIF })
-                if (s.isNotEmpty()) Text(s, style = Type.small)
-            }
+            Text(Photos.Pick.selected(chosen.size), style = Type.big, modifier = Modifier.weight(1f))
             MButton("Add more", icon = "plus") { onAddMore() }
         }
-        ChoiceRow(Photos.Pick.FILTERS.size, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp), minWidth = 72.dp, gap = 8.dp) { i, mod ->
-            val (key, label) = Photos.Pick.FILTERS[i]
-            MButton(label, mod, kind = if (filter == key) Kind.Accent else Kind.Normal) { filter = key }
-        }
         Text(Photos.Pick.NOTE, style = Type.small.copy(color = Palette.gold), modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
-        if (shown.isEmpty()) Text(when (filter) { Photos.Pick.PHOTO -> "No photos picked."; Photos.Pick.VIDEO -> "No videos picked."; else -> "No GIFs picked." },
-            style = Type.normal, modifier = Modifier.padding(16.dp))
         // Room under the last row, so every tile can be scrolled clear of the bottom edge.
         LazyVerticalGrid(GridCells.Adaptive(110.dp), Modifier.weight(1f).fillMaxWidth().padding(horizontal = 3.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 120.dp),
