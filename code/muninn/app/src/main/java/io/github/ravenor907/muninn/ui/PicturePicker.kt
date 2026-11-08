@@ -89,9 +89,10 @@ fun PicturePicker(onDone: () -> Unit) {
             if (bmp == null) Ui.say("Muninn couldn't open that picture.", true) else picked = bmp
         }
     }
+    val outerB = io.github.ravenor907.muninn.ui.outerBars()
     when {
         camera -> Dialog(onDismissRequest = { camera = false }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-            Box(Modifier.fillMaxSize().background(Color.Black).fitBars()) {
+            Box(Modifier.fillMaxSize().background(Color.Black).padBars(io.github.ravenor907.muninn.ui.dialogBars(outerB))) {
                 io.github.ravenor907.muninn.screens.CameraScreen(video = false,
                     onPhoto = { jpeg -> picked = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size); camera = false },
                     onVideo = { _, _ -> }, close = { camera = false })

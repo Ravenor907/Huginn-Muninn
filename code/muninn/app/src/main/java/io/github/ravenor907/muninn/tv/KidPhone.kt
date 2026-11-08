@@ -3,6 +3,7 @@
 package io.github.ravenor907.muninn.tv
 
 import io.github.ravenor907.muninn.ui.fitBars
+import io.github.ravenor907.muninn.ui.padBars
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -765,9 +766,10 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
         }
     }
 
+    val outerB = io.github.ravenor907.muninn.ui.outerBars()
     if (camera) androidx.compose.ui.window.Dialog({ camera = false },
         androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-      androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).fitBars()) {
+      androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).padBars(io.github.ravenor907.muninn.ui.dialogBars(outerB))) {
         io.github.ravenor907.muninn.screens.CameraScreen(photoOnly = true, onPhoto = { jpeg ->
             // Not tied to this screen: a photo taken as a quiet time starts is held, not lost.
             CoroutineScope(SupervisorJob() + Dispatchers.Main).launch { Ui.say(withContext(Dispatchers.IO) { KidChats.sendOrHold(app, p.k, "photo", jpeg, 0) }) }

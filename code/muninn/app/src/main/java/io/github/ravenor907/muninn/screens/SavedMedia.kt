@@ -10,12 +10,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.displayCutoutPadding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -178,11 +177,12 @@ internal fun rememberSavedMedia(app: Muninn, target: VideoSend.Target, onGif: (U
         try { Picking.launch(launcher, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
         catch (_: Exception) { Ui.say("This phone has no photo picker.", true) }
     }
+    val outer = io.github.ravenor907.muninn.ui.outerBars()
     if (picked != null) Dialog(onDismissRequest = { SavedMedia.close(target) },
         // Drawn edge to edge with the bars' own room kept (Android 15 and later ignore "fits the system windows" for a
         // dialog, which put the Send bar under the navigation bar on a Pixel).
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        SavedMediaScreen(picked, onChange = { SavedMedia.set(target, it) }, onAddMore = launch, onClose = { SavedMedia.close(target) }) { chosen ->
+        SavedMediaScreen(picked, io.github.ravenor907.muninn.ui.dialogBars(outer), onChange = { SavedMedia.set(target, it) }, onAddMore = launch, onClose = { SavedMedia.close(target) }) { chosen ->
             SavedMedia.close(target)
             SavedMedia.send(app, target, chosen, onGif)
         }
@@ -192,14 +192,15 @@ internal fun rememberSavedMedia(app: Muninn, target: VideoSend.Target, onGif: (U
 
 /** The picked items as the mockup's Saved media screen. */
 @Composable
-private fun SavedMediaScreen(p: SavedMedia.Picked, onChange: (SavedMedia.Picked) -> Unit, onAddMore: () -> Unit, onClose: () -> Unit,
+private fun SavedMediaScreen(p: SavedMedia.Picked, bars: androidx.compose.foundation.layout.WindowInsets, onChange: (SavedMedia.Picked) -> Unit, onAddMore: () -> Unit, onClose: () -> Unit,
                              onSend: (List<SavedMedia.Item>) -> Unit) {
     BackHandler { onClose() }
     var filter by remember { mutableStateOf("all") }
     val kinds = p.items.map { it.kind }
     val shown = Photos.Pick.shown(kinds, filter)
     val chosen = p.order.map { p.items[it] }
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().displayCutoutPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.ground)
+        .windowInsetsPadding(bars.only(androidx.compose.foundation.layout.WindowInsetsSides.Top + androidx.compose.foundation.layout.WindowInsetsSides.Horizontal))) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction("close", "Close", Palette.gold) { onClose() }
             Text("Saved media", style = Type.big.copy(fontSize = 21.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f).padding(start = 12.dp))
@@ -224,7 +225,7 @@ private fun SavedMediaScreen(p: SavedMedia.Picked, onChange: (SavedMedia.Picked)
         if (shown.isEmpty()) Text(when (filter) { Photos.Pick.PHOTO -> "No photos picked."; Photos.Pick.VIDEO -> "No videos picked."; else -> "No GIFs picked." },
             style = Type.normal, modifier = Modifier.padding(16.dp))
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)).background(Palette.raised)
-            .navigationBarsPadding().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 18.dp)) {
+            .windowInsetsPadding(bars.only(androidx.compose.foundation.layout.WindowInsetsSides.Bottom)).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 18.dp)) {
             Text(Photos.Pick.NOTE, style = Type.small.copy(color = Palette.gold))
             Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

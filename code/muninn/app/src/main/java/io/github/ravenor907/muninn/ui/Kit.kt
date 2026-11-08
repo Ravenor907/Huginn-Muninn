@@ -495,6 +495,31 @@ fun Modifier.fitBars(): Modifier =
     windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.systemBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout))
 
 /**
+ * The app window's own bars and cutout, read outside a dialog (call it before Dialog). A full-screen dialog is handed no
+ * insets on some phones, which left its Send bar under the navigation bar; [fullDialog] pads by the larger of the two.
+ */
+@Composable
+fun outerBars(): androidx.compose.foundation.layout.WindowInsets {
+    val v = androidx.compose.ui.platform.LocalView.current
+    val i = androidx.core.view.ViewCompat.getRootWindowInsets(v)?.getInsets(
+        androidx.core.view.WindowInsetsCompat.Type.systemBars() or androidx.core.view.WindowInsetsCompat.Type.displayCutout())
+    return androidx.compose.foundation.layout.WindowInsets(i?.left ?: 0, i?.top ?: 0, i?.right ?: 0, i?.bottom ?: 0)
+}
+
+/** Pads by [b] (from [dialogBars]). */
+fun Modifier.padBars(b: androidx.compose.foundation.layout.WindowInsets): Modifier = windowInsetsPadding(b)
+
+/** Inside a full-screen dialog: its window fills the screen, and [outer] (from [outerBars]) joins the dialog's own bars. */
+@Composable
+fun dialogBars(outer: androidx.compose.foundation.layout.WindowInsets): androidx.compose.foundation.layout.WindowInsets {
+    val w = (androidx.compose.ui.platform.LocalView.current.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+    androidx.compose.runtime.SideEffect {
+        w?.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+    }
+    return androidx.compose.foundation.layout.WindowInsets.systemBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout).union(outer)
+}
+
+/**
  * A row of [count] choices that share the width equally, as many per line as fit at the current text size: all on
  * one line usually, two or one per line at a large font size, so no label is squeezed into broken words.
  * [minWidth] is the narrowest a choice may be at 100% text, [max] the most on one line; [item] draws choice i with the
