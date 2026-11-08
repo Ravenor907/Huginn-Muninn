@@ -509,15 +509,11 @@ fun outerBars(): androidx.compose.foundation.layout.WindowInsets {
 /** Pads by [b] (from [dialogBars]). */
 fun Modifier.padBars(b: androidx.compose.foundation.layout.WindowInsets): Modifier = windowInsetsPadding(b)
 
-/** Inside a full-screen dialog: its window fills the screen, and [outer] (from [outerBars]) joins the dialog's own bars. */
+/** Inside a full-screen dialog: the dialog's own bars and cutout ([outer] is kept for callers; joining it doubled the top). */
 @Composable
-fun dialogBars(outer: androidx.compose.foundation.layout.WindowInsets): androidx.compose.foundation.layout.WindowInsets {
-    val w = (androidx.compose.ui.platform.LocalView.current.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
-    androidx.compose.runtime.SideEffect {
-        w?.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
-    }
-    return androidx.compose.foundation.layout.WindowInsets.systemBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout).union(outer)
-}
+@Suppress("UNUSED_PARAMETER")
+fun dialogBars(outer: androidx.compose.foundation.layout.WindowInsets): androidx.compose.foundation.layout.WindowInsets =
+    androidx.compose.foundation.layout.WindowInsets.systemBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout)
 
 /**
  * A row of [count] choices that share the width equally, as many per line as fit at the current text size: all on

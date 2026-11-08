@@ -201,16 +201,32 @@ private fun SavedMediaScreen(p: SavedMedia.Picked, bars: androidx.compose.founda
     val chosen = p.order.map { p.items[it] }
     Column(Modifier.fillMaxSize().background(Palette.ground)
         .windowInsetsPadding(bars.only(androidx.compose.foundation.layout.WindowInsetsSides.Top + androidx.compose.foundation.layout.WindowInsetsSides.Horizontal))) {
+        // Send sits at the top, beside Close: some phones draw a full-screen sheet past the bottom of the screen, so
+        // nothing that matters is kept at the bottom.
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction("close", "Close", Palette.gold) { onClose() }
             Text("Saved media", style = Type.big.copy(fontSize = 21.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f).padding(start = 12.dp))
+            MButton("Send", kind = Kind.Accent, enabled = chosen.isNotEmpty(), icon = "send") { onSend(chosen) }
+        }
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(Photos.Pick.selected(chosen.size), style = Type.big)
+                val s = Photos.Pick.summary(chosen.count { it.kind == Photos.Pick.PHOTO }, chosen.count { it.kind == Photos.Pick.VIDEO },
+                    chosen.count { it.kind == Photos.Pick.GIF })
+                if (s.isNotEmpty()) Text(s, style = Type.small)
+            }
             MButton("Add more", icon = "plus") { onAddMore() }
         }
-        ChoiceRow(Photos.Pick.FILTERS.size, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), minWidth = 72.dp, gap = 8.dp) { i, mod ->
+        ChoiceRow(Photos.Pick.FILTERS.size, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp), minWidth = 72.dp, gap = 8.dp) { i, mod ->
             val (key, label) = Photos.Pick.FILTERS[i]
             MButton(label, mod, kind = if (filter == key) Kind.Accent else Kind.Normal) { filter = key }
         }
+        Text(Photos.Pick.NOTE, style = Type.small.copy(color = Palette.gold), modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
+        if (shown.isEmpty()) Text(when (filter) { Photos.Pick.PHOTO -> "No photos picked."; Photos.Pick.VIDEO -> "No videos picked."; else -> "No GIFs picked." },
+            style = Type.normal, modifier = Modifier.padding(16.dp))
+        // Room under the last row, so every tile can be scrolled clear of the bottom edge.
         LazyVerticalGrid(GridCells.Adaptive(110.dp), Modifier.weight(1f).fillMaxWidth().padding(horizontal = 3.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 120.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             items(shown.size, key = { p.items[shown[it]].uri.toString() }) { n ->
                 val i = shown[n]
@@ -220,21 +236,6 @@ private fun SavedMediaScreen(p: SavedMedia.Picked, bars: androidx.compose.founda
                     if (next == p.order) Ui.say("Up to ${Photos.Pick.MAX} at once.")
                     onChange(p.copy(order = next))
                 }
-            }
-        }
-        if (shown.isEmpty()) Text(when (filter) { Photos.Pick.PHOTO -> "No photos picked."; Photos.Pick.VIDEO -> "No videos picked."; else -> "No GIFs picked." },
-            style = Type.normal, modifier = Modifier.padding(16.dp))
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)).background(Palette.raised)
-            .windowInsetsPadding(bars.only(androidx.compose.foundation.layout.WindowInsetsSides.Bottom)).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 18.dp)) {
-            Text(Photos.Pick.NOTE, style = Type.small.copy(color = Palette.gold))
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(Photos.Pick.selected(chosen.size), style = Type.big)
-                    val s = Photos.Pick.summary(chosen.count { it.kind == Photos.Pick.PHOTO }, chosen.count { it.kind == Photos.Pick.VIDEO },
-                        chosen.count { it.kind == Photos.Pick.GIF })
-                    if (s.isNotEmpty()) Text(s, style = Type.small)
-                }
-                MButton("Send", kind = Kind.Accent, enabled = chosen.isNotEmpty(), icon = "send") { onSend(chosen) }
             }
         }
     }
