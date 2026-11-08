@@ -501,13 +501,22 @@ internal fun ShareToDialog(app: Muninn, openChat: (String) -> Unit) {
     val uris = ShareTo.pending.toList()
     fun toChat(where: String) {
         ShareTo.pending.clear()
-        uris.forEach { sendFileFrom(app, context, scope, where, it) }
+        // Photos and videos shared in from the gallery go into the chat as photos and videos (its Send sheet opens with
+        // them picked), never as file cards; anything else goes as a file.
+        val media = uris.filter { isMedia(context, it) }
+        if (media.isNotEmpty()) {
+            val target = if (where.startsWith("g:")) where.removePrefix("g:").substringBefore('/').let { g ->
+                io.github.ravenor907.muninn.net.VideoSend.Target(g, ChatNav.channel[g] ?: io.github.ravenor907.muninn.net.Proto06.MAIN, "")
+            } else io.github.ravenor907.muninn.net.VideoSend.Target("", "", where)
+            SavedMedia.load(context.applicationContext, target, media)
+        }
+        uris.filter { it !in media }.forEach { sendFileFrom(app, context, scope, where, it) }
         openChat(where)
     }
     AlertDialog(
         onDismissRequest = { ShareTo.pending.clear() },
         containerColor = Palette.panel,
-        title = { Text(if (uris.size == 1) "Send the file to" else "Send ${uris.size} files to", style = Type.big) },
+        title = { Text(if (uris.all { isMedia(context, it) }) (if (uris.size == 1) "Send it to" else "Send ${uris.size} to") else if (uris.size == 1) "Send the file to" else "Send ${uris.size} files to", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 val contacts = people.filter { !it.groupOnly }.sortedBy { app.chat.nameOf(it.chatKey).lowercase() }

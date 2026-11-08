@@ -602,7 +602,12 @@ internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?, folder: String = "")
 internal fun DirectFiles(peer: String, who: String = "them", resend: (String, java.io.File, String) -> Unit = { _, _, _ -> }) {
     val all by io.github.ravenor907.muninn.net.FileLink.all.collectAsState()
     // A copy of my big video shows on its bubble instead (unless it failed: then its card offers Retry).
-    val mine = all.values.filter { it.where == peer && !it.relay && !io.github.ravenor907.muninn.net.FileLink.inBubble(it) }.sortedBy { it.time }
+    val here = all.values.filter { it.where == peer && !it.relay && !io.github.ravenor907.muninn.net.FileLink.inBubble(it) }.sortedBy { it.time }
+    // In a group, a file of mine is one card, not one per member: the one still going (else one that failed, for Retry).
+    // Once it reached everyone its card goes (Transfers still lists each).
+    val mine = if (!peer.startsWith("g:")) here else here.filter { !it.mine } + here.filter { it.mine }.groupBy { it.name to it.size }.values.mapNotNull { copies ->
+        copies.firstOrNull { io.github.ravenor907.muninn.net.FileText.running(it.state) } ?: copies.firstOrNull { it.state == "failed" }
+    }.sortedBy { it.time }
     if (mine.isEmpty()) return
     val app = LocalContext.current.applicationContext as? io.github.ravenor907.muninn.Muninn
     val scope = androidx.compose.runtime.rememberCoroutineScope()

@@ -3647,7 +3647,7 @@ private fun ForwardMessage(app: Muninn, text: String, media: Chat.Msg?, done: ()
 }
 
 /** A picture or video by its type, so a file pick of one goes the picture or video way. */
-private fun isMedia(context: android.content.Context, uri: Uri): Boolean {
+internal fun isMedia(context: android.content.Context, uri: Uri): Boolean {
     val t = try { context.contentResolver.getType(uri) } catch (_: Exception) { null } ?: return false
     return t.startsWith("image/") || t.startsWith("video/")
 }
