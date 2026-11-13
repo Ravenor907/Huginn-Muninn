@@ -982,6 +982,10 @@ object FileLink {
                 if (p.has("vid") && h.isKidDevice()) { decline(from, id, "rules"); return }
                 val name = p.getString("name")
                 val size = p.getLong("size")
+                // Sent again (their app retries by itself): the card of an earlier try that failed makes way, so one file
+                // is one card here, not one per try. A card with part of the file kept stays (it goes on from there).
+                _all.value.values.filter { !it.mine && it.state == "failed" && it.peer == from && it.name == name && it.size == size && !isKept(it.id) }
+                    .forEach { drop(it.id) }
                 val g = p.optString("g")
                 val c = p.getJSONArray("c")
                 val vid = p.optInt("vid", 0)

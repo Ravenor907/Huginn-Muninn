@@ -32,7 +32,8 @@ object Photos {
             var sample = 1
             while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= side) sample *= 2
             val raw = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
-            raw?.let { scrub(encode(upright(context, uri, scale(it, side)), if (hd) HD_BYTES else NORMAL_BYTES)) }
+            // A see-through picture (a PNG or WebP cut-out) is laid on white first: a JPEG has no see-through, and it came out black.
+            raw?.let { scrub(encode(opaque(upright(context, uri, scale(it, side))), if (hd) HD_BYTES else NORMAL_BYTES)) }
         }
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 

@@ -81,7 +81,7 @@ Item {
             { name: "Poll", detail: "Ask a question", url: "poll", icon: "check" }] }], a => {
                 if (a === "camera") { if (cam) openCamera(); else Ui.say("No camera found on this device.", true) }
                 else if (a === "media") savedMedia.openPicker()
-                else if (a === "file") { if (reach) PeopleActions.sendFile(where); else Ui.say(note, true) }
+                else if (a === "file") { if (!reach) Ui.say(note, true); else if (!tour) Ui.pickFiles(paths => more.dropFiles(paths)) }
                 else if (a === "poll") newPoll()
             })
     }
@@ -139,12 +139,14 @@ Item {
         paths.forEach(p => { const r = Videos.sendFile(where, p); if (r !== "") Ui.say(r, true); else sent++ })
         if (sent) Ui.say(sent === 1 ? "Sending the video message." : "Sending " + sent + " video messages.")
     }
-    // Dropped files: pictures go in the chat (several as an album) and videos go as videos, by the same rules as
+    // Dropped or picked files: pictures go in the chat (several as an album) and videos go as videos, by the same rules as
     // Saved media (one too long offers Send as a file); anything else goes as a file, by the best route.
     function dropFiles(urls) {
         const pics = [], others = [], clips = []
         for (let i = 0; i < urls.length; i++) {
-            const path = Chat.localPath(urls[i])
+            // A dropped file comes as a file: address, a picked one as a plain path.
+            const s = String(urls[i])
+            const path = s.indexOf("file:") === 0 ? Chat.localPath(urls[i]) : s
             if (path === "") continue
             if (Chat.isPicture(path)) pics.push(path)
             else if (/\.(mp4|m4v|mov)$/i.test(path)) clips.push(path)

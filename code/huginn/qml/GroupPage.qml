@@ -192,6 +192,7 @@ Rectangle {
         : finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
         : shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "y", label: "Stop codes" }, { key: "b", label: "Close" }]
+        : zone === "messages" && groupFileStrip.focusIndex >= 0 ? [{ key: "a", label: groupFileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }].concat(System.keyboardAvailable ? [{ key: "y", label: "Keyboard" }] : [], [{ key: "lt", label: "Options" }, { key: "b", label: "Done" }])
         : zone === "side" ? (side === "thread" && !readOnly ? [{ key: "a", label: "Reply in the thread" }] : side === "pins" ? [{ key: "a", label: "Go to it" }] : [])
@@ -1801,6 +1802,14 @@ Rectangle {
         if (threadBox.emojiShown) return threadBox.emojiButton(b)
         if (typingIn && boxButton(typingIn, b)) return true
         if (zone === "side") return sideButton(b)
+        // A file card: the D-pad is on its buttons (Up past it goes back to the messages). The same as a chat.
+        if (zone === "messages" && groupFileStrip.focusIndex >= 0) {
+            if (groupFileStrip.handleButton(b)) return true
+            if (b === "up") {
+                if (messages.length > 0) { sel = messages.length - 1; list.positionViewAtIndex(sel, ListView.Contain) }
+                return true
+            }
+        }
         const memCount = memberCol.ordered.length
         switch (b) {
         case "up":
@@ -1811,6 +1820,7 @@ Rectangle {
         case "down":
             if (zone === "channels") step(1)
             else if (zone === "members") memRow = Math.min(memCount - 1, memRow + 1)
+            else if (zone === "messages" && (sel < 0 || sel === messages.length - 1) && groupFileStrip.enter()) sel = -1   // on to a file card's buttons
             else if (sel >= 0) { sel = Math.min(messages.length - 1, sel + 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
         case "right":
