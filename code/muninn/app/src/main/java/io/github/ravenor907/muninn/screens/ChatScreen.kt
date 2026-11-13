@@ -1666,7 +1666,9 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
         verticalAlignment = Alignment.Bottom) {
         if (onPhoto != null) IconAction("plus", "Attach", Palette.textMuted, size = 24.dp) { onPhoto() }
         // Pictures and videos one tap away, right beside the box (the + still has the camera, files and polls).
-        if (onMedia != null) IconAction("image", "Photos and videos", Palette.textMuted, size = 24.dp) { onMedia() }
+        // It makes way for typing, and on a very narrow window: the + still has Saved media.
+        if (onMedia != null && text.isEmpty() && androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 340)
+            IconAction("image", "Photos and videos", Palette.textMuted, size = 24.dp) { onMedia() }
         if (onPhoto != null || onMedia != null) Spacer(Modifier.width(4.dp))
         val shape = io.github.ravenor907.muninn.ui.LookShapes.composer
         Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(shape).background(Palette.field).hcBorder(shape).padding(start = 16.dp, end = 2.dp),
@@ -2699,7 +2701,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     val s = grp.state
     val key = Folders.groupKey(g)
     val texts = s.channels.filter { it.t == "text" }
-    val ch = ChatNav.channel[g]?.takeIf { id -> texts.any { it.id == id } } ?: Proto06.MAIN
+    val ch = shownChannel(app, g)
     val chName = s.channel(ch)?.n ?: "general"
     // A removed channel's messages show in main.
     val msgs = chats[g].orEmpty().filter { it.ch == ch || (ch == Proto06.MAIN && s.channel(it.ch)?.t != "text") }
@@ -3646,8 +3648,22 @@ private fun ForwardMessage(app: Muninn, text: String, media: Chat.Msg?, done: ()
     }, onCancel = done)
 }
 
-/** A picture or video by its type, so a file pick of one goes the picture or video way. */
+/** The text channel a group's chat shows: the one last opened if it still exists, else main. One rule for the chat and for what's shared in. */
+internal fun shownChannel(app: io.github.ravenor907.muninn.Muninn, g: String): String {
+    val texts = app.chat.groups.group(g)?.state?.channels?.filter { it.t == "text" }.orEmpty()
+    return ChatNav.channel[g]?.takeIf { id -> texts.any { it.id == id } } ?: Proto06.MAIN
+}
+
+/** The picture and video types this app can show, so a file pick or a share of one goes the picture or video way; any other file stays a file. */
+private val MEDIA_TYPES = setOf("image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif", "image/avif", "image/bmp",
+    "video/mp4", "video/3gpp", "video/quicktime")
+
 internal fun isMedia(context: android.content.Context, uri: Uri): Boolean {
-    val t = try { context.contentResolver.getType(uri) } catch (_: Exception) { null } ?: return false
-    return t.startsWith("image/") || t.startsWith("video/")
+    var t = try { context.contentResolver.getType(uri) } catch (_: Exception) { null }
+    // No type given (some file managers): go by the name's ending.
+    if (t == null || t == "application/octet-stream") {
+        val ext = (uri.lastPathSegment ?: "").substringAfterLast('.', "").lowercase()
+        t = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+    }
+    return t != null && t.lowercase() in MEDIA_TYPES
 }

@@ -135,9 +135,13 @@ internal fun IncomingFileCard(f: FileLink.Progress, who: String, showChat: Boole
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (String, File, String, String) -> Unit) {
+internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, copies: List<FileLink.Progress> = listOf(f),
+                          resend: (String, File, String, String) -> Unit) {
     val context = LocalContext.current
     val link = FileLink
+    // A group's one card stands for every member's copy ([copies]): Cancel, Close and Retry act on them all.
+    val cancelAll = { copies.filter { FileText.running(it.state) }.forEach { link.cancel(it.id) } }
+    val closeAll = { copies.filter { !FileText.running(it.state) }.forEach { link.dismiss(it.id) } }
     val failed = f.state == "failed"
     val who = link.host?.nameOf(f.peer) ?: "Someone"
     val chat = link.chatOf(f)
@@ -169,13 +173,13 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                 // Only while it moves: a finished card never keeps Pause or Cancel (the moving list clears just after "done").
                 FileText.running(f.state) && link.canResume(f.id) -> {
                     MButton("Resume", kind = Kind.Accent, icon = "play") { link.resume(f.id) }
-                    MButton("Cancel", kind = Kind.Danger) { link.cancel(f.id) }
+                    MButton("Cancel", kind = Kind.Danger) { cancelAll() }
                 }
                 FileText.running(f.state) && link.canPause(f.id) -> {
                     MButton("Pause", icon = "pause") { link.pause(f.id) }
-                    MButton("Cancel", kind = Kind.Danger) { link.cancel(f.id) }
+                    MButton("Cancel", kind = Kind.Danger) { cancelAll() }
                 }
-                link.canCancel(f.id) -> MButton("Cancel", kind = Kind.Danger) { link.cancel(f.id) }
+                link.canCancel(f.id) -> MButton("Cancel", kind = Kind.Danger) { cancelAll() }
                 f.state == "done" && !f.mine && f.uri.isNotEmpty() -> {
                     // An app installer opens only when the person asks, and on a Kids' TV not at all (a parent approves it).
                     val kids = io.github.ravenor907.muninn.tv.KidMode.saved(context)
@@ -185,7 +189,7 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                     MButton("Folder", icon = "folder") {
                         if (!Received.showFolder(context)) Ui.say("It's in ${f.folder.ifEmpty { Received.shownRoot() }}. Open it from your Files app.")
                     }
-                    MButton("Close") { link.dismiss(f.id) }
+                    MButton("Close") { closeAll() }
                 }
                 failed && link.canRetry(f.id) -> {
                     // Too big to go without Direct: one tap turns it on here and asks them to do the same.
@@ -194,14 +198,16 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                         MButton(if (on) "Ask $who" else "Turn on Trusted direct", kind = Kind.Accent) { allowDirect(context, f.peer, who) }
                     }
                     MButton("Retry", kind = Kind.Accent, icon = "refresh") {
-                        val g = link.retryGroup(f.id)
-                        link.takeRetry(f.id)?.let { (p, file, n) -> resend(p, file, n, g) }
+                        copies.filter { it.state == "failed" && link.canRetry(it.id) }.forEach { c ->
+                            val g = link.retryGroup(c.id)
+                            link.takeRetry(c.id)?.let { (p, file, n) -> resend(p, file, n, g) }
+                        }
                     }
-                    MButton("Close") { link.dismiss(f.id) }
+                    MButton("Close") { closeAll() }
                 }
                 // What came of their file is kept (it goes on from there): Close keeps it, Discard asks, then deletes it.
                 failed && link.isKept(f.id) -> {
-                    MButton("Close") { link.dismiss(f.id) }
+                    MButton("Close") { closeAll() }
                     MButton("Discard", kind = Kind.Danger) {
                         val pct = FileText.percent(link.keptBytes(f.id), f.size)
                         Ui.sure(io.github.ravenor907.muninn.ui.Ask("Throw away the $pct% that came?",
@@ -209,7 +215,7 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                                 "Close keeps it for ${FileLink.KEEP_DAYS} days instead.", "Discard", danger = true) { link.discard(f.id) })
                     }
                 }
-                !FileText.running(f.state) -> MButton("Close") { link.dismiss(f.id) }
+                !FileText.running(f.state) -> MButton("Close") { closeAll() }
             }
         }
     }
@@ -499,6 +505,7 @@ internal fun ShareToDialog(app: Muninn, openChat: (String) -> Unit) {
     val groups by app.chat.groups.all.collectAsState()
     val devices by app.net.devices.collectAsState()
     val uris = ShareTo.pending.toList()
+    val allMedia = remember(uris) { uris.all { isMedia(context, it) } }
     fun toChat(where: String) {
         ShareTo.pending.clear()
         // Photos and videos shared in from the gallery go into the chat as photos and videos (its Send sheet opens with
@@ -506,7 +513,7 @@ internal fun ShareToDialog(app: Muninn, openChat: (String) -> Unit) {
         val media = uris.filter { isMedia(context, it) }
         if (media.isNotEmpty()) {
             val target = if (where.startsWith("g:")) where.removePrefix("g:").substringBefore('/').let { g ->
-                io.github.ravenor907.muninn.net.VideoSend.Target(g, ChatNav.channel[g] ?: io.github.ravenor907.muninn.net.Proto06.MAIN, "")
+                io.github.ravenor907.muninn.net.VideoSend.Target(g, shownChannel(app, g), "")
             } else io.github.ravenor907.muninn.net.VideoSend.Target("", "", where)
             SavedMedia.load(context.applicationContext, target, media)
         }
@@ -516,7 +523,7 @@ internal fun ShareToDialog(app: Muninn, openChat: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = { ShareTo.pending.clear() },
         containerColor = Palette.panel,
-        title = { Text(if (uris.all { isMedia(context, it) }) (if (uris.size == 1) "Send it to" else "Send ${uris.size} to") else if (uris.size == 1) "Send the file to" else "Send ${uris.size} files to", style = Type.big) },
+        title = { Text(if (allMedia) (if (uris.size == 1) "Send it to" else "Send ${uris.size} to") else if (uris.size == 1) "Send the file to" else "Send ${uris.size} files to", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 val contacts = people.filter { !it.groupOnly }.sortedBy { app.chat.nameOf(it.chatKey).lowercase() }

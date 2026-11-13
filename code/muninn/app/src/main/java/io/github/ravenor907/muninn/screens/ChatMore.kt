@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -317,6 +318,10 @@ internal fun VideoPlayer(key: Any?, source: MediaDataSource?, close: () -> Unit,
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             MButton("Back", icon = "back") { close() }
+            // Play and Pause sit up here too: nothing that matters is kept at the bottom of a full-screen sheet.
+            MButton(if (playing) "Pause" else "Play", icon = if (playing) "pause" else "play") {
+                try { if (player.isPlaying) { player.pause(); playing = false } else { player.start(); playing = true } } catch (_: Exception) {}
+            }
             Spacer(Modifier.weight(1f))
             actions()
         }
@@ -350,11 +355,6 @@ internal fun VideoPlayer(key: Any?, source: MediaDataSource?, close: () -> Unit,
                     })
                 }
             }, modifier = Modifier.aspectRatio(ratio))
-        }
-        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.Center) {
-            MButton(if (playing) "Pause" else "Play", icon = if (playing) "pause" else "play") {
-                try { if (player.isPlaying) { player.pause(); playing = false } else { player.start(); playing = true } } catch (_: Exception) {}
-            }
         }
         bottom?.invoke()
     }
@@ -605,16 +605,21 @@ internal fun DirectFiles(peer: String, who: String = "them", resend: (String, ja
     val here = all.values.filter { it.where == peer && !it.relay && !io.github.ravenor907.muninn.net.FileLink.inBubble(it) }.sortedBy { it.time }
     // In a group, a file of mine is one card, not one per member: the one still going (else one that failed, for Retry).
     // Once it reached everyone its card goes (Transfers still lists each).
-    val mine = if (!peer.startsWith("g:")) here else here.filter { !it.mine } + here.filter { it.mine }.groupBy { it.name to it.size }.values.mapNotNull { copies ->
-        copies.firstOrNull { io.github.ravenor907.muninn.net.FileText.running(it.state) } ?: copies.firstOrNull { it.state == "failed" }
-    }.sortedBy { it.time }
-    if (mine.isEmpty()) return
+    val sets: List<Pair<io.github.ravenor907.muninn.net.FileLink.Progress, List<io.github.ravenor907.muninn.net.FileLink.Progress>>> =
+        if (!peer.startsWith("g:")) here.map { it to listOf(it) }
+        else (here.filter { !it.mine }.map { it to listOf(it) } + here.filter { it.mine }.groupBy { it.name to it.size }.values.mapNotNull { copies ->
+            (copies.firstOrNull { io.github.ravenor907.muninn.net.FileText.running(it.state) } ?: copies.firstOrNull { it.state == "failed" })?.let { it to copies }
+        }).sortedBy { it.first.time }
+    if (sets.isEmpty()) return
     val app = LocalContext.current.applicationContext as? io.github.ravenor907.muninn.Muninn
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-        mine.forEach { f ->
-            TransferCard(f, showChat = false) { p, file, n, g ->
-                if (g.isEmpty() || app == null) resend(p, file, n) else resendFile(app, scope)(p, file, n, g)
+    // Never taller than a few cards (it scrolls): many files at once must not push the message box off the screen.
+    Column(Modifier.fillMaxWidth().heightIn(max = 230.dp).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
+        sets.forEach { (f, copies) ->
+            androidx.compose.runtime.key(f.id) {
+                TransferCard(f, showChat = false, copies = copies) { p, file, n, g ->
+                    if (g.isEmpty() || app == null) resend(p, file, n) else resendFile(app, scope)(p, file, n, g)
+                }
             }
         }
     }

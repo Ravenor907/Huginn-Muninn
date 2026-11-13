@@ -139,25 +139,21 @@ Item {
         paths.forEach(p => { const r = Videos.sendFile(where, p); if (r !== "") Ui.say(r, true); else sent++ })
         if (sent) Ui.say(sent === 1 ? "Sending the video message." : "Sending " + sent + " video messages.")
     }
-    // Dropped files: pictures go in the chat (several as an album), anything else as a file, by the best route (the
-    // same as Send file). A video goes as a file too; a short MP4 that fits a video message asks which.
+    // Dropped files: pictures go in the chat (several as an album) and videos go as videos, by the same rules as
+    // Saved media (one too long offers Send as a file); anything else goes as a file, by the best route.
     function dropFiles(urls) {
-        const pics = [], others = [], clips = [], clipUrls = []
+        const pics = [], others = [], clips = []
         for (let i = 0; i < urls.length; i++) {
             const path = Chat.localPath(urls[i])
             if (path === "") continue
             if (Chat.isPicture(path)) pics.push(path)
-            else if (/\.(mp4|m4v|mov)$/i.test(path) && Videos.fitsMessage(path)) { clips.push(path); clipUrls.push(urls[i]) }
+            else if (/\.(mp4|m4v|mov)$/i.test(path)) clips.push(path)
             else others.push(urls[i])
         }
         if (pics.length) sendPictures(pics, false)
         // Caps f1 and f2: anything else as a file, to the person or to everyone in the group.
         if (others.length) PeopleActions.sendFiles(where, others)
-        if (!clips.length) return
-        Ui.pickFrom(clips.length === 1 ? "Send this video" : "Send " + clips.length + " videos", [{ header: "", items: [
-            { name: "As a file", detail: "Saved on their device, full quality", url: "file", icon: "attach" },
-            { name: "As a video message", detail: "Plays in the chat", url: "message", icon: "play" }] }],
-            a => { if (a === "message") more.sendClips(clips); else if (a === "file") PeopleActions.sendFiles(more.where, clipUrls) })
+        if (clips.length) sendVideos(clips)
     }
     function newPoll() { pollDlg.open("Poll for " + title) }
     function viewPhotos(list, i) { photos = list; photoAt = i }

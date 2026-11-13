@@ -509,11 +509,15 @@ fun outerBars(): androidx.compose.foundation.layout.WindowInsets {
 /** Pads by [b] (from [dialogBars]). */
 fun Modifier.padBars(b: androidx.compose.foundation.layout.WindowInsets): Modifier = windowInsetsPadding(b)
 
-/** Inside a full-screen dialog: the dialog's own bars and cutout ([outer] is kept for callers; joining it doubled the top). */
+/**
+ * Inside a full-screen dialog: the dialog's own bars and cutout, and at the bottom the app window's own bar too when it
+ * is the larger (a dialog on some phones is told of no navigation bar). The larger of the two, never both; the top is
+ * the dialog's own (joining the app's there doubled it).
+ */
 @Composable
-@Suppress("UNUSED_PARAMETER")
 fun dialogBars(outer: androidx.compose.foundation.layout.WindowInsets): androidx.compose.foundation.layout.WindowInsets =
     androidx.compose.foundation.layout.WindowInsets.systemBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout)
+        .union(androidx.compose.foundation.layout.WindowInsets(bottom = outer.getBottom(androidx.compose.ui.platform.LocalDensity.current)))
 
 /**
  * A row of [count] choices that share the width equally, as many per line as fit at the current text size: all on

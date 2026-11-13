@@ -334,28 +334,20 @@ fun CameraScreen(video: Boolean = false, keep: String = "", target: VideoSend.Ta
     // Taken: look at it first, then Send or Discard.
     photo?.let { p ->
         val bmp = remember(p) { decode(p, 1600) }
+        // Send and Discard sit at the top: a full-screen sheet can run past the bottom of some phones' screens.
         Column(Modifier.fillMaxSize().background(Color.Black)) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                bmp?.let { Image(it, contentDescription = "The photo you took", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
-            }
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 MButton("Discard", Modifier.weight(1f), Kind.Danger, icon = "delete") { photo = null }
                 MButton("Send", Modifier.weight(1f), Kind.Accent, icon = "send") { onPhoto(p); close() }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                bmp?.let { Image(it, contentDescription = "The photo you took", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
             }
         }
         return
     }
     clipFile?.let { f ->
         Column(Modifier.fillMaxSize().background(Color.Black)) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                AndroidView(factory = { ctx ->
-                    VideoView(ctx).apply {
-                        setVideoPath(f.path)
-                        setOnPreparedListener { mp -> mp.isLooping = true; start() }
-                        setOnErrorListener { _, _, _ -> true }
-                    }
-                }, onRelease = { it.stopPlayback() }, modifier = Modifier.fillMaxSize().semantics { contentDescription = "The video you took" })
-            }
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 MButton("Discard", Modifier.weight(1f), Kind.Danger, icon = "delete") { pending.delete(); clipFile = null }
                 MButton("Send", Modifier.weight(1f), Kind.Accent, icon = "send") {
@@ -365,15 +357,23 @@ fun CameraScreen(video: Boolean = false, keep: String = "", target: VideoSend.Ta
                     else Ui.say("That video couldn't be sent. Try again.", true)
                 }
             }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                AndroidView(factory = { ctx ->
+                    VideoView(ctx).apply {
+                        setVideoPath(f.path)
+                        setOnPreparedListener { mp -> mp.isLooping = true; start() }
+                        setOnErrorListener { _, _, _ -> true }
+                    }
+                }, onRelease = { it.stopPlayback() }, modifier = Modifier.fillMaxSize().semantics { contentDescription = "The video you took" })
+            }
         }
         return
     }
     clip?.let { (bytes, ms) ->
         Box(Modifier.fillMaxSize()) {
-            VideoPlayer(bytes, { clip = null }) {}
-            Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 72.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MButton("Discard", Modifier.weight(1f), Kind.Danger, icon = "delete") { clip = null }
-                MButton("Send", Modifier.weight(1f), Kind.Accent, icon = "send") { onVideo(bytes, ms); close() }
+            VideoPlayer(bytes, { clip = null }) {
+                MButton("Discard", kind = Kind.Danger, icon = "delete") { clip = null }
+                MButton("Send", kind = Kind.Accent, icon = "send") { onVideo(bytes, ms); close() }
             }
         }
         return

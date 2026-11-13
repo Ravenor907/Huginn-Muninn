@@ -285,6 +285,9 @@ object FileLink {
     /** Cap f3: bytes already there when it began (a resumed file), left out of the speed. */
     private val base = ConcurrentHashMap<String, Long>()
 
+    /** A card taken away, under the same lock as [put]: a removal is never lost to a progress update on another thread. */
+    @Synchronized private fun drop(id: String) { _all.value = _all.value - id }
+
     /** What a card keeps from before (its chat, route, folder, when it began) and what it shows now (paused, pace). */
     @Synchronized private fun put(p: Progress) {
         val old = _all.value[p.id]
@@ -648,7 +651,7 @@ object FileLink {
         directIds.remove(id)
         val wasAgain = again.remove(id)?.second?.delete() != null
         againGroup.remove(id)
-        _all.value = _all.value - id
+        drop(id)
         if (wasAgain || id in closedKept) saveKept()
     }
 
@@ -664,7 +667,7 @@ object FileLink {
     fun handedOff(id: String) {
         val had = again.remove(id) != null
         againGroup.remove(id)
-        _all.value = _all.value - id
+        drop(id)
         if (had) saveKept()
     }
 
@@ -681,7 +684,7 @@ object FileLink {
         val v = againVid.remove(id) ?: 0
         val b = bigOf.remove(id) ?: againBig.remove(id)
         if (v > 0 || b != null) carry[t.second.path] = v to b
-        _all.value = _all.value - id
+        drop(id)
         saveKept()
         return t.takeIf { it.second.isFile }
     }
@@ -718,7 +721,7 @@ object FileLink {
         if (id in stopped) return true
         again.remove(id)?.second?.delete()
         againGroup.remove(id)
-        _all.value = _all.value - id
+        drop(id)
         saveKept()
         try { back() } catch (_: Exception) {}
         return true
@@ -1120,7 +1123,7 @@ object FileLink {
         val inc = ins.remove(id) ?: return
         answered.add(id)
         decline(inc.peer, id, "no")
-        _all.value = _all.value - id
+        drop(id)
     }
 
     /**
@@ -1403,7 +1406,7 @@ object FileLink {
         var sock = sock0
         val h = host ?: return
         // Cap f3: the same file from the same person stopped part way before. It goes on from there.
-        val kept = partialFor(inc.peer, inc.sha, inc.size, inc.group)?.let { k -> partials.remove(k)?.also { _all.value = _all.value - k; saveKept() } }
+        val kept = partialFor(inc.peer, inc.sha, inc.size, inc.group)?.let { k -> partials.remove(k)?.also { drop(k); saveKept() } }
         val tmp = kept?.file ?: File(h.cacheDir(), "incoming-$id")
         val f3 = h.resumes(inc.peer)
         val who = h.nameOf(inc.peer)
@@ -1540,7 +1543,7 @@ object FileLink {
             if (sha256(tmp) != inc.sha) { fail(id, "${inc.name} arrived damaged, so it was thrown away."); return }
             // A video from Family or trusted, up to 3 minutes: in the chat like a photo, and its card goes.
             if (BigVideo.inline(inc.vid, mayAlways(h.badge(inc.peer))) && !h.isKidDevice() && h.inlineVideo(inc.peer, inc.group, tmp, inc.vid, inc.bm)) {
-                _all.value = _all.value - id
+                drop(id)
                 return
             }
             // In Download/Muninn/<chat name>, never a hidden app folder.

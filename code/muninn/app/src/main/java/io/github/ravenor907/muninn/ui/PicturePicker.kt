@@ -98,14 +98,14 @@ fun PicturePicker(onDone: () -> Unit) {
                     onVideo = { _, _ -> }, close = { camera = false })
             }
         }
-        picked != null -> Dialog(onDismissRequest = { picked = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            MoveAndScale(picked!!, onCancel = { picked = null }) { out ->
+        picked != null -> picked?.let { bmp -> Dialog(onDismissRequest = { picked = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            MoveAndScale(bmp, onCancel = { picked = null }) { out ->
                 app.profile.setMyPicture(out)
                 picked = null
                 Ui.say("Picture saved.")
                 onDone()
             }
-        }
+        } }
         else -> Dialog(onDismissRequest = onDone) {
             val pictures by app.profile.pictures.collectAsState()
             val myColour by app.profile.myColour.collectAsState()

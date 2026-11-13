@@ -1066,7 +1066,7 @@ internal fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (S
             else if (bmp != null) Image(bmp, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             else MIcon("image", Palette.textMuted, 96.dp)
             if (photos.size > 1) Text("${i + 1} of ${photos.size}", style = tvText(22.sp, Palette.textSoft),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(18.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xAA000000)).padding(horizontal = 16.dp, vertical = 8.dp))
+                modifier = Modifier.align(Alignment.TopCenter).padding(18.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xAA000000)).padding(horizontal = 16.dp, vertical = 8.dp))
         }
         LaunchedEffect(Unit) { delay(60); try { focus.requestFocus() } catch (_: Exception) {} }
     }
@@ -1097,7 +1097,7 @@ internal fun TvFullText(text: String, speak: (() -> Unit)? = null, onClose: () -
                     else -> false
                 }
             }.focusable().clickable(onClick = onClose), contentAlignment = Alignment.TopCenter) {
-            Text(text, style = tvText(30.sp), modifier = Modifier.widthIn(max = 820.dp).verticalScroll(scroll).padding(horizontal = 48.dp, vertical = 40.dp))
+            Text(text, style = tvText(30.sp), modifier = Modifier.widthIn(max = 820.dp).verticalScroll(scroll).padding(start = 48.dp, end = 48.dp, top = 40.dp, bottom = 96.dp))
         }
         LaunchedEffect(Unit) { delay(60); try { focus.requestFocus() } catch (_: Exception) {} }
     }

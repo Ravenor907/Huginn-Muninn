@@ -13,7 +13,32 @@ Column {
     property string peer: ""
     // The chat these cards belong to: their key, or "g:<group>".
     property string where: peer
-    readonly property var items: where === "" ? [] : FileLink.transfers.filter(t => t.where === where && !t.relay && !t.bubble)
+    readonly property var here: where === "" ? [] : FileLink.transfers.filter(t => t.where === where && !t.relay && !t.bubble)
+    // In a group, a file of mine is one card, not one per member: the copy still going, else one that failed (for
+    // Retry). Once it reached everyone its card goes (Transfers still lists each). The same as on the phone.
+    readonly property var items: {
+        const all = here
+        if (String(where).indexOf("g:") !== 0) return all
+        const out = [], sets = ({}), order = []
+        for (let i = 0; i < all.length; i++) {
+            const t = all[i]
+            if (!t.mine) { out.push(t); continue }
+            const k = t.name + "\n" + t.size
+            if (sets[k] === undefined) { sets[k] = []; order.push(k) }
+            sets[k].push(t)
+        }
+        for (let j = 0; j < order.length; j++) {
+            const l = sets[order[j]]
+            const pick = l.find(t => t.state !== "done" && t.state !== "failed") || l.find(t => t.state === "failed")
+            if (pick) out.push(pick)
+        }
+        return out
+    }
+    // Every member's copy of the file card [t] stands for (just [t] outside a group, or for a file of theirs).
+    function copies(t) {
+        if (!t || !t.mine || String(where).indexOf("g:") !== 0) return [t]
+        return here.filter(s => s.mine && s.name === t.name && s.size === t.size)
+    }
     property int focusIndex: -1       // the card the controller is on (-1: none)
     property int focusButton: 0
     visible: items.length > 0
@@ -55,12 +80,12 @@ Column {
         else if (a === "decline") FileLink.decline(t.id)
         else if (a === "pause") FileLink.pause(t.id)
         else if (a === "resume") FileLink.resume(t.id)
-        else if (a === "cancel") FileLink.cancel(t.id)
+        else if (a === "cancel") copies(t).forEach(s => { if (s.state !== "done" && s.state !== "failed") FileLink.cancel(s.id) })
         else if (a === "open") { if (!FileLink.openFile(t.path)) Ui.say("Nothing on this computer opens this kind of file.", true) }
         else if (a === "folder") { if (!FileLink.showInFolder(t.path)) Ui.say("It's in " + t.folder + ".", true) }
-        else if (a === "retry") FileLink.retry(t.id)
+        else if (a === "retry") copies(t).forEach(s => { if (s.state === "failed" && FileLink.canRetry(s.id)) FileLink.retry(s.id) })
         else if (a === "direct") PeopleActions.allowDirect(t.peer)
-        else if (a === "close") FileLink.dismiss(t.id)
+        else if (a === "close") copies(t).forEach(s => { if (s.state === "done" || s.state === "failed" || s.id === t.id) FileLink.dismiss(s.id) })
         else if (a === "discard") {
             const pct = t.size > 0 ? Math.floor(t.done * 100 / t.size) : 0
             Ui.sure("Throw away what came?", "The " + pct + "% of " + t.name + " that came (" + FileLink.size(FileLink.keptSize(t.id))

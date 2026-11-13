@@ -724,8 +724,14 @@ private fun SendMeFiles(app: Muninn, key: String, can: People.Can) {
     @Suppress("UNUSED_VARIABLE") val trust by io.github.ravenor907.muninn.net.call.CallManager.trustChanged.collectAsState()
     val offered = filesAlwaysOffered(app, key)
     val st by app.chat.flags.all.collectAsState()
-    val now = when { !can.files -> "off"; offered && key !in st.asks -> "always"; else -> "ask" }
-    val choices = if (offered) listOf("ask" to "Ask", "always" to "Always", "off" to "Off") else listOf("ask" to "Ask", "off" to "Off")
+    // Family's files never ask (owner, 2026-11-08), so Family has no Ask to choose: Always or Off.
+    val family = io.github.ravenor907.muninn.net.FileLink.host?.badge(key) == io.github.ravenor907.muninn.net.FileLink.BADGE_FAMILY
+    val now = when { !can.files -> "off"; family || offered && key !in st.asks -> "always"; else -> "ask" }
+    val choices = when {
+        family -> listOf("always" to "Always", "off" to "Off")
+        offered -> listOf("ask" to "Ask", "always" to "Always", "off" to "Off")
+        else -> listOf("ask" to "Ask", "off" to "Off")
+    }
     Text("Send me files", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
     ChoiceRow(choices.size, Modifier.padding(top = 6.dp), minWidth = 72.dp, gap = 8.dp) { i, m ->
         val (id, label) = choices[i]
@@ -736,7 +742,7 @@ private fun SendMeFiles(app: Muninn, key: String, can: People.Can) {
             app.chat.flags.setAsk(key, !a)
         }
     }
-    Text(when (now) { "always" -> "Theirs arrive without asking"; "off" -> "They can't send you files"; else -> "Each file asks you first" },
+    Text(when (now) { "always" -> if (family) "Family's files arrive without asking" else "Theirs arrive without asking"; "off" -> "They can't send you files"; else -> "Each file asks you first" },
         style = Type.small, modifier = Modifier.padding(top = 4.dp, bottom = 6.dp))
 }
 

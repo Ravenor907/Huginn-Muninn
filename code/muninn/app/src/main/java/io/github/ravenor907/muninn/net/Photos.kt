@@ -186,7 +186,9 @@ object Photos {
 
     /** A small square picture of a picked photo, GIF or video (its first frame) for the Saved media grid. Null if none. */
     fun thumb(context: Context, uri: Uri, kind: String, side: Int = 240): Bitmap? = try {
-        if (android.os.Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, android.util.Size(side, side), null)
+        // The system's own small picture first; a place that has none (a file manager's video) falls through to ours.
+        val own = if (android.os.Build.VERSION.SDK_INT >= 29) try { context.contentResolver.loadThumbnail(uri, android.util.Size(side, side), null) } catch (_: Exception) { null } else null
+        if (own != null) own
         else if (kind == Pick.VIDEO) {
             val r = android.media.MediaMetadataRetriever()
             try { r.setDataSource(context, uri); r.getFrameAtTime(0)?.let { scale(it, side) } } finally { try { r.release() } catch (_: Exception) {} }

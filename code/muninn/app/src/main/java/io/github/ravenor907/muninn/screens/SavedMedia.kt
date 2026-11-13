@@ -140,6 +140,8 @@ object SavedMedia {
                 // One photo keeps the person's High quality choice, as when it was picked on its own; an album goes normal.
                 val hd = photos.size == 1 && context.getSharedPreferences("muninn", Context.MODE_PRIVATE).getBoolean("photoHd", false)
                 val jpegs = photos.mapNotNull { Photos.prepare(context, it.uri, hd) }
+                val lost = photos.size - jpegs.size
+                if (lost > 0 && jpegs.isNotEmpty()) Ui.say(if (lost == 1) "One photo couldn't be opened. The rest are sending." else "$lost photos couldn't be opened. The rest are sending.", true)
                 when {
                     jpegs.isEmpty() -> Ui.say(if (photos.size == 1) "That photo couldn't be opened." else "Those photos couldn't be opened.", true)
                     jpegs.size == 1 -> if (t.group) app.chat.sendGroupPhoto(t.g, t.ch, jpegs[0]) else app.chat.sendPhoto(t.peer, jpegs[0])
