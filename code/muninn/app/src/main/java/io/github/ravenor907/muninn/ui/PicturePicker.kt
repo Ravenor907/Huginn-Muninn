@@ -169,6 +169,13 @@ private fun MoveAndScale(src: Bitmap, onCancel: () -> Unit, onSave: (Bitmap) -> 
         val side = minOf(maxWidth - 60.dp, 448.dp, maxHeight * 0.55f).coerceAtLeast(160.dp)
         Panel(Modifier.padding(16.dp).widthIn(max = 480.dp).verticalScroll(rememberScrollState())) {
             Text("Move and scale", style = Type.big)
+            // Save and Cancel sit above the picture: on a phone held sideways the panel scrolls, and they stay in reach.
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Save", Modifier.weight(1f), Kind.Accent) {
+                    onSave(crop(src, zoom, dx / win, dy / win))
+                }
+                MButton("Cancel", Modifier.weight(1f)) { onCancel() }
+            }
             Spacer(Modifier.height(10.dp))
             BoxWithConstraints(Modifier.size(side).align(Alignment.CenterHorizontally).clip(Corner).background(Color.Black)) {
                 val s = constraints.maxWidth.toFloat()
@@ -203,12 +210,6 @@ private fun MoveAndScale(src: Bitmap, onCancel: () -> Unit, onSave: (Bitmap) -> 
                 }
             }
             Text("Drag to move, pinch to zoom. $PRIVACY", style = Type.small, modifier = Modifier.padding(top = 10.dp))
-            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MButton("Save", Modifier.weight(1f), Kind.Accent) {
-                    onSave(crop(src, zoom, dx / win, dy / win))
-                }
-                MButton("Cancel", Modifier.weight(1f)) { onCancel() }
-            }
         }
     }
 }

@@ -16,7 +16,10 @@ Column {
     readonly property var here: where === "" ? [] : FileLink.transfers.filter(t => t.where === where && !t.relay && !t.bubble)
     // In a group, a file of mine is one card, not one per member: the copy still going, else one that failed (for
     // Retry). Once it reached everyone its card goes (Transfers still lists each). The same as on the phone.
-    readonly property var items: {
+    // At most four cards here, so many files at once never push the messages out of the pane; Transfers has the rest.
+    readonly property int most: 4
+    readonly property var items: every.slice(0, most)
+    readonly property var every: {
         const all = here
         if (String(where).indexOf("g:") !== 0) return all
         const out = [], sets = ({}), order = []
@@ -29,7 +32,7 @@ Column {
         }
         for (let j = 0; j < order.length; j++) {
             const l = sets[order[j]]
-            const pick = l.find(t => t.state !== "done" && t.state !== "failed") || l.find(t => t.state === "failed")
+            const pick = l.find(t => t.state !== "done" && t.state !== "failed") || l.find(t => t.state === "failed" && FileLink.canRetry(t.id)) || l.find(t => t.state === "failed")
             if (pick) out.push(pick)
         }
         return out
@@ -230,5 +233,14 @@ Column {
                 }
             }
         }
+    }
+    Text {
+        textFormat: Text.PlainText
+        visible: strip.every.length > strip.most
+        width: strip.width
+        elide: Text.ElideRight
+        text: "And " + (strip.every.length - strip.most) + " more in Transfers"
+        color: Theme.textMuted
+        font.family: Theme.body; font.pixelSize: Theme.fs(13)
     }
 }
