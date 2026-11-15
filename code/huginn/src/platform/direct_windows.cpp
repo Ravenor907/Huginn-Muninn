@@ -33,3 +33,6 @@ void Direct::stop()
 }
 
 void Direct::clearLeftovers() {}
+
+// No hotspot on Windows: nothing to take down as Huginn closes.
+void Direct::takeDown(bool) {}
