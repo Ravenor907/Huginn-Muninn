@@ -478,7 +478,8 @@ QString folderProblem()
         return s_problem;
 #if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
     // Opened from inside the zip: the identity and chats would be made in a folder that is deleted soon.
-    if (!s_root.isEmpty() && unpackedForTheMoment(QFileInfo(s_root).absolutePath(), QDir::tempPath()))
+    // Where Huginn.exe itself runs from, not the data folder (a self-test's throwaway data folder is in the temp folder).
+    if (!s_root.isEmpty() && unpackedForTheMoment(QCoreApplication::applicationDirPath(), QDir::tempPath()))
         return QStringLiteral("Huginn is running from inside the zip file, from a folder Windows or your zip program deletes again soon, so "
                               "your chats would be lost.\n\nClose this, right-click Huginn-Windows.zip and choose Extract All, unzip it "
                               "into a folder of your own like C:\\Users\\<you>\\Huginn, and open Huginn.exe from there.");
