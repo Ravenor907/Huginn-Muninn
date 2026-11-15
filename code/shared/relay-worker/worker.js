@@ -14,7 +14,15 @@ const SKEW = 300;
 // call needs the relay and renew it only while the relay carries the call, so these minutes count time spent relaying,
 // not calls on Wi-Fi, Bluetooth or a direct path.
 // Logins with an install token, per UTC day, keyed by the install the token was signed for:
-export const ID_MINUTES = 900; //    per install: 15 hours of relaying (90 renewing logins, or 30 old ones)
+export const ID_MINUTES = 600; //    per install: 10 hours of relaying (60 renewing logins, or 20 old ones)
+// Per origin: the address group an install registered from (signed into its token, so it stays with the install
+// wherever it logs in from). A household registers its few devices from home or its own phone lines; tokens farmed on
+// one network all carry that network's origin. 2400 minutes is 4 devices relaying 10 hours each, every day.
+// Why these numbers: with the day's 50,000 minutes, 600 per install means 84 installs to use up the day (at 900 it was
+// 56), and 2400 per origin means at least 21 different address groups, each registering installs and waiting 2 days
+// (registrations are 20 a day per group). A family's devices relay only when no Wi-Fi, Bluetooth or direct path works,
+// so 10 hours a device (five two-hour calls) is a whole day of relayed calls.
+export const ORIGIN_MINUTES = 2400;
 // Address groups (IPv4 /24, IPv6 /48) never limit an established install with a token: a carrier's shared addresses
 // (CGNAT), a school or an office can hold hundreds of households. Only installs registered less than YOUNG_S ago
 // share one budget per address group, so fresh tokens farmed on one network can't take more than this:
@@ -43,8 +51,9 @@ export const YOUNG_S = 2 * 86400;
 // that can't register logs in without a token). An install registers once and its token is renewed by every login.
 export const REG_PER_IP_DAILY = 20;
 export const REG_DAILY = 2000;
-// Rows written a day with every budget used up: 5000 renewing logins x at most 4 rows + 30 old logins x 5 + 2000
-// registrations x 2 = about 24,200, and as many deleted the next day: about 48,400, under the free plan's 100,000.
+// Rows written a day with every budget used up: 5000 renewing logins x at most 5 rows + 30 old logins x 5 + 2000
+// registrations x 2 + 1000 counted meter reports x 6 = about 35,150, and as many deleted later: about 70,300, under the
+// free plan's 100,000.
 
 // ---- Cheap checks in front of the counts (relay.md "Junk requests").
 // Per Worker instance (isolate, in memory only, never stored): at most this many POSTs a minute from one address group
@@ -65,8 +74,12 @@ export const POW_BITS = 18;
 export const TOKEN_TTL = 7 * 86400;
 const MAX_BODY = 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
-// "<exp>.<mac>" (1.36 to 1.4 Workers) or "<exp>.<since>.<mac>" (since: when the install first registered).
-const TOKEN = /^(\d{1,12})(?:\.(\d{1,12}))?\.([0-9a-f]{32})$/;
+const HEX32 = /^[0-9a-f]{32}$/;
+// "<exp>.<mac>" (1.36 to 1.4 Workers), "<exp>.<since>.<mac>" (since: when the install first registered) or
+// "<exp>.<since>.<origin>.<mac>" (origin: a keyed hash of the address group it registered from, 16 hex).
+const TOKEN = /^(\d{1,12})(?:\.(\d{1,12}))?(?:\.([0-9a-f]{16}))?\.([0-9a-f]{32})$/;
+// An expired token sent with /register keeps its registration time and origin for this long after it ran out.
+export const KEEP_S = 30 * 86400;
 
 const enc = new TextEncoder();
 
@@ -128,11 +141,19 @@ function tokenKey(env) {
   return env.TOKEN_KEY || "relay token v1:" + env.TURN_KEY_API_TOKEN;
 }
 
-// A token carries when its install first registered (since), signed with it, so an install can't claim to be older.
-// since undefined: the 1.36 form without it (only checked, never issued any more).
-export async function makeToken(env, id, exp, since) {
+// A token carries when its install first registered (since) and its origin, signed with them, so an install can't claim
+// to be older or from somewhere else. since undefined: the 1.36 form; origin undefined: the form before origins (both
+// only checked, never issued any more).
+export async function makeToken(env, id, exp, since, origin) {
   if (since === undefined) return exp + "." + (await hmacHex(tokenKey(env), "tok:" + id + ":" + exp)).slice(0, 32);
-  return exp + "." + since + "." + (await hmacHex(tokenKey(env), "tok2:" + id + ":" + exp + ":" + since)).slice(0, 32);
+  if (origin === undefined) return exp + "." + since + "." + (await hmacHex(tokenKey(env), "tok2:" + id + ":" + exp + ":" + since)).slice(0, 32);
+  return exp + "." + since + "." + origin + "." + (await hmacHex(tokenKey(env), "tok3:" + id + ":" + exp + ":" + since + ":" + origin)).slice(0, 32);
+}
+
+// The origin an install's token carries: a keyed hash of the address group it registered from (or, for a token from
+// before origins, first logged in from). Never the address itself; the key is a Worker secret.
+export async function originOf(env, ip) {
+  return (await hmacHex(tokenKey(env), "origin:" + addressGroup(ip))).slice(0, 16);
 }
 
 // "ok", "bad" (not this Worker's, or not this id's) or "expired".
@@ -140,15 +161,19 @@ export async function checkToken(env, id, tok, nowSec) {
   return (await readToken(env, id, tok, nowSec)).v;
 }
 
-// {v, since}. A token in the older form counts as issued when it was (its exp less TOKEN_TTL), the most that is known.
+// {v, exp, since, origin}. A token in the oldest form counts as issued when it was (its exp less TOKEN_TTL), the most
+// that is known; one without an origin has origin undefined.
 export async function readToken(env, id, tok, nowSec) {
   const m = typeof tok === "string" ? tok.match(TOKEN) : null;
   if (!m) return { v: "bad" };
   const exp = Number(m[1]);
   const since = m[2] === undefined ? undefined : Number(m[2]);
-  if ((await makeToken(env, id, exp, since)) !== tok) return { v: "bad" };
-  if (exp <= nowSec || exp > nowSec + TOKEN_TTL + SKEW) return { v: "expired" };
-  return { v: "ok", since: since === undefined ? exp - TOKEN_TTL : since };
+  const origin = m[3];
+  if (origin !== undefined && since === undefined) return { v: "bad" };
+  if ((await makeToken(env, id, exp, since, origin)) !== tok) return { v: "bad" };
+  const r = { exp, since: since === undefined ? exp - TOKEN_TTL : since, origin };
+  if (exp <= nowSec || exp > nowSec + TOKEN_TTL + SKEW) return { v: "expired", ...r };
+  return { v: "ok", ...r };
 }
 
 // A body over MAX_BODY bytes is refused: by its Content-Length before anything is read, and otherwise
@@ -221,8 +246,12 @@ export function addressGroup(raw) {
 }
 
 async function ipKey(secret, ip, day) {
-  const mac = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode("ip:" + day + ":" + addressGroup(ip)));
-  return [...new Uint8Array(mac)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return (await hmacHex(secret, "ip:" + day + ":" + addressGroup(ip))).slice(0, 32);
+}
+
+// The day's row key for an origin: keyed and rotated daily like the address keys, so stored rows can't be linked across days.
+async function originKey(secret, origin, day) {
+  return (await hmacHex(secret, "o:" + day + ":" + origin)).slice(0, 32);
 }
 
 // The day's budget for everyone: DAILY_MINUTES (a Worker variable) when it is a whole number from 60 up, else the default.
@@ -235,16 +264,21 @@ export function dailyMinutes(env) {
 // synchronous step inside it, so two requests at the same moment can't both slip under a cap.
 // What each kind of request counts against: [row key, cap, the error's name]. Logins add their cost in minutes to each
 // row; registrations add 1. Rows: "d" the day, "h<HH>" this hour, "u:" the install; for a token login of a young
-// install also "y:" its address group; for logins without a token also "g" their pool and "l:" their address group.
-// Round 18: a token login is keyed by its install first, and an established install is never counted by address.
-export function plan(kind, id, ip, hour, daily, young = false) {
+// install also "y:" its address group; for a token login "o:" its origin (the address group it registered from); for
+// logins without a token also "g" their pool and "l:" their address group.
+// Round 18: a token login is keyed by its install first, and an established install is never counted by the address it
+// asks from, only by its origin.
+export function plan(kind, id, ip, hour, daily, young = false, origin = undefined) {
   if (kind === "reg") return [["rg", REG_DAILY, "reg"], ["r:" + ip, REG_PER_IP_DAILY, "ip_reg"]];
   const hourly = Math.ceil(daily / HOUR_SHARE);
   const rows = [["d", daily, "global"], ["h" + hour, hourly, "global"]];
-  if (kind === "tok") return [...rows, ...(young ? [["y:" + ip, YOUNG_IP_MINUTES, "ip"]] : []), ["u:" + id, ID_MINUTES, "id"]];
+  if (kind === "tok") {
+    return [...rows, ...(young ? [["y:" + ip, YOUNG_IP_MINUTES, "ip"]] : []),
+      ...(origin ? [["o:" + origin, ORIGIN_MINUTES, "origin"]] : []), ["u:" + id, ID_MINUTES, "id"]];
+  }
   return [...rows, ["g", LEGACY_POOL_MINUTES, "global"], ["l:" + ip, LEGACY_IP_MINUTES, "ip"], ["u:" + id, LEGACY_ID_MINUTES, "id"]];
 }
-const READ_KEYS = 6;
+const READ_KEYS = 6; // d, h, y:, o:, u: at most
 export const SQL = {
   schema:
     "CREATE TABLE IF NOT EXISTS counts (day TEXT NOT NULL, k TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, k)) WITHOUT ROWID",
@@ -255,14 +289,29 @@ export const SQL = {
   meterWipe: "DELETE FROM meter WHERE month < ?",
   wipe: "DELETE FROM counts WHERE day < ?",
   read: "SELECT k, n FROM counts WHERE day = ? AND k IN (?, ?, ?, ?, ?, ?)",
+  // meter rows: "<month>" the month's total, "<month>:<id>" one install's share of it.
   bump: "INSERT INTO counts (day, k, n) VALUES (?, ?, ?) ON CONFLICT (day, k) DO UPDATE SET n = n + excluded.n",
 };
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH = /^\d{4}-\d{2}$/;
-// One report (relay.md "Relayed media"): apps report every 200 MB or so, so this is well over a real one.
+// ---- The month's relayed media (relay.md "Relayed media"). APP_SECRET is in every download, so anyone can make
+// installs and report made-up numbers; these bound what fakes can add, and the apps go by their own count first.
+// One report: apps report every 200 MB or so, so this is well over a real one.
 export const METER_MAX_MB = 5000;
-export const METER_DAY_MB = 100000;
+// Only installs registered at least this long ago (YOUNG_S, 2 days) are counted; a younger one is told to wait (429).
+// Per install: at most 10 GB a day (a heavy day of full-quality videos) and 50 GB a month.
+export const METER_DAY_MB = 10000;
+export const METER_MONTH_MB = 50000;
+// Per address group (the one reporting), per day: 30 GB, a household's few devices on a heavy day.
+export const METER_IP_DAY_MB = 30000;
+// Counted reports per install and for everyone, per day, so reports stay inside the free plan's rows (each counted report
+// writes 6 rows). Past them: 429 meter_limit until the next UTC day, and the app keeps what it hasn't said yet.
+export const METER_REPORTS_ID = 100;
+export const METER_REPORTS_DAILY = 1000;
+// The 950 GB stop (relay.md "Relayed media"). A /turn login that says it is for files ("f": 1) is refused with
+// month_limit once the month's count passes it.
+export const METER_STOP_MB = 950000;
 
 export class RelayLimits {
   constructor(ctx) {
@@ -282,11 +331,10 @@ export class RelayLimits {
     const sec = q.sec ?? 0;
     const daily = q.daily || DAILY_MINUTES;
     const cost = kind === "reg" ? 1 : q.cost || TTL_OLD / 60;
-    if (this.wipedBefore === null || day > this.wipedBefore) {
-      this.sql.exec(SQL.wipe, day);
-      this.wipedBefore = day;
-    }
-    const rows = plan(kind, id, ip, hour, daily, q.young === true);
+    this.wipe(day);
+    // The month's stop, for logins that say they are for files: refused before anything is counted.
+    if (q.files === true && kind !== "reg" && this.monthMb(q.month) >= METER_STOP_MB) return { result: "month", retry: 0 };
+    const rows = plan(kind, id, ip, hour, daily, q.young === true, kind === "tok" ? q.o : undefined);
     const keys = rows.map((r) => r[0]);
     while (keys.length < READ_KEYS) keys.push(keys[0]);
     const have = new Map(this.sql.exec(SQL.read, day, ...keys).toArray().map((r) => [r.k, Number(r.n)]));
@@ -311,6 +359,43 @@ export class RelayLimits {
     return { result: "ok", retry: 0 };
   }
 
+  wipe(day) {
+    if (this.wipedBefore === null || day > this.wipedBefore) {
+      this.sql.exec(SQL.wipe, day);
+      this.wipedBefore = day;
+    }
+  }
+
+  monthMb(key) {
+    const row = this.sql.exec(SQL.meterRead, key).toArray()[0];
+    return row ? Number(row.mb) : 0;
+  }
+
+  // q: {month, day, id, ip (address key), mb}. Returns {mb: the month's total} or {limit: true} (too many reports today).
+  meter(q) {
+    if (q.mb > 0) {
+      this.wipe(q.day);
+      const keys = ["m:" + q.id, "mn:" + q.id, "mi:" + q.ip, "mc"];
+      const have = new Map(this.sql.exec(SQL.read, q.day, ...keys, keys[0], keys[0]).toArray().map((r) => [r.k, Number(r.n)]));
+      const used = (k) => have.get(k) || 0;
+      if (used("mc") >= METER_REPORTS_DAILY || used("mn:" + q.id) >= METER_REPORTS_ID) return { limit: true };
+      const mine = q.month + ":" + q.id;
+      const allowed = Math.min(q.mb, METER_DAY_MB - used("m:" + q.id), METER_IP_DAY_MB - used("mi:" + q.ip),
+        METER_MONTH_MB - this.monthMb(mine));
+      // Past a cap the excess is dropped and nothing is written.
+      if (allowed > 0) {
+        this.sql.exec(SQL.bump, q.day, "m:" + q.id, allowed);
+        this.sql.exec(SQL.bump, q.day, "mi:" + q.ip, allowed);
+        this.sql.exec(SQL.bump, q.day, "mn:" + q.id, 1);
+        this.sql.exec(SQL.bump, q.day, "mc", 1);
+        this.sql.exec(SQL.meterWipe, q.month);
+        this.sql.exec(SQL.meterAdd, q.month, allowed);
+        this.sql.exec(SQL.meterAdd, mine, allowed);
+      }
+    }
+    return { mb: this.monthMb(q.month) };
+  }
+
   async fetch(request) {
     let body;
     try {
@@ -321,22 +406,11 @@ export class RelayLimits {
     const q = body && typeof body === "object" ? body : {};
     if (q.meter === true) {
       if (typeof q.month !== "string" || !MONTH.test(q.month) || !Number.isInteger(q.mb) || q.mb < 0 || q.mb > METER_MAX_MB
-          || typeof q.day !== "string" || !DAY.test(q.day) || typeof q.id !== "string" || !HEX64.test(q.id)) {
+          || typeof q.day !== "string" || !DAY.test(q.day) || typeof q.id !== "string" || !HEX64.test(q.id)
+          || typeof q.ip !== "string" || !HEX32.test(q.ip)) {
         return json(400, { error: "bad_request" });
       }
-      if (q.mb > 0) {
-        // One install can't say more than METER_DAY_MB a day, so a stolen token can't end the month for everyone.
-        const k = "m" + q.id;
-        const row = this.sql.exec(SQL.read, q.day, k, k, k, k, k, k).toArray()[0];
-        const allowed = Math.min(q.mb, METER_DAY_MB - (row ? Number(row.n) : 0));
-        if (allowed > 0) {
-          this.sql.exec(SQL.bump, q.day, k, allowed);
-          this.sql.exec(SQL.meterWipe, q.month);
-          this.sql.exec(SQL.meterAdd, q.month, allowed);
-        }
-      }
-      const row = this.sql.exec(SQL.meterRead, q.month).toArray()[0];
-      return json(200, { mb: row ? Number(row.mb) : 0 });
+      return json(200, this.meter(q));
     }
     const kind = q.kind !== undefined ? q.kind : "legacy";
     if (typeof q.day !== "string" || !DAY.test(q.day) || typeof q.id !== "string" || !HEX64.test(q.id)
@@ -344,7 +418,9 @@ export class RelayLimits {
         || (q.hour !== undefined && !(Number.isInteger(q.hour) && q.hour >= 0 && q.hour < 24))
         || (q.sec !== undefined && !(Number.isInteger(q.sec) && q.sec >= 0 && q.sec < 86400))
         || (q.cost !== undefined && !(Number.isInteger(q.cost) && q.cost >= 1 && q.cost <= 60))
-        || (q.daily !== undefined && !(Number.isSafeInteger(q.daily) && q.daily >= 60))) {
+        || (q.daily !== undefined && !(Number.isSafeInteger(q.daily) && q.daily >= 60))
+        || (q.o !== undefined && !(typeof q.o === "string" && HEX32.test(q.o)))
+        || (q.files !== undefined && !(q.files === true && typeof q.month === "string" && MONTH.test(q.month)))) {
       return json(400, { error: "bad_request" });
     }
     return json(200, this.take({ ...q, kind, young: q.young === true }));
@@ -392,12 +468,14 @@ function memoPut(key, nowSec, result, retry) {
 
 // The memo keys a request is answered from, and the one a refusal is kept under. Install and address refusals are
 // kept per kind and cost, since a cheaper login may still fit where a dearer one didn't.
-function memoKeys(kind, id, ipk, young, cost) {
+function memoKeys(kind, id, ipk, young, cost, ok, month) {
   // A young install's address group refusal is its own: it never applies to an established install there.
   const kc = kind + (kind === "tok" && young ? "y" : "") + cost;
   return {
     id: kc + "|id|" + id,
     ip: kc + "|ip|" + ipk,
+    origin: kind + cost + "|o|" + ok,
+    month: "month|" + month,
     global: (kind === "reg" ? "reg" : kind === "legacy" ? "legacy" : "all") + "|global|",
     reg: "reg|reg|",
     ip_reg: "reg|ip_reg|" + ipk,
@@ -405,28 +483,38 @@ function memoKeys(kind, id, ipk, young, cost) {
     // Asked, in order: which refusals already known apply to this request.
     ask: kind === "reg"
       ? ["reg|reg|", "reg|ip_reg|" + ipk]
-      : ["all|global|", kind === "legacy" ? "legacy|global|" : null, kind === "legacy" || young ? "busy" : null,
-        kc + "|ip|" + ipk, kc + "|id|" + id],
+      : [month ? "month|" + month : null, "all|global|", kind === "legacy" ? "legacy|global|" : null,
+        kind === "legacy" || young ? "busy" : null, kc + "|ip|" + ipk, ok ? kind + cost + "|o|" + ok : null, kc + "|id|" + id],
   };
 }
 
-async function takeQuota(env, id, ip, nowSec, kind, cost, young) {
+// Seconds until the next UTC month starts.
+function toMonth(nowSec) {
+  const d = new Date(nowSec * 1000);
+  return Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 1000) - nowSec;
+}
+
+async function takeQuota(env, id, ip, nowSec, kind, cost, young, origin, files) {
   const day = new Date(nowSec * 1000).toISOString().slice(0, 10);
+  const month = files ? day.slice(0, 7) : undefined;
   const ipk = await ipKey(env.TURN_KEY_API_TOKEN, ip, day);
-  const mk = memoKeys(kind, id, ipk, young, cost);
+  const ok = origin ? await originKey(env.TURN_KEY_API_TOKEN, origin, day) : undefined;
+  const mk = memoKeys(kind, id, ipk, young, cost, ok, month);
   const known = memoGet(mk.ask, nowSec);
   if (known) return known;
   const stub = env.LIMITS.get(env.LIMITS.idFromName("limits"));
   const sec = nowSec % 86400;
   const res = await stub.fetch("https://limits/take", {
     method: "POST",
-    body: JSON.stringify({ day, hour: Math.floor(sec / 3600), sec, id, ip: ipk, kind, cost: cost || undefined, young, daily: dailyMinutes(env) }),
+    body: JSON.stringify({ day, hour: Math.floor(sec / 3600), sec, id, ip: ipk, kind, cost: cost || undefined, young,
+      daily: dailyMinutes(env), o: ok, files: files || undefined, month }),
   });
   if (res.status !== 200) throw new Error("limits");
-  const { result, retry } = await res.json();
-  if (!["ok", "global", "busy", "ip", "id", "reg", "ip_reg"].includes(result) || !Number.isInteger(retry) || retry < 0) {
+  let { result, retry } = await res.json();
+  if (!["ok", "global", "busy", "ip", "id", "reg", "ip_reg", "origin", "month"].includes(result) || !Number.isInteger(retry) || retry < 0) {
     throw new Error("limits");
   }
+  if (result === "month") retry = toMonth(nowSec);
   // A legacy "global" may be its own pool only; a "global" for a token login is everyone's.
   if (result !== "ok") memoPut(result === "global" && kind === "tok" ? "all|global|" : mk[result], nowSec, result, retry);
   return { result, retry };
@@ -467,9 +555,9 @@ async function checkRequest(request, env, nowSec) {
   return body;
 }
 
-async function quotaOr(env, request, id, nowSec, kind, cost = 0, young = false) {
+async function quotaOr(env, request, id, nowSec, kind, cost = 0, young = false, origin = undefined, files = false) {
   try {
-    return await takeQuota(env, id, request.headers.get("CF-Connecting-IP") || "unknown", nowSec, kind, cost, young);
+    return await takeQuota(env, id, request.headers.get("CF-Connecting-IP") || "unknown", nowSec, kind, cost, young, origin, files);
   } catch {
     return null;
   }
@@ -477,21 +565,34 @@ async function quotaOr(env, request, id, nowSec, kind, cost = 0, young = false) 
 
 // A refusal: 429 with the error and how long until it may work ("retry", seconds). Apps that send "rn" wait that long;
 // older ones wait until the next UTC day, as before.
+// An origin's budget is an address budget to the apps: "ip_limit".
 function refused(q) {
-  return json(429, { error: q.result === "busy" ? "busy" : q.result + "_limit", retry: q.retry });
+  const name = q.result === "origin" ? "ip" : q.result;
+  return json(429, { error: name === "busy" ? "busy" : name + "_limit", retry: q.retry });
 }
 
 async function handleRegister(request, env, nowSec) {
   const body = await checkRequest(request, env, nowSec);
   if (body instanceof Response) return body;
-  const { id, t, pow } = body;
+  const { id, t, pow, tok } = body;
   if (!Number.isSafeInteger(pow) || pow < 0) return json(400, { error: "bad_request" });
   if (!(await powOk(id, t, pow))) return json(401, { error: "bad_pow" });
   const quota = await quotaOr(env, request, id, nowSec, "reg");
   if (quota === null) return json(503, { error: "limits_unavailable" });
   if (quota.result !== "ok") return refused(quota);
+  // An install that sends its old token (run out less than KEEP_S ago, or still good) keeps when it first registered
+  // and its origin, so a device that went a week without relaying isn't new again.
+  let since = nowSec;
+  let origin = await originOf(env, request.headers.get("CF-Connecting-IP") || "unknown");
+  if (tok !== undefined) {
+    const r = await readToken(env, id, tok, nowSec);
+    if (r.v !== "bad" && r.exp > nowSec - KEEP_S && r.exp <= nowSec + TOKEN_TTL + SKEW) {
+      since = Math.min(r.since, nowSec);
+      if (r.origin !== undefined) origin = r.origin;
+    }
+  }
   const exp = nowSec + TOKEN_TTL;
-  return json(200, { tok: await makeToken(env, id, exp, nowSec), exp });
+  return json(200, { tok: await makeToken(env, id, exp, since, origin), exp });
 }
 
 // Logins without a token have ended (LEGACY_UNTIL set and passed).
@@ -501,8 +602,8 @@ export function legacyOver(env, nowSec) {
 }
 
 // The month's relayed media (relay.md "Relayed media"): an install with a token adds what it moved ("mb", 0 only asks), and
-// hears the total, so every app can fall back to the 720p copy before the free month is used. Never a login, never a count
-// per install: one number a month.
+// hears the total, so every app can fall back to the 720p copy before the free month is used. Never a login. Counted only
+// from installs at least YOUNG_S old, within the METER_ caps above.
 async function handleMeter(request, env, nowSec) {
   const body = await checkRequest(request, env, nowSec);
   if (body instanceof Response) return body;
@@ -510,13 +611,19 @@ async function handleMeter(request, env, nowSec) {
   if (tok === undefined || !Number.isInteger(mb) || mb < 0 || mb > METER_MAX_MB) return json(400, { error: "bad_request" });
   const r = await readToken(env, id, tok, nowSec);
   if (r.v !== "ok") return json(401, { error: r.v === "expired" ? "token_expired" : "bad_token" });
+  // A young install's report waits until it is 2 days old: nothing is asked or written, and the app keeps it.
+  if (mb > 0 && nowSec - r.since < YOUNG_S) return json(429, { error: "meter_wait", retry: r.since + YOUNG_S - nowSec });
   try {
-    const month = new Date(nowSec * 1000).toISOString().slice(0, 7);
+    const day = new Date(nowSec * 1000).toISOString().slice(0, 10);
+    const ip = await ipKey(env.TURN_KEY_API_TOKEN, request.headers.get("CF-Connecting-IP") || "unknown", day);
     const res = await env.LIMITS.get(env.LIMITS.idFromName("limits")).fetch("https://limits/meter", {
-      method: "POST", body: JSON.stringify({ meter: true, month, day: month + new Date(nowSec * 1000).toISOString().slice(7, 10), id, mb }),
+      method: "POST", body: JSON.stringify({ meter: true, month: day.slice(0, 7), day, id, ip, mb }),
     });
     if (res.status !== 200) return json(503, { error: "limits_unavailable" });
-    return json(200, await res.json());
+    const a = await res.json();
+    if (a.limit === true) return json(429, { error: "meter_limit", retry: 86400 - (nowSec % 86400) });
+    if (!Number.isInteger(a.mb)) return json(503, { error: "limits_unavailable" });
+    return json(200, { mb: a.mb });
   } catch {
     return json(503, { error: "limits_unavailable" });
   }
@@ -525,19 +632,24 @@ async function handleMeter(request, env, nowSec) {
 async function handleTurn(request, env, nowSec) {
   const body = await checkRequest(request, env, nowSec);
   if (body instanceof Response) return body;
-  const { id, tok } = body;
+  const { id, tok, f } = body;
+  // "f": 1 says the login is for a relayed file (relay.md "Relayed media"); refused past the month's stop.
+  if (f !== undefined && f !== 1 && f !== true) return json(400, { error: "bad_request" });
   const ttl = body.rn === undefined ? TTL_OLD : TTL_RENEW;
   // With a token: it must be this Worker's, for this id, and not run out (else the app registers again).
   let kind = "legacy";
   let since = nowSec;
+  let origin;
   if (tok === undefined && legacyOver(env, nowSec)) return json(403, { error: "update_needed" });
   if (tok !== undefined) {
     const r = await readToken(env, id, tok, nowSec);
     if (r.v !== "ok") return json(401, { error: r.v === "expired" ? "token_expired" : "bad_token" });
     kind = "tok";
     since = r.since;
+    // A token from before origins takes the address group it first logs in from.
+    origin = r.origin !== undefined ? r.origin : await originOf(env, request.headers.get("CF-Connecting-IP") || "unknown");
   }
-  const quota = await quotaOr(env, request, id, nowSec, kind, ttl / 60, kind === "tok" && nowSec - since < YOUNG_S);
+  const quota = await quotaOr(env, request, id, nowSec, kind, ttl / 60, kind === "tok" && nowSec - since < YOUNG_S, origin, f !== undefined);
   if (quota === null) return json(503, { error: "limits_unavailable" });
   if (quota.result !== "ok") return refused(quota);
 
@@ -587,7 +699,7 @@ async function handleTurn(request, env, nowSec) {
   // A login renews the token (keeping when the install registered): an install that calls now and then never has to
   // register again.
   const exp = nowSec + TOKEN_TTL;
-  return json(200, { urls, username, credential, ttl, tok: await makeToken(env, id, exp, since), exp });
+  return json(200, { urls, username, credential, ttl, tok: await makeToken(env, id, exp, since, origin), exp });
 }
 
 const NOT_FOUND = JSON.stringify({ error: "not_found" });

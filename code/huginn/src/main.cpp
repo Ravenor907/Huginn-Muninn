@@ -22,6 +22,7 @@
 #include "vault.h"
 #include "voice.h"
 #include "platform/chime.h"
+#include "sounds.h"
 #include "platform/crashlog.h"
 #include "platform/notify.h"
 #include "platform/portable.h"
@@ -94,6 +95,14 @@
 #include <atomic>
 #include <cstdio>
 #include <memory>
+
+#ifndef Q_OS_WIN
+#include <QSocketNotifier>
+#include <csignal>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 #ifndef HUGINN_VERSION
 #define HUGINN_VERSION "0.1"
@@ -199,6 +208,47 @@ public:
 };
 }
 
+#ifndef Q_OS_WIN
+namespace
+{
+// Logout, shutdown and Steam's Exit game end Huginn with SIGTERM (a terminal with SIGINT or SIGHUP). The handler only
+// writes a byte to a socket pair (all a signal handler may safely do); the window's thread reads it and closes Huginn
+// the normal way, so everything is saved and Direct connect's hotspot comes down. A second signal ends it at once.
+int s_stopPipe[2] = {-1, -1};
+
+void onStopSignal(int sig)
+{
+    const char c = char(sig);
+    [[maybe_unused]] const ssize_t n = ::write(s_stopPipe[0], &c, 1);
+}
+
+void watchStopSignals(QObject *owner)
+{
+    if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s_stopPipe) != 0)
+        return;
+    ::fcntl(s_stopPipe[0], F_SETFL, ::fcntl(s_stopPipe[0], F_GETFL) | O_NONBLOCK);
+    auto *n = new QSocketNotifier(s_stopPipe[1], QSocketNotifier::Read, owner);
+    QObject::connect(n, &QSocketNotifier::activated, owner, [n] {
+        char c = 0;
+        [[maybe_unused]] const ssize_t got = ::read(s_stopPipe[1], &c, 1);
+        n->setEnabled(false);
+        // From here a second stop signal ends Huginn straight away, as one would expect.
+        for (const int sig : {SIGTERM, SIGINT, SIGHUP})
+            std::signal(sig, SIG_DFL);
+        std::fprintf(stderr, "Huginn: closing on signal %d\n", int(c));
+        // exit(), not quit(): the window's close question is never asked here.
+        QCoreApplication::exit(0);
+    });
+    struct sigaction sa = {};
+    sa.sa_handler = onStopSignal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    for (const int sig : {SIGTERM, SIGINT, SIGHUP})
+        ::sigaction(sig, &sa, nullptr);
+}
+}
+#endif
+
 int main(int argc, char *argv[])
 {
     // Windows: a start log and cleanup after an update.
@@ -225,6 +275,9 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationName(QStringLiteral("Huginn"));
     QApplication::setApplicationVersion(QStringLiteral(HUGINN_VERSION_LABEL));
     QApplication::setDesktopFileName(QStringLiteral("io.github.ravenor907.Huginn"));
+#ifndef Q_OS_WIN
+    watchStopSignals(&app);
+#endif
     QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
     // The single-instance self-test's helper copy: holds a lock in a temporary folder, nothing else.
     {
@@ -369,7 +422,9 @@ int main(int argc, char *argv[])
         const bool ultra = UltraPrivacy::selfTest();
         // Saved media (1.42): the picker's list and its limits.
         const bool sm = SavedMedia::selfTest();
-        return selfTested(a && b && c && d && e && f && g && h && i && ultra && sm);
+        // Huginn's sounds: at most one every few seconds, one for a catch-up burst, the volume on Windows.
+        const bool snd = Sounds::selfTest();
+        return selfTested(a && b && c && d && e && f && g && h && i && ultra && sm && snd);
     }
 
     // Said on screen when Huginn can't keep its data where it is (Windows: a folder it can't write, like Program
@@ -815,8 +870,24 @@ int main(int argc, char *argv[])
     vault->deviceName = [settings] { return settings->deviceName(); };
     localSend->moveReceive = [mover](const QByteArray &body) { return mover->handle(body); };
     QObject::connect(vault, &Vault::panicked, rooms, &RoomManager::leave);
-    // The raven call: for new messages, and once when something arrives while Chat is locked.
-    auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
+    // The raven call: for new messages, and once when something arrives while Chat is locked. Every one goes through
+    // Sounds (Settings › Notifications › Sounds): its switch, the volume, at most one every few seconds, one for a burst
+    // of what waited (a start, an unlock, the relays back after a sleep), and Recent sounds to see why one played.
+    auto *sound = new Sounds(&app);
+    sound->previewMode = [chat, vault] { return vault->screenLocked() || !chat->ready() ? 0 : chat->previewMode(); };
+    // What waited comes in now: one sound for all of it.
+    QObject::connect(vault, &Vault::opened, sound, &Sounds::catchUp);
+    auto relaysWere = std::make_shared<int>(0);
+    QObject::connect(nostr, &Nostr::connectedChanged, sound, [nostr, sound, relaysWere] {
+        if (*relaysWere == 0 && nostr->connected() > 0)
+            sound->catchUp();
+        *relaysWere = nostr->connected();
+    });
+    // A lock takes Recent sounds away (they may name people).
+    QObject::connect(vault, &Vault::changed, sound, [vault, sound] {
+        if (vault->screenLocked())
+            sound->clearRecent();
+    });
 
     // Caps n1 and n2: a nudge while locked. What it shows follows Settings > Notifications > Show: who and what kind
     // ("Photo"), never the message (it can't be opened while locked); nothing shows "Huginn", "New message". One per
@@ -858,8 +929,8 @@ int main(int argc, char *argv[])
         lockedCounts->insert(key, count);
         // A contact's nudge sounds the first time; the shared "Group message" one (nudge key) whenever its limit
         // allows, at most once per 2 minutes, however long Huginn stays locked (round 16, as Muninn).
-        if (LockedNudgeLimit::sounds(took, count) && !Settings::hushed() && Settings::messageSoundOn())
-            sound->play();
+        if (LockedNudgeLimit::sounds(took, count))
+            sound->raven(QStringLiteral("Locked"), QString(), QStringLiteral("A message came while Huginn was locked"));
         const QString title = RingWire::nudgeTitle(mode, n);
         const QString body = RingWire::nudgeText(mode, n.kind, count);
         // A click brings Huginn to its lock screen; the chat list shows once it's unlocked.
@@ -885,8 +956,7 @@ int main(int argc, char *argv[])
                 || !Settings::store().value(QStringLiteral("notify/lockedFallback"), false).toBool())
                 return false;
             *activityShown = true;
-            if (!Settings::hushed() && Settings::messageSoundOn())
-                sound->play();
+            sound->raven(QStringLiteral("New activity"), QString(), QStringLiteral("Something came while Huginn was locked"));
             const QString title = QStringLiteral("Huginn"), body = QStringLiteral("New activity");
             auto open = [chat] { Q_EMIT chat->showChat(QString()); };
             auto fallback = [chat, title, body] { Q_EMIT chat->banner(title, body, QString()); };
@@ -927,10 +997,16 @@ int main(int argc, char *argv[])
         // Do not disturb: no sound and no notification either.
         if (!chat->notifyFor(key, name) || looking || Settings::silenced())
             return;
-        // Quiet hours and Settings › Notifications › Message sound: the notification still shows.
-        if (!Settings::hushed() && Settings::messageSoundOn())
-            sound->play();
-        if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
+        // Quiet hours and Settings › Notifications › Message sound: the notification still shows. A reaction, or a linked
+        // phone's message already read there or long waiting, shows without a sound (Chat::arrival).
+        const bool front = QGuiApplication::applicationState() == Qt::ApplicationActive;
+        if (!chat->arrival().quiet)
+            sound->raven(QStringLiteral("Message"), name,
+                         key.startsWith(QLatin1String("mirror:")) ? QStringLiteral("From your linked phone")
+                         : front                                  ? QStringLiteral("Huginn was open on another chat")
+                                                                  : QStringLiteral("Huginn was in the background"));
+        // In front, Main.qml's toast says who it's from (as Show allows), so a sound never comes with nothing on screen.
+        if (!front) {
             // Settings › Notifications › Show: the name and a short preview, the name only, or nothing. Locked: nothing.
             // While a linked phone's chats are shown, this device's own sealed chats never show who or what.
             const int mode = vault->screenLocked() ? 0 : chat->previewMode();
@@ -995,8 +1071,11 @@ int main(int argc, char *argv[])
     QObject::connect(files, &FileLink::offered, chat, [chat, vault, sound, system](const QString &, const QString &where, const QString &text) {
         if (Settings::silenced())
             return;
-        if (!Settings::hushed() && Settings::messageSoundOn())
-            sound->play();
+        // A muted chat's file waits quietly (the card and the toast still show), unless Always right away.
+        if (!(chat->isMuted(where) && !chat->isRightAway(where)))
+            sound->raven(QStringLiteral("File offer"), where.startsWith(QLatin1String("g:")) ? chat->groupTitle(where.mid(2)) : chat->nameOf(where),
+                         QGuiApplication::applicationState() == Qt::ApplicationActive ? QStringLiteral("Huginn was in front")
+                                                                                      : QStringLiteral("Huginn was in the background"));
         if (QGuiApplication::applicationState() == Qt::ApplicationActive && !system->gameMode())
             return;   // the toast says it
         const bool hide = vault->screenLocked() || chat->previewMode() == 0;
@@ -1103,6 +1182,7 @@ int main(int argc, char *argv[])
     qmlRegisterType<LiveList>("Huginn", 1, 0, "LiveList");
     qmlRegisterType<Fall>("Huginn", 1, 0, "Fall");
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Sounds", sound);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Gamepad", gamepad);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Transfer", transfer);
@@ -1154,6 +1234,18 @@ int main(int argc, char *argv[])
     QObject::connect(vault, &Vault::lockedNow, readAloud, &ReadAloud::stop);
     QObject::connect(vault, &Vault::panicked, readAloud, &ReadAloud::stop);
     QObject::connect(calls, &CallManager::changed, readAloud, [calls, readAloud] { if (calls->inCall()) readAloud->stop(); });
+    // A voice room too: the room's microphone would pick up what is being read (a private message) and send it on.
+    QObject::connect(rooms, &RoomManager::changed, readAloud, [rooms, readAloud] { if (rooms->inRoom()) readAloud->stop(); });
+    // Dictation and Read aloud never run together: the microphone would type what Read aloud is saying. Starting one
+    // ends the other (dictation keeps the words heard so far).
+    QObject::connect(dictation, &Dictation::changed, readAloud, [dictation, readAloud] {
+        if (dictation->listening() && !dictation->tour() && readAloud->speaking())
+            readAloud->stop();
+    });
+    QObject::connect(readAloud, &ReadAloud::changed, dictation, [dictation, readAloud] {
+        if (readAloud->speaking() && dictation->listening() && !dictation->tour())
+            dictation->stop();
+    });
     // Round 19 (security 19): nothing is read aloud behind the lock or during a call or voice room, whatever asks.
     readAloud->setBlocker([vault, calls, rooms] { return vault->locked() || vault->screenLocked() || calls->inCall() || rooms->inRoom(); });
     QObject::connect(vault, &Vault::aboutToErase, readAloud, &ReadAloud::stop);
@@ -1204,13 +1296,16 @@ int main(int argc, char *argv[])
         }
     }
     if (wifiSelf)
-        WifiSelfTest::start(chat, localSend, sound);
+        WifiSelfTest::start(chat, localSend, sound->chime());
     QObject::connect(updater, &Updater::aboutToRestart, chat, &Chat::flushSaves);
     // A longer video still being kept or saved stops first (waited for, about 2 s), then everything is saved.
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::stopBigThreads);
     // Dictation's microphone closes and its recognizer is let go of on its own thread (about 2 s at most).
     QObject::connect(&app, &QCoreApplication::aboutToQuit, dictation, &Dictation::shutdown);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::flushSaves);
+    // Direct connect's hotspot comes down while the system bus still answers (not only in its destructor, after Qt's
+    // D-Bus may have gone).
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, direct, &Direct::shutdown);
     // Saved: from here on, a copy that finds this one stuck while closing may ask it to end itself (SingleInstance::markClosing).
     if (!quiet)
         QObject::connect(&app, &QCoreApplication::aboutToQuit, one, &SingleInstance::markClosing);

@@ -75,6 +75,8 @@ int rank(const QString &s)
     return 0;
 }
 qint64 retryDelay(int count) { return kRetry[qBound(0, count - 1, 4)]; }
+// Once relays hold something: it goes to them again this long after they first did (1 hour, then 6 hours).
+const qint64 kHeldAgain[] = {3600000, 6 * 3600000};
 QString b64(const QByteArray &b) { return QString::fromLatin1(b.toBase64()); }
 QByteArray compact(const QJsonObject &o) { return QJsonDocument(o).toJson(QJsonDocument::Compact); }
 const Ratchet::NewKey kNewKey = [] { return ChatCrypto::newKeyPair(); };
@@ -98,6 +100,7 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     , m_ble(ble)
     , m_settings(QSettings::defaultFormat(), QSettings::UserScope, Settings::org(), QStringLiteral("Huginn"))
 {
+    m_settings.setFallbacksEnabled(false);   // only this account's own settings file, never a system-wide one
     // First of all: chats() is made again after any change (everything else reads it after this).
     connect(this, &Chat::changed, this, [this] {
         m_chatsAge.invalidate();
@@ -968,6 +971,8 @@ QString Chat::relayNote() const
 
 QString Chat::netStatus() const
 {
+    if (m_clockOff)
+        return QStringLiteral("Messages may not send: check this computer's date and time");
     if (m_delayed)
         return QStringLiteral("Messages are delayed; they'll send automatically");
     return internet() > 0 ? QStringLiteral("Internet: connected") : QStringLiteral("Internet: offline");
@@ -1644,6 +1649,7 @@ bool Chat::renewRingKeys(const QString &except)
 {
     if (!m_ringKey || !ready())
         return false;
+    keepRingForNudges();   // before the renewal, so a mailbox a calls-off contact holds is kept for their nudges
     m_ringKey->renew();
     if (m_nudgeKey)
         m_nudgeKey->renew();
@@ -2053,6 +2059,14 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             m_pendingPeer.reset();
             return 400;
         }
+        // A group peer who isn't a contact may only take part in the group's calls and voice rooms: a 1:1 call (an
+        // offer outside a room) comes from contacts, or from someone met close by on that route, never from a member
+        // under whatever name they give.
+        if (!isContact(fromKey) && !(via != QLatin1String("internet") && m_met.contains(fromKey))
+            && msg.value(QStringLiteral("t")).toString() == QLatin1String("offer") && !msg.contains(QStringLiteral("g"))) {
+            m_pendingPeer.reset();
+            return 403;
+        }
         commitPeer();
         if (!sentId.isEmpty())
             m_seen.add(fromKey, sentId, now());   // the same signal on another route is dropped
@@ -2435,13 +2449,62 @@ bool Chat::sendPhoto(const QString &key, const QString &path, bool hd)
         const QStringList parts = key.split(QLatin1Char(':'));
         return parts.size() == 3 && sendGroupPhoto(parts.at(1), parts.at(2), path, hd);
     }
-    const QByteArray jpeg = Photos::prepare(path, hd);
-    if (jpeg.isEmpty()) {
-        Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
-        return false;
-    }
-    sendBlob(key, jpeg, 0);
+    // Decoded and shrunk on the picture thread; sent when it's ready. One that can't be opened is said then.
+    preparePictures({path}, hd, [this, key](const QList<QByteArray> &jpegs) {
+        if (jpegs.value(0).isEmpty())
+            Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
+        else
+            sendPreparedPhoto(key, jpegs.at(0));
+    });
     return true;
+}
+
+void Chat::sendPreparedPhoto(const QString &key, const QByteArray &jpeg, const QVariantMap &extra)
+{
+    if (key.startsWith(QLatin1String("g:"))) {
+        const QStringList parts = key.split(QLatin1Char(':'));
+        if (parts.size() == 3)
+            sendGroupBlob(parts.at(1), parts.at(2), jpeg, 0, extra);
+        return;
+    }
+    sendBlob(key, jpeg, 0, extra);
+}
+
+namespace
+{
+QThreadPool *picturePool(Chat *chat, QThreadPool *&pool)
+{
+    if (!pool) {
+        // One thread, so pictures go in the order they were sent. Waited for as Chat goes (QThreadPool's destructor).
+        pool = new QThreadPool(chat);
+        pool->setMaxThreadCount(1);
+        pool->setExpiryTimeout(30000);
+    }
+    return pool;
+}
+}
+
+void Chat::preparePictures(const QStringList &paths, bool hd, std::function<void(const QList<QByteArray> &)> done, const QString &shredAfter)
+{
+    // The pool lives inside this Chat and is waited for before it goes, so the answer can be posted to it.
+    picturePool(this, m_photoPool)->start([this, paths, hd, done = std::move(done), shredAfter] {
+        QList<QByteArray> out;
+        for (const QString &p : paths)
+            out << Photos::prepare(p, hd);
+        QMetaObject::invokeMethod(this, [done, out, shredAfter] {
+            if (!shredAfter.isEmpty())
+                Scratch::shred(shredAfter);
+            done(out);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Chat::preparePicture(const QImage &img, std::function<void(const QByteArray &)> done)
+{
+    picturePool(this, m_photoPool)->start([this, img, done = std::move(done)] {
+        const QByteArray jpeg = Photos::prepareImage(img, 640, 60 * 1024);
+        QMetaObject::invokeMethod(this, [done, jpeg] { done(jpeg); }, Qt::QueuedConnection);
+    });
 }
 
 void Chat::sendVoice(const QString &key, const QByteArray &aac, int ms)
@@ -2594,6 +2657,8 @@ QList<QJsonObject> Chat::pieces(const QVariantMap &m)
     const QList<QByteArray> parts = Photos::split(bytes);
     QList<QJsonObject> out;
     const int voice = m.value(QStringLiteral("voice")).toInt();
+    // The peer's ratchet state is saved once, after the last piece and before any of them goes (not once per piece).
+    RatchetBatch batch(this);
     for (int i = 0; i < parts.size(); ++i) {
         QJsonObject o{{QStringLiteral("room"), QStringLiteral("photo")}, {QStringLiteral("fromKey"), myKey()}, {QStringLiteral("fromName"), username()},
                       {QStringLiteral("mailbox"), m_nostr->publicKey()}, {QStringLiteral("id"), str(m, "id")}, {QStringLiteral("i"), i},
@@ -2644,19 +2709,32 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     const bool gif = o.value(QStringLiteral("kind")).toString() == QLatin1String("gif");   // cap a1: up to 8 MB
     if (id.isEmpty() || n < 1 || n > (gif ? Photos::kGifPieces : Photos::kMaxPieces) || i < 0 || i >= n || !MoreWire::ok(QStringLiteral("piece"), o))
         return 400;
+    QString mailbox = o.value(QStringLiteral("mailbox")).toString();
+    if (mailbox.size() != 64)
+        mailbox.clear();
+    // A relay file from an older app that is turned down still gets its "delivered" receipt (to people who may
+    // write here at all), so that app stops sending it again for a day.
+    const auto turnedDown = [&] {
+        static QHash<QString, qint64> told;   // once every 3 minutes per file, not once per piece
+        const QString k = fromKey + QLatin1Char('|') + id;
+        if ((contact || m_met.contains(fromKey)) && now() - told.value(k, 0) >= 180000) {
+            if (told.size() > 500)
+                told.clear();
+            told.insert(k, now());
+            receipt(fromKey, {id}, QStringLiteral("delivered"), mailbox);
+        }
+        return 200;
+    };
     // Files turned off for them: a file's pieces are dropped quietly.
     if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file") && !filesAllowed(fromKey))
-        return 200;
+        return turnedDown();
     // 1.42: files never come through the relays now (Encrypted file sharing, cap f4). An older app's relay file is
     // turned down politely: a card here says why, and they get one short message saying why. Photos, GIFs, voice and
     // video messages still come in pieces as before.
     if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file")) {
         oldRelayFile(fromKey, id, FileLink::nameOk(o.value(QStringLiteral("fn"))) ? o.value(QStringLiteral("fn")).toString() : QString(), contact);
-        return 200;
+        return turnedDown();
     }
-    QString mailbox = o.value(QStringLiteral("mailbox")).toString();
-    if (mailbox.size() != 64)
-        mailbox.clear();
     // Already have it (a copy from another route, or a resend): just confirm again.
     if (known(fromKey, id)) {
         receipt(fromKey, {id}, QStringLiteral("delivered"), mailbox);
@@ -2798,8 +2876,14 @@ QJsonObject Chat::seal(const QJsonObject &fields, const QString &theirKey, const
         f.insert(QStringLiteral("pv"), QJsonValue(m_profile->myVersion()));
     // Cap s1: the clear fields are sealed in too, for an app that reads them.
     const QJsonObject o = ChatWire::seal(f, keyWith(theirKey), theirKey, plain, peer, kNewKey, strict(theirKey));
-    if (peer && ChatWire::isRatchet(o))
-        saveRatchet(theirKey);   // saved before it leaves, so a key is never used twice
+    if (peer && ChatWire::isRatchet(o)) {
+        // Saved before it leaves, so a key is never used twice. Inside a RatchetBatch (a photo's pieces): saved once as
+        // the batch closes, which is still before anything sealed here is handed on to be sent.
+        if (m_ratchetBatch > 0)
+            m_ratchetDirty.insert(theirKey);
+        else
+            saveRatchet(theirKey);
+    }
     return o;
 }
 
@@ -2986,8 +3070,16 @@ void Chat::attempt(const QString &key, const QString &id)
     // Cap a1: a GIF up to 8 MB. Cap v3 (29): a video up to GroupVideo::kRelayPieces, its pieces paced.
     const bool video = m.value(QStringLiteral("video")).toInt() > 0;
     const int relayPieces = m.value(QStringLiteral("gif")).toBool() ? Photos::kGifPieces : video ? GroupVideo::kRelayPieces : Photos::kInternetPieces;
-    if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= relayPieces) {
-        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step,
+    // Once a relay holds it, the relays aren't sent it every few minutes for a day: only again at 1 and 6 hours
+    // (relaysDue). Close-by routes keep trying each round.
+    if (!mailbox.isEmpty() && (!photo || !any || m_tries.value(id).count >= 2) && bodies.size() <= relayPieces
+        && relaysDue(m_tries.value(id).heldAt, m_tries[id].publishedAt, now())) {
+        const auto held = [this, id] {
+            const auto h = m_tries.find(id);
+            if (h != m_tries.end() && h->heldAt == 0)
+                h->heldAt = now();
+        };
+        if (sendInternet(key, bodies, mailbox, [markSent, held] { held(); markSent(QStringLiteral("internet")); }, 0, step,
                          photo && video ? key + QLatin1Char('|') + id : QString())) {
             any = true;
             nudge(key, photo ? QStringLiteral("photo") : QStringLiteral("private"), {},
@@ -2996,6 +3088,16 @@ void Chat::attempt(const QString &key, const QString &id)
     }
     if (!any && t.count == 1)
         update(key, id, [](QVariantMap &x) { x.insert(QStringLiteral("failed"), true); });
+}
+
+bool Chat::relaysDue(qint64 heldAt, qint64 &publishedAt, qint64 now)
+{
+    bool due = heldAt <= 0;
+    for (const qint64 again : kHeldAgain)
+        due = due || (heldAt + again > publishedAt && heldAt + again <= now);
+    if (due)
+        publishedAt = now;
+    return due;
 }
 
 void Chat::uploaded(const QString &id, double fraction)
@@ -3074,8 +3176,11 @@ void Chat::retryLoop()
         // The calm line in place of the status, never a notification; it goes by itself once things move.
         const qint64 limited = GroupVideo::rateLimitedAt();
         const bool delayed = Nostr::delayed(oldestWaiting, limited > 0 ? t0 - limited : -1);
-        if (delayed != m_delayed) {
+        const qint64 clockAt = Nostr::clockRefusedAt();
+        const bool clockOff = clockAt > 0 && t0 - clockAt < 3600000;
+        if (delayed != m_delayed || clockOff != m_clockOff) {
             m_delayed = delayed;
+            m_clockOff = clockOff;
             emit changed();
         }
     }
@@ -3329,6 +3434,16 @@ void Chat::saveRatchet(const QString &key)
     if (p != m_peers.cend())
         o.insert(QStringLiteral("peer"), p->toJson());
     m_vault->write(ratchetFile(key), compact(o));
+}
+
+void Chat::endRatchetBatch()
+{
+    if (--m_ratchetBatch > 0)
+        return;
+    QSet<QString> dirty;
+    dirty.swap(m_ratchetDirty);
+    for (const QString &key : dirty)
+        saveRatchet(key);
 }
 
 void Chat::forgetRatchet(const QString &key)
@@ -3901,8 +4016,9 @@ int Chat::receiveM1(const QString &room, const QString &fromKey, const QString &
             m.insert(QStringLiteral("edited"), ts);
         }
     });
+    // A reaction shows (the toast or a notification) but makes no sound: it isn't a new message.
     if (!reactedTo.isEmpty())
-        Q_EMIT arrived(nameOf(fromKey), QStringLiteral("Reacted ") + reactedTo, fromKey);
+        arrive(nameOf(fromKey), QStringLiteral("Reacted ") + reactedTo, fromKey, true);
     // Confirmed by its envelope id, so the sender stops resending it.
     receipt(fromKey, {sentId}, QStringLiteral("delivered"), mailbox);
     return 200;
@@ -4213,23 +4329,39 @@ bool Chat::pasteImage(const QString &where)
         QFile f(path);
         const bool written = f.open(QIODevice::WriteOnly) && f.write(gif) == gif.size();
         f.close();
-        const bool ok = written && sendPhoto(where, path, false);
-        Scratch::shred(path);
-        return ok;
+        if (!written) {
+            Scratch::shred(path);
+            return false;
+        }
+        QString why;
+        const QByteArray clean = Photos::readGif(path, &why);
+        if (!clean.isEmpty()) {
+            Scratch::shred(path);
+            return sendGifTo(where, clean);
+        }
+        // Over the limits: a still picture, made on the picture thread; the scratch file goes once it's read.
+        Q_EMIT notice(Photos::gifWhy(why) + QStringLiteral(", so it goes as a still picture. To keep it moving, send it as a file."));
+        preparePictures({path}, false, [this, where](const QList<QByteArray> &jpegs) {
+            if (jpegs.value(0).isEmpty())
+                Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
+            else
+                sendPreparedPhoto(where, jpegs.at(0));
+        }, path);
+        return true;
     }
     const QClipboard *c = QGuiApplication::clipboard();
     const QImage img = c ? c->image() : QImage();
     if (img.isNull())
         return false;
-    // Linux: the memory-backed runtime folder. Windows: Huginn's private scratch folder (see Scratch).
-    const QString path = Scratch::path(QStringLiteral("huginn-paste-%1.png").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-    if (!img.save(path, "PNG")) {
-        Scratch::shred(path);
-        return false;
-    }
-    const bool ok = sendPhoto(where, path, false);   // a contact, or "g:<group>:<channel>"
-    Scratch::shred(path);
-    return ok;
+    // Shrunk and encoded on the picture thread straight from memory (no scratch file), then sent to a contact or
+    // "g:<group>:<channel>".
+    preparePicture(img, [this, where](const QByteArray &jpeg) {
+        if (jpeg.isEmpty())
+            Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
+        else
+            sendPreparedPhoto(where, jpeg);
+    });
+    return true;
 }
 
 bool Chat::isPicture(const QString &path) const

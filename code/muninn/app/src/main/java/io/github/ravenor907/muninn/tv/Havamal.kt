@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import org.json.JSONObject
 import java.security.MessageDigest
 
@@ -50,7 +51,7 @@ object Havamal {
      * since 1.43; "kids" missing reads as true). Throws if it isn't well-formed.
      */
     fun parse(json: String): List<HavVerse> {
-        val a = JSONObject(json).getJSONArray("verses")
+        val a = SafeJson.obj(json).getJSONArray("verses")
         val out = (0 until a.length()).map { i ->
             val o = a.getJSONObject(i)
             HavVerse(o.getInt("n"), o.getString("verse").trim(), o.getString("means").trim(), o.optBoolean("kids", true))
@@ -180,7 +181,7 @@ object Havamal {
 
     /** Reads [textJson]'s form back. Null if it isn't well-formed. */
     fun textIn(json: String): Map<Int, String>? = try {
-        val o = JSONObject(json)
+        val o = SafeJson.obj(json)
         val keys = o.keys().asSequence().toList()
         if (keys.size > MAX_STANZAS) null
         else keys.associate { k ->

@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import io.github.ravenor907.muninn.net.SafeJson
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -92,7 +93,7 @@ object People {
     fun load(a: Muninn) {
         if (app === a) return
         app = a
-        val o = try { a.vault.read(file(a))?.let { JSONObject(it) } } catch (e: Exception) { null }
+        val o = try { a.vault.read(file(a))?.let { SafeJson.obj(it) } } catch (e: Exception) { null }
         val notes = o?.optJSONObject("notes")
         all.value = State(notes = notes?.keys()?.asSequence()?.associateWith { notes.optString(it) }.orEmpty())
         // Pins and choices still in this file go to their own place, once.

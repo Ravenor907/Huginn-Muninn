@@ -164,7 +164,7 @@ class LockStore(private val file: File, private val clock: Clock, private val mi
     }
 
     private fun parse(b: ByteArray): Data? = try {
-        val o = JSONObject(String(b))
+        val o = SafeJson.obj(String(b))
         Data(o.getInt("fails"), o.optLong("until"), o.optLong("wait"), o.optInt("boot", -1), o.optBoolean("erase"),
             o.optLong("seq", 0L), o.optLong("left", -1L), o.optLong("wallEnd", 0L), o.optBoolean("checking", false))
     } catch (_: Exception) { null }

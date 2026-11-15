@@ -61,10 +61,10 @@ object ReplyHold {
 
     /** A sealed reply opened with [keys]: the chat key and the text, or null when it isn't one or isn't for these keys. */
     fun open(box: String, keys: KeyPair): Pair<String, String>? = try {
-        val o = JSONObject(box)
+        val o = SafeJson.obj(box)
         val k = sha256(DOMAIN, ChatCrypto.sharedKey(keys.private, keys.public, ChatCrypto.publicFrom(o.getString("e"))))
         val plain = ChatCrypto.openBytes(k, ChatCrypto.Sealed(o.getString("n"), o.getString("d")), DOMAIN)
-        plain?.let { JSONObject(String(it, Charsets.UTF_8)) }?.takeIf { it.optString("t") == "reply" }?.let { p ->
+        plain?.let { SafeJson.obj(String(it, Charsets.UTF_8)) }?.takeIf { it.optString("t") == "reply" }?.let { p ->
             val key = p.optString("k"); val x = p.optString("x")
             if (key.isEmpty() || x.isBlank()) null else key to x
         }
@@ -84,7 +84,7 @@ object ReplyHold {
 
     /** Null: none there. Throws when the list is there but can't be read (it's then never written over). */
     private fun readHeld(app: io.github.ravenor907.muninn.Muninn): MutableList<String> =
-        when (val r = SafeFile.read(heldFile(app)) { b -> JSONArray(String(b, Charsets.UTF_8)).let { a -> MutableList(a.length()) { a.getString(it) } } }) {
+        when (val r = SafeFile.read(heldFile(app)) { b -> SafeJson.arr(String(b, Charsets.UTF_8)).let { a -> MutableList(a.length()) { a.getString(it) } } }) {
             is SafeFile.Read.Ok -> r.value
             is SafeFile.Read.Missing -> mutableListOf()
             is SafeFile.Read.Bad -> throw java.io.IOException("$HELD_FILE can't be read")
@@ -132,7 +132,7 @@ object ReplyHold {
         val f = keyFile(app)
         val saved = app.vault.read(f)
         if (saved != null) return try {
-            val o = JSONObject(saved)
+            val o = SafeJson.obj(saved)
             KeyPair(ChatCrypto.publicFrom(o.getString("k")), ChatCrypto.privateFrom(o.getString("s")))
         } catch (_: Exception) { app.vault.loadFailed(f); null }
         if (f.exists()) return null

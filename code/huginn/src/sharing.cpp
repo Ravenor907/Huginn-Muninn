@@ -1,11 +1,14 @@
 #include "sharing.h"
+#include "ultraprivacy.h"
 
 #include "groupwire.h"
+#include "platform/portable.h"
 
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonValue>
 #include <QSet>
+#include <QStandardPaths>
 #include <QStringList>
 #include <cmath>
 #include <cstdio>
@@ -172,9 +175,45 @@ QString Sharing::safeName(const QString &name, const QString &fallback)
     return out;
 }
 
+namespace
+{
+// path is dir itself or somewhere inside it (case ignored: Windows paths).
+bool within(const QString &path, const QString &dir)
+{
+    const QString p = QDir::cleanPath(QDir::fromNativeSeparators(path)), d = QDir::cleanPath(QDir::fromNativeSeparators(dir));
+    if (d.isEmpty())
+        return false;
+    return p.compare(d, Qt::CaseInsensitive) == 0 || p.startsWith(d.endsWith(QLatin1Char('/')) ? d : d + QLatin1Char('/'), Qt::CaseInsensitive);
+}
+
+// A chat's folder for received files. Never inside Huginn's own folder (install: the Windows portable folder with
+// Huginn.exe, lib and data; "" elsewhere): unzipped into Downloads, <Downloads>\Huginn is that folder, and a sender
+// named "update-staging", "data" or "lib" would write into Huginn's program or data. Then "Huginn files" beside it is
+// used, else the Downloads folder's, else the home folder's. A chat named like one of Huginn's own folders gets
+// " (chat)" added wherever it goes.
+QString folderIn(const QString &base, const QString &app, const QString &chatName, const QString &install, const QString &downloads)
+{
+    QString chat = Sharing::safeName(chatName, QStringLiteral("Chat"));
+    static const QStringList kOwn{QStringLiteral("update-staging"), QStringLiteral("data"), QStringLiteral("lib"), QStringLiteral("Huginn.exe")};
+    if (kOwn.contains(chat, Qt::CaseInsensitive))
+        chat += QStringLiteral(" (chat)");
+    const QString appName = Sharing::safeName(app, QStringLiteral("Huginn"));
+    const QString first = QDir(QDir(base).filePath(appName)).filePath(chat);
+    if (install.isEmpty() || (!within(first, install) && !within(install, first)))
+        return first;
+    for (const QString &b : {base, downloads, QDir::homePath()}) {
+        const QString d = QDir(QDir(b).filePath(appName + QStringLiteral(" files"))).filePath(chat);
+        if (!b.isEmpty() && !within(d, install) && !within(install, d))
+            return d;
+    }
+    return QDir(QDir(QFileInfo(install).absolutePath()).filePath(appName + QStringLiteral(" files"))).filePath(chat);
+}
+}
+
 QString Sharing::folderFor(const QString &base, const QString &app, const QString &chatName)
 {
-    return QDir(QDir(base).filePath(safeName(app, QStringLiteral("Huginn")))).filePath(safeName(chatName, QStringLiteral("Chat")));
+    const QString install = Portable::on() ? QFileInfo(Portable::dataDir()).absolutePath() : QString();
+    return folderIn(base, app, chatName, install, QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
 }
 
 QString Sharing::kindOf(const QString &name)
@@ -210,7 +249,9 @@ QString Sharing::kindOf(const QString &name)
             "library-ms", "search-ms", "xll", "sh", "run", "py", "pl", "desktop", "deb", "rpm", "appimage", "flatpak", "flatpakref", "flatpakrepo",
             // Round 17 (m8): a remote desktop to a stranger's server, click-once apps, troubleshooters, themes (which can
             // leak the Windows sign-in), sandbox setups, cabinets, saved web pages and more Windows scripts.
-            "rdp", "appref-ms", "diagcab", "theme", "themepack", "desktopthemepack", "wsb", "cab", "mht", "mhtml", "ps1xml", "xbap"}))
+            "rdp", "appref-ms", "diagcab", "theme", "themepack", "desktopthemepack", "wsb", "cab", "mht", "mhtml", "ps1xml", "xbap",
+            // Windows search and library shortcuts: opening one can reach out to someone else's server with no warning.
+            "searchconnector-ms", "search-ms", "library-ms", "osdx"}))
         return QStringLiteral("Program");
     return QStringLiteral("File");
 }
@@ -222,6 +263,15 @@ QString Sharing::openWarning(const QString &name)
             return QStringLiteral("The name \"%1\" has hidden characters that can make a file look like another kind. Opening it may run a "
                                   "program. Open it only if you were expecting it.")
                 .arg(safeName(name, QStringLiteral("file")));
+    // Ultra privacy: a web page or SVG picture opens in the browser, which loads what it links to outside Tor.
+    if (UltraPrivacy::on()) {
+        const QString e = QFileInfo(name).suffix().toLower();
+        if (e == QLatin1String("html") || e == QLatin1String("htm") || e == QLatin1String("xhtml") || e == QLatin1String("shtml")
+            || e == QLatin1String("svg") || e == QLatin1String("svgz") || e == QLatin1String("xht"))
+            return QStringLiteral("Ultra privacy is on. \"%1\" opens in your web browser, which can load pictures and more from the "
+                                  "internet without Tor, so those sites could see where you are. Open it only if you trust who sent it.")
+                .arg(safeName(name, QStringLiteral("file")));
+    }
     if (kindOf(name) != QLatin1String("Program"))
         return {};
     const QFileInfo fi(name);
@@ -244,7 +294,12 @@ bool Sharing::markFromInternet(const QString &path)
     // The Mark of the Web, as a browser leaves it: Windows' SmartScreen and its "Open File" warning then look at the
     // file before it runs. A drive without streams (FAT32, exFAT) can't keep it: then Huginn itself asks before a
     // program or an Office file opens (unmarked).
-    const std::wstring stream = QDir::toNativeSeparators(path).toStdWString() + L":Zone.Identifier";
+    // The long-path form, so a file past Windows' 260-character limit (a long group name and file name) is marked too.
+    // (That form takes no "." or "..", so the path is made whole and clean first.)
+    QString full = QDir::toNativeSeparators(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+    if (!full.startsWith(QLatin1String("\\\\?\\")))
+        full = full.startsWith(QLatin1String("\\\\")) ? QStringLiteral("\\\\?\\UNC\\") + full.mid(2) : QStringLiteral("\\\\?\\") + full;
+    const std::wstring stream = full.toStdWString() + L":Zone.Identifier";
     HANDLE h = CreateFileW(stream.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     bool ok = h != INVALID_HANDLE_VALUE;
     if (ok) {
@@ -352,12 +407,26 @@ bool Sharing::selfTest()
           QStringLiteral("kinds: programs"));
     check(!openWarning(QStringLiteral("invoice.pdf.exe")).isEmpty() && openWarning(QStringLiteral("invoice.pdf.exe")).contains(QLatin1String("looks like a pdf document"))
               && !openWarning(QStringLiteral("Photos") + QChar(0x202e) + QStringLiteral("gpj.txt")).isEmpty() && openWarning(QStringLiteral("photo.jpg")).isEmpty()
-              && openWarning(QStringLiteral("notes.txt")).isEmpty(),
+              && openWarning(QStringLiteral("notes.txt")).isEmpty() && !openWarning(QStringLiteral("Search.searchConnector-ms")).isEmpty()
+              && !openWarning(QStringLiteral("home.library-ms")).isEmpty() && !openWarning(QStringLiteral("site.URL")).isEmpty(),
           QStringLiteral("open warnings"));
     const QString f = folderFor(QStringLiteral("/home/me/Downloads"), QStringLiteral("Huginn"), QStringLiteral("../Ana"));
     check(f == QStringLiteral("/home/me/Downloads/Huginn/_Ana") && !f.contains(QLatin1String("..")), QStringLiteral("folder: ") + f);
     check(folderFor(QStringLiteral("/d"), QStringLiteral("Huginn"), QStringLiteral("..")) == QLatin1String("/d/Huginn/Chat"), QStringLiteral("folder: .."));
     check(folderFor(QStringLiteral("/d"), QStringLiteral("Huginn"), QStringLiteral("AUX")) == QLatin1String("/d/Huginn/_AUX"), QStringLiteral("folder: reserved"));
+    // Never inside Huginn's own (portable) folder: Huginn unzipped into Downloads is Downloads/Huginn.
+    check(folderIn(QStringLiteral("C:/Users/a/Downloads"), QStringLiteral("Huginn"), QStringLiteral("update-staging"), QStringLiteral("C:/Users/a/Downloads/Huginn"),
+                   QStringLiteral("C:/Users/a/Downloads"))
+              == QLatin1String("C:/Users/a/Downloads/Huginn files/update-staging (chat)"),
+          QStringLiteral("folder: not in Huginn's own folder"));
+    check(folderIn(QStringLiteral("C:/Users/a/downloads/huginn/lib"), QStringLiteral("Huginn"), QStringLiteral("Ana"), QStringLiteral("C:/Users/a/Downloads/Huginn"),
+                   QStringLiteral("C:/Users/a/Downloads"))
+              == QLatin1String("C:/Users/a/Downloads/Huginn files/Ana"),
+          QStringLiteral("folder: a save folder inside Huginn's folder"));
+    check(folderIn(QStringLiteral("C:/Users/a/Downloads"), QStringLiteral("Huginn"), QStringLiteral("Ana"), QStringLiteral("C:/Users/a/Huginn"), QString())
+              == QLatin1String("C:/Users/a/Downloads/Huginn/Ana")
+              && folderIn(QStringLiteral("/d"), QStringLiteral("Huginn"), QStringLiteral("DATA"), QString(), QString()) == QLatin1String("/d/Huginn/DATA (chat)"),
+          QStringLiteral("folder: elsewhere as before"));
     check(kindOf(QStringLiteral("a.PDF")) == QLatin1String("PDF document") && kindOf(QStringLiteral("game.apk")) == QLatin1String("App installer")
               && kindOf(QStringLiteral("x")) == QLatin1String("File"), QStringLiteral("kinds"));
     check(declineText(QStringLiteral("rules")) == QLatin1String("Refused by the group's file rules.")

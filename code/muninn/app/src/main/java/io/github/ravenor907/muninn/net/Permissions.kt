@@ -21,8 +21,14 @@ object Permissions {
      * already going on ends cleanly.
      */
     fun isRing(json: String): Boolean = try {
-        val o = JSONObject(json)
+        val o = SafeJson.obj(json)
         val t = o.optString("t")
         (t == "offer" && !o.has("g")) || t == "vring"
+    } catch (e: Exception) { false }
+
+    /** A 1:1 call offer (not inside a voice room or group call, which carry "g"): only a real contact may send one. */
+    fun isDirectOffer(json: String): Boolean = try {
+        val o = SafeJson.obj(json)
+        o.optString("t") == "offer" && !o.has("g")
     } catch (e: Exception) { false }
 }

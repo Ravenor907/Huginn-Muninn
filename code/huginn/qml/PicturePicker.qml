@@ -15,8 +15,23 @@ Item {
 
     function open() { step = "choose"; focusIndex = 0; visible = true }
     function close() { visible = false; closed() }
-    // The computer's own file picker (System.pickPicture), so no extra Qt module is needed.
-    function choose() { const f = System.pickPicture(); if (f !== "") pp.startCrop(f) }
+    // The computer's own file picker (System.pickPicture), so no extra Qt module is needed. In game mode (or Handheld
+    // mode with the controller) Huginn's own list instead (Ui.pickFiles): the system's window can't be driven with the
+    // controller there and may not even show.
+    function choose() {
+        if (Ui.ownPicker()) {
+            Ui.pickFiles(paths => {
+                if (!paths.length) return
+                // A file URL for the path ("C:" kept as it is on Windows; #, ? and spaces escaped).
+                const p = String(paths[0]).replace(/\\/g, "/")
+                const enc = p.split("/").map((s, i) => i === 0 && /^[A-Za-z]:$/.test(s) ? s : encodeURIComponent(s)).join("/")
+                pp.startCrop((p.charAt(0) === "/" ? "file://" : "file:///") + enc)
+            }, "pictures", true)
+            return
+        }
+        const f = System.pickPicture()
+        if (f !== "") pp.startCrop(f)
+    }
     function startCrop(url) {
         crop.source = ""
         crop.zoom = 1

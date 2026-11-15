@@ -76,6 +76,14 @@ object KidVoice {
      */
     fun toSend(pick: String, k15: Boolean, others: List<Set<String>?>): String? = toSend(pick, k15 && allRead(others))
 
+    /**
+     * 1.54: Pre-release goes on in a config from a parent whose phone can't confirm every co-parent reads it: the device
+     * runs it already ([runs]) and reads it ([deviceReads]), and no co-parent is known not to (caps known and without
+     * [UPDATES_CAP]); unknown caps (null or empty) don't count against it.
+     */
+    fun preCarry(runs: Boolean, deviceReads: Boolean, others: List<Set<String>?>): Boolean =
+        runs && deviceReads && others.none { it != null && it.isNotEmpty() && UPDATES_CAP !in it }
+
     /** Whether every co-parent ([others]' caps) says [CAP]. */
     fun allRead(others: List<Set<String>?>): Boolean = others.all { it != null && CAP in it }
 

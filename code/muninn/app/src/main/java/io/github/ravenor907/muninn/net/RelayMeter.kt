@@ -6,6 +6,10 @@ import android.content.Context
  * What the call relay carried this month for files and videos. This device's own count, and the total every device reports
  * to the Worker (relay.md "Relayed media"), so the free month is never overrun and nobody gets a surprise. Past
  * [MediaRoute.LIMIT_BYTES] relayed sends go as the 720p copy, and Settings says so calmly.
+ *
+ * Anyone with the app can report to the shared total, so it is only advice (as Huginn's FileLink::relayShared): it is
+ * believed up to [SHARED_PER_DAY_BYTES] for each day of the month so far, and it may bring the 720p step, never the
+ * stop. The 950 GB stop ([MediaRoute.STOP_BYTES]) comes only from this install's own count.
  */
 class RelayMeter(context: Context) {
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
@@ -34,12 +38,19 @@ class RelayMeter(context: Context) {
         roll()
         val now = System.currentTimeMillis()
         if (now - askedAt > ASK_EVERY_MS) { askedAt = now; report() }
-        return MediaRoute.over(local, shared)
+        return MediaRoute.over(local, believed())
     }
 
-    fun stopped(): Boolean { over(); return MediaRoute.stopped(local, shared) }
+    /** The 950 GB stop: this install's own count only (a shared total anyone can raise never stops relayed files). */
+    fun stopped(): Boolean { over(); return MediaRoute.stopped(local, 0L) }
 
-    fun note(): String { roll(); return MediaRoute.meterNote(local, shared) }
+    fun note(): String {
+        roll()
+        // The shared total can say "near the limit" (720p), never "used up".
+        return MediaRoute.meterNote(local, if (MediaRoute.stopped(local, 0L)) believed() else believed().coerceAtMost(MediaRoute.STOP_BYTES - 1))
+    }
+
+    private fun believed(): Long = believedShared(shared, java.time.Instant.now().atZone(java.time.ZoneOffset.UTC).dayOfMonth)
 
     /** One report at a time, what's waiting read when it goes; after a failure not again for [ASK_EVERY_MS]. */
     private fun report() {
@@ -56,12 +67,17 @@ class RelayMeter(context: Context) {
         }
     }
 
-    private companion object {
-        const val MONTH = "meterMonth"
-        const val LOCAL = "meterBytes"
-        const val SHARED = "meterShared"
-        const val WAITING = "meterWaiting"
-        const val ASK_EVERY_MS = 6 * 3_600_000L
-        const val MAX_MB = 5000L
+    companion object {
+        private const val MONTH = "meterMonth"
+        private const val LOCAL = "meterBytes"
+        private const val SHARED = "meterShared"
+        private const val WAITING = "meterWaiting"
+        private const val ASK_EVERY_MS = 6 * 3_600_000L
+        private const val MAX_MB = 5000L
+        /** The most of the shared total believed for each day of the month so far (Huginn's kSharedPerDayBytes). */
+        const val SHARED_PER_DAY_BYTES = 66L * 1_000_000_000L
+
+        /** The shared total [shared] as far as it is believed on day [dayOfMonth] (1 to 31, UTC). */
+        fun believedShared(shared: Long, dayOfMonth: Int): Long = shared.coerceIn(0L, dayOfMonth.coerceIn(1, 31) * SHARED_PER_DAY_BYTES)
     }
 }

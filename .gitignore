@@ -6,3 +6,4 @@ fonts/
 __pycache__/
 tour/
 third_party/
+.cxx/

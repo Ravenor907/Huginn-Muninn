@@ -12,6 +12,21 @@ object EnvelopePad {
         return (n + 16383) / 16384 * 16384
     }
 
+    /**
+     * 1.54: the biggest bucket that stays under the 64 KiB many relays allow for a whole event (the 65536 one, with the
+     * event around it, is about 66 KB and gets refused).
+     */
+    const val RELAY_MAX = 49152
+
+    /**
+     * What a message's own text, link preview and the like may add up to (UTF-8 bytes) so that, sealed (the ratchet,
+     * base64) and wrapped for the relays (base64 again, with the clear fields), it still pads to [RELAY_MAX] at most.
+     */
+    const val PAYLOAD_MAX = 18_000
+
+    /** [content] (the relay event's content, already padded) is small enough for relays that cap events at 64 KiB. */
+    fun fits(content: String) = content.length <= RELAY_MAX
+
     /** Base64 length of [n] bytes. */
     private fun b64(n: Int) = (n + 2) / 3 * 4
 

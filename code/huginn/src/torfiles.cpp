@@ -467,9 +467,9 @@ bool TorFiles::selfTest()
         for (int i = 0; i < data.size(); ++i)
             data[i] = char(QRandomGenerator::global()->generate());
         QFile src(tmp.filePath(QStringLiteral("src"))), dst(tmp.filePath(QStringLiteral("dst")));
-        src.open(QIODevice::ReadWrite | QIODevice::Truncate);
+        const bool opened = src.open(QIODevice::ReadWrite | QIODevice::Truncate) && dst.open(QIODevice::ReadWrite | QIODevice::Truncate);
+        check(opened, "the test files open");
         src.write(data);
-        dst.open(QIODevice::ReadWrite | QIODevice::Truncate);
         dst.resize(data.size());
         // As after Nearby: the first 100 pieces came another way.
         dst.seek(0);

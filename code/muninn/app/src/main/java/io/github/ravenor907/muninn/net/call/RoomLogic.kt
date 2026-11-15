@@ -107,6 +107,15 @@ object RoomLogic {
     fun offerWins(a: String, b: String) = if (a < b) a else b
     fun full(peers: Int) = peers >= MAX_PEOPLE - 1
 
+    /**
+     * 1.54: how far apart two clocks may be for a room to still connect: a room message whose ts is within
+     * [SKEW_MS] (5 minutes) of this device's clock either way may start an offer, answer one, or ring. 6.2's verdict
+     * ([accept]: 60 s old, 120 s ahead) still decides presence and stays as the vectors say; this only stops a pair whose
+     * clocks are a minute or two apart from never connecting.
+     */
+    const val SKEW_MS = 300_000L   // the same 5 minutes as Huginn
+    fun withinSkew(ts: Long, now: Long) = kotlin.math.abs(ts - now) <= SKEW_MS
+
     /** 6.4, for one device. Thread-safe. */
     class Presence {
         private data class Entry(val inRoom: Boolean, val ts: Long, val seen: Long, val beats: Boolean = false)

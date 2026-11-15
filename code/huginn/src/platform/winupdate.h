@@ -9,11 +9,14 @@ class QObject;
 // Updates for the Windows portable build (Huginn-Windows.zip from the GitHub release).
 // Updater downloads the zip, checks its SHA-256 against the one published with the release, then
 // calls install(), which does everything inside Huginn itself: it unpacks the zip into update-staging beside
-// Huginn.exe, marks it ready (with the staged Huginn.exe's SHA-256) and starts the staged Huginn.exe as a normal window.
+// Huginn.exe, marks it ready (a list of every staged file's SHA-256, whose own SHA-256 is kept in Huginn's settings, not
+// in update-staging) and starts the staged Huginn.exe as a normal window.
 // Nothing the running copy uses is renamed or replaced.
 // The staged Huginn.exe waits until the old copy has closed, copies its files over Huginn's folder (finishAtStart()),
 // starts Huginn.exe from there and ends; that copy removes update-staging. When the restart doesn't happen, the next
-// start of Huginn.exe finds the ready update and hands it to the staged copy the same way.
+// start of Huginn.exe finds the ready update and hands it to the staged copy the same way. A swap that was cut off is
+// finished (or undone) by the staged copy too, never by Huginn.exe renaming its own files; files moved aside are kept
+// until the swap is fully done or fully undone.
 // On other platforms (and in a Windows development build) supported() is false.
 namespace WinUpdate
 {

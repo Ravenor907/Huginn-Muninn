@@ -90,7 +90,7 @@ class Identity(context: Context, private val vault: Vault) {
 
     /** What the vault keeps in secrets.json (empty when there's nothing yet). */
     private fun sealed(): org.json.JSONObject = vault.read(secrets)?.let {
-        try { org.json.JSONObject(it) } catch (e: Exception) { vault.loadFailed(secrets, e); null }
+        try { SafeJson.obj(it) } catch (e: Exception) { vault.loadFailed(secrets, e); null }
     } ?: org.json.JSONObject()
 
     /** Secret keys, kept only in the encrypted vault (one found in the plain settings is moved there). */

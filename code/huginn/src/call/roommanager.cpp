@@ -14,6 +14,7 @@
 
 #include <QVideoSink>
 #include "../platform/chime.h"
+#include "../sounds.h"
 #include "../platform/notify.h"
 
 #include <QDateTime>
@@ -93,7 +94,7 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
             Q_EMIT logged(rg, text, true);
             return;
         }
-        if (!Settings::hushed())
+        if (!Settings::hushed() && Sounds::ringOn())
             m_ringtone->play();
     });
 }
@@ -599,10 +600,13 @@ void RoomManager::startRing(const QString &from, const QString &g, const QString
     m_ringCh = ch;
     m_ringFrom = from;
     m_ringSince = now();
-    if (!Settings::hushed())
-        m_ringtone->play();
-    m_ringer.start();
     const QString who = ringName(), grp = ringGroup();
+    // Do not disturb, quiet hours or Call ringtone off: it still shows (and its notification), without sound.
+    if (!Settings::hushed() && Sounds::ringOn()) {
+        m_ringtone->play();
+        Sounds::note(QStringLiteral("Group call"), grp, QStringLiteral("Ringing"));
+    }
+    m_ringer.start();
     if (QGuiApplication::applicationState() != Qt::ApplicationActive)
         Platform::notify(QStringLiteral("Group call"), m_signal->showPreview() ? QStringLiteral("%1 is calling %2").arg(who, grp) : QStringLiteral("Someone is calling"),
                          int(RoomWire::kRingMs));
@@ -807,7 +811,9 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
     const QString g = str(msg, "g"), ch = str(msg, "ch"), t = str(msg, "t");
     const QJsonObject st = groupState ? groupState(g) : QJsonObject();
     const QString verdict = RoomWire::accept(st.isEmpty() ? nullptr : &st, me(), from, msg, now());
-    const bool fresh = verdict == QLatin1String("ok");
+    // Clocks a few minutes apart (either way) still count as now, so two devices that differ by a minute or more
+    // can still meet in a room (6.2's 60 s / 120 s alone left them never connecting).
+    const bool fresh = verdict == QLatin1String("ok") || (verdict == QLatin1String("stale") && withinSkew(msg));
     if (!fresh && verdict != QLatin1String("stale"))
         return;   // refused (6.2)
     // Cap g2: someone timed out or banned doesn't join, ring or show up in this group's rooms (a leave still counts).
@@ -884,10 +890,22 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
     }
 }
 
+bool RoomManager::withinSkew(const QJsonObject &msg) const
+{
+    const QJsonValue v = msg.value(QStringLiteral("ts"));
+    if (!v.isDouble())
+        return false;
+    const qint64 ts = qint64(v.toDouble());
+    return ts >= now() - kSkewMs && ts <= now() + kSkewMs;
+}
+
 void RoomManager::onRoomOffer(const QString &from, const QJsonObject &msg)
 {
     const QString g = str(msg, "g"), ch = str(msg, "ch"), call = str(msg, "call");
-    const QString why = CallSession::checkOffer(msg, from, now());
+    QString why = CallSession::checkOffer(msg, from, now());
+    // The same few minutes' allowance as for presence: judged by the offer's own time, everything else checked as usual.
+    if (why == QLatin1String("stale") && withinSkew(msg))
+        why = CallSession::checkOffer(msg, from, qint64(msg.value(QStringLiteral("ts")).toDouble()));
     if (why == QLatin1String("signature") || why == QLatin1String("malformed") || why == QLatin1String("stale"))
         return;
     const QJsonObject st = groupState ? groupState(g) : QJsonObject();

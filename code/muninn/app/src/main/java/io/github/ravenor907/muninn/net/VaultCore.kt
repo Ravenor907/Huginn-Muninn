@@ -60,7 +60,7 @@ class VaultCore(
     // ------------------------------------------------------------------ the lock file
 
     private fun readKey(): SafeFile.Read<JSONObject> = SafeFile.read(keyFile, bakWhenMissing = true) { b ->
-        JSONObject(String(b)).takeIf { it.optString("mode") == "open" || it.optString("mode") == "password" }
+        SafeJson.obj(String(b)).takeIf { it.optString("mode") == "open" || it.optString("mode") == "password" }
     }
 
     private fun lockJson(): JSONObject? = (readKey() as? SafeFile.Read.Ok)?.value
@@ -301,12 +301,12 @@ class VaultCore(
                 // Its key: kept in its lock file sealed with the key it was last re-wrapped with (one of ours), or found by
                 // opening its keys file with ours.
                 val mine = listOf(now) + keys
-                val own = (SafeFile.read(File(dir, keyFile.name), bakWhenMissing = true) { JSONObject(String(it)) } as? SafeFile.Read.Ok)?.value
+                val own = (SafeFile.read(File(dir, keyFile.name), bakWhenMissing = true) { SafeJson.obj(String(it)) } as? SafeFile.Read.Ok)?.value
                 val theirs = mine.firstNotNullOfOrNull { prevIn(own, it) } ?: run {
                     val probe = (SafeFile.read(File(dir, SECRETS)) { it } as? SafeFile.Read.Ok)?.value ?: return@forEach
                     mine.firstOrNull { openSealed(it, probe) != null }
                 } ?: return@forEach
-                val o = JSONObject(lock.toString())
+                val o = SafeJson.obj(lock.toString())
                 o.remove(PREV)
                 if (!theirs.contentEquals(now)) o.put(PREV, Vault.Crypto.b64(Vault.Crypto.seal(now, theirs)))
                 SafeFile.writeMirror(File(dir, keyFile.name), o.toString().toByteArray())
@@ -380,13 +380,7 @@ class VaultCore(
      */
     @Synchronized
     fun startOverKeeping(needsLock: Boolean = false): File {
-        val kept = File(root, KEPT + System.currentTimeMillis())
-        kept.mkdirs()
-        root.listFiles()?.forEach { f ->
-            if (f == kept || f.name.startsWith(KEPT) || f.name == "tls") return@forEach
-            if (!f.renameTo(File(kept, f.name))) throw IOException("couldn't set ${f.name} aside")
-        }
-        for (f in listOf(openKeyFile, SafeFile.bakOf(openKeyFile))) if (f.exists() && !f.renameTo(File(kept, "open-" + f.name))) throw IOException("couldn't set the open key aside")
+        val kept = setAside()
         unreadable.clear(); good.clear(); synchronized(pending) { pending.clear() }
         val k = ByteArray(32).also { SecureRandom().nextBytes(it) }
         store(k, null, needsLock = needsLock)
@@ -397,17 +391,84 @@ class VaultCore(
         return kept
     }
 
+    /** Everything here (and the open key) moves into a new "kept-" folder; put back if that can't finish. */
+    private fun setAside(): File {
+        val kept = File(root, KEPT + System.currentTimeMillis())
+        kept.mkdirs()
+        try {
+            root.listFiles()?.forEach { f ->
+                if (f == kept || f.name.startsWith(KEPT) || f.name == "tls") return@forEach
+                if (!f.renameTo(File(kept, f.name))) throw IOException("couldn't set ${f.name} aside")
+            }
+            for (f in listOf(openKeyFile, SafeFile.bakOf(openKeyFile))) if (f.exists() && !f.renameTo(File(kept, "open-" + f.name))) throw IOException("couldn't set the open key aside")
+        } catch (e: Exception) { putBack(kept); throw e }
+        return kept
+    }
+
+    /** Undoes [setAside]: what this vault wrote since goes, and [kept]'s files come back where they were. */
+    private fun putBack(kept: File) {
+        root.listFiles()?.forEach { f -> if (f != kept && !f.name.startsWith(KEPT) && f.name != "tls") f.deleteRecursively() }
+        for (f in listOf(openKeyFile, SafeFile.bakOf(openKeyFile))) f.delete()
+        kept.listFiles()?.forEach { f ->
+            val back = if (f.name.startsWith("open-")) File(openKeyFile.parentFile, f.name.removePrefix("open-")) else File(root, f.name)
+            f.renameTo(back)
+        }
+        kept.deleteRecursively()
+    }
+
+    /**
+     * Restore from a backup with the lock forgotten or unreadable, in one step: what's here is set aside (kept), a new open
+     * vault ([needsLock]: a new lock is set before anything shows) is made and the backup staged into it by [fill]. The
+     * vault stays shown as locked (no screen opens on the new, empty one meanwhile): the app restarts next and the backup
+     * is swapped in then. If [fill] throws, everything is put back as it was. Returns the kept folder.
+     */
+    @Synchronized
+    fun restoreOver(needsLock: Boolean, fill: ((String, ByteArray) -> Unit) -> Unit): File {
+        pruneKept(KEPT_MAX - 1)
+        val kept = setAside()
+        try {
+            val k = ByteArray(32).also { SecureRandom().nextBytes(it) }
+            store(k, null, needsLock = needsLock)
+            synchronized(keyLock) { dataKey = k; prevKey?.fill(0); prevKey = null }
+            unreadable.clear(); good.clear(); synchronized(pending) { pending.clear() }
+            stageRestore(fill)
+        } catch (e: Throwable) {
+            synchronized(keyLock) { dataKey?.fill(0); dataKey = null }
+            putBack(kept)
+            throw e
+        }
+        log("set everything aside in ${kept.name} and staged a backup into a new vault")
+        return kept
+    }
+
+    /**
+     * A lock was (or may have been) set here: the lock file says so, or it can't be read and there's no open key beside it.
+     * A restore on the trouble screen then asks for a new lock, as after "Forgot it?" (a restore never drops the lock).
+     */
+    fun hadLock(): Boolean = when (val r = readKey()) {
+        is SafeFile.Read.Ok -> r.value.optString("mode") == "password"
+        else -> !SafeFile.exists(openKeyFile)
+    }
+
+    /** At most this many "kept-" copies stay: the oldest go before a new one is made, so they can't fill the phone. */
+    private fun pruneKept(keep: Int) {
+        val all = root.listFiles()?.filter { it.isDirectory && it.name.startsWith(KEPT) }?.sortedBy { it.name.removePrefix(KEPT).toLongOrNull() ?: 0L } ?: return
+        all.dropLast(keep).forEach { log("removing the older copy ${it.name}"); it.deleteRecursively() }
+    }
+
     /**
      * Before a restore replaces everything: a copy of every file here (the lock file and open key too, so the copy
      * opens as it did) goes into a new "kept-" folder. Nothing here changes. Throws if the copy can't be made.
      */
     @Synchronized
     fun keepCopy(): File {
+        // Only the newest earlier copy stays beside the new one.
+        pruneKept(KEPT_MAX - 1)
         val kept = File(root, KEPT + System.currentTimeMillis())
         kept.mkdirs()
         try {
             root.listFiles()?.forEach { f ->
-                if (f == kept || f.name.startsWith(KEPT) || f.name == "tls" || f.name == Vault.STAGE) return@forEach
+                if (f == kept || f.name.startsWith(KEPT) || f.name == "tls" || f.name == Vault.STAGE || f.name == MOVE_OUT) return@forEach
                 f.copyRecursively(File(kept, f.name), overwrite = true)
             }
             for (f in listOf(openKeyFile, SafeFile.bakOf(openKeyFile))) if (f.exists()) f.copyTo(File(kept, "open-" + f.name), overwrite = true)
@@ -540,7 +601,7 @@ class VaultCore(
 
     /** Every encrypted file Muninn keeps, by name relative to [root]. Last good copies and half-written files aren't. */
     fun sealedFiles(): List<Pair<String, File>> =
-        root.walkTopDown().onEnter { it == root || it.name != Vault.STAGE && !(it.parentFile == root && (it.name == "tls" || it.name.startsWith(KEPT))) }
+        root.walkTopDown().onEnter { it == root || it.name != Vault.STAGE && !(it.parentFile == root && (it.name == "tls" || it.name == MOVE_OUT || it.name.startsWith(KEPT))) }
             .filter { it.isFile && it.name != keyFile.name && !it.name.endsWith(SafeFile.TMP) && !it.name.endsWith(SafeFile.BAK) && isSealed(it) }
             .map { it.relativeTo(root).invariantSeparatorsPath to it }.toList()
 
@@ -549,21 +610,30 @@ class VaultCore(
      * running is touched; the swap happens on the next open (see [applyRestore]), before chats load,
      * so nothing still in memory can write over it. Must be unlocked.
      */
-    fun stageRestore(files: List<Pair<String, ByteArray>>) {
+    fun stageRestore(files: List<Pair<String, ByteArray>>) = stageRestore { stage -> files.forEach { (n, d) -> stage(n, d) } }
+
+    /**
+     * The same, one file at a time: [fill] hands each file to the function it's given, so a big restore never needs all of
+     * it in memory. If [fill] throws, nothing is staged.
+     */
+    fun stageRestore(fill: ((String, ByteArray) -> Unit) -> Unit) {
         val k = key() ?: throw IllegalStateException("Muninn is locked")
+        val dir = File(root, Vault.STAGE)
         try {
-            val dir = File(root, Vault.STAGE)
             dir.deleteRecursively(); dir.mkdirs()
-            val names = ArrayList<String>()
-            for ((name, data) in files) {
-                if (!BackupFormat.safeName(name) || name == keyFile.name || name == DONE || name.substringBefore('/') in setOf(Vault.STAGE, "tls") ||
-                    name.substringBefore('/').startsWith(KEPT)) continue
+            val names = LinkedHashSet<String>()
+            fill { name, data ->
+                if (!BackupFormat.safeName(name) || name == keyFile.name || name == DONE || name.substringBefore('/') in setOf(Vault.STAGE, "tls", MOVE_OUT) ||
+                    name.substringBefore('/').startsWith(KEPT)) return@fill
                 val f = File(dir, name)
                 SafeFile.write(f, Vault.Crypto.MAGIC + Vault.Crypto.seal(k, data), keepBak = false)
                 names += name
             }
             // Written last: without it the folder is an unfinished restore and is thrown away.
             SafeFile.write(File(dir, DONE), names.joinToString("\n").toByteArray(), keepBak = false)
+        } catch (e: Throwable) {
+            dir.deleteRecursively()
+            throw e
         } finally { k.fill(0) }
     }
 
@@ -595,6 +665,10 @@ class VaultCore(
         const val SECRETS = "secrets.json"
         /** Folders of files set aside by [startOverKeeping]. */
         const val KEPT = "kept-"
+        /** How many "kept-" copies may be here at once (see [keepCopy]). */
+        const val KEPT_MAX = 2
+        /** A move's packed parts on the old device (see Move): never kept, staged or backed up. */
+        const val MOVE_OUT = "move-out"
         private const val DONE = ".done"
         /** In an open lock file: a new lock must be set first (see [lockNeeded]). */
         private const val NEEDS_LOCK = "needsLock"

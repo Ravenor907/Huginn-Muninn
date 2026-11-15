@@ -136,13 +136,41 @@ QVariantList Chat::groupTypes() const
     return out;
 }
 
+bool Chat::familyTrusted(const Group &gr) const
+{
+    return !gr.state.isEmpty() && !gr.removed && !gr.left && gr.familyOk && Limits::groupType(gr.state) == QLatin1String(Limits::kFamily);
+}
+
 bool Chat::inFamilyGroup(const QString &key) const
 {
+    // Only Family groups this computer said yes to: being put in one is never enough on its own.
     for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it)
-        if (!it->state.isEmpty() && !it->removed && !it->left && Limits::groupType(it->state) == QLatin1String(Limits::kFamily)
-            && GroupWire::isMember(it->state, key))
+        if (familyTrusted(*it) && GroupWire::isMember(it->state, key))
             return true;
     return false;
+}
+
+QVariantList Chat::familyAsks() const
+{
+    QVariantList out;
+    for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it)
+        if (!it->state.isEmpty() && !it->removed && !it->left && !it->familyOk && !it->familyNo
+            && Limits::groupType(it->state) == QLatin1String(Limits::kFamily))
+            out << QVariantMap{{QStringLiteral("g"), it.key()}, {QStringLiteral("name"), it->state.value(QStringLiteral("name")).toString()},
+                               {QStringLiteral("byName"), memberName(it.key(), it->state.value(QStringLiteral("by")).toString())}};
+    return out;
+}
+
+void Chat::answerFamily(const QString &g, bool yes)
+{
+    const auto it = m_groups.find(g);
+    if (it == m_groups.end() || it->state.isEmpty() || Limits::groupType(it->state) != QLatin1String(Limits::kFamily))
+        return;
+    it->familyOk = yes;
+    it->familyNo = !yes;
+    saveGroups();
+    familySync();
+    Q_EMIT changed();
 }
 
 void Chat::familySync()
@@ -157,27 +185,41 @@ void Chat::familySync()
             at = i;
     QStringList want;
     for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it) {
-        if (it->state.isEmpty() || it->removed || it->left || Limits::groupType(it->state) != QLatin1String(Limits::kFamily))
+        if (!familyTrusted(*it))
             continue;
         for (const QString &k : GroupWire::keysOf(it->state))
             if (k != myKey() && isContact(k) && !want.contains(k))
                 want << k;
     }
-    if (want.isEmpty() || at < 0)
+    if (at < 0)
         return;   // no Family folder (deleted by hand): nothing is made again
     QStringList done = m_folders.at(at).value(QStringLiteral("auto")).toStringList();
+    // "autoIn": the ones this put in the folder itself (not someone already there by hand). One no longer in any Family
+    // group said yes to here (left, removed, said no, turned Folk) goes out again, so leaving undoes it.
+    QStringList in = m_folders.at(at).value(QStringLiteral("autoIn")).toStringList();
     const QString id = m_folders.at(at).value(QStringLiteral("id")).toString();
     bool any = false;
     for (const QString &k : std::as_const(want))
         if (!done.contains(k)) {
             done << k;
             any = true;
-            if (!m_folders.at(at).value(QStringLiteral("keys")).toStringList().contains(k))
+            if (!m_folders.at(at).value(QStringLiteral("keys")).toStringList().contains(k)) {
                 setInFolder(id, k, true);
+                in << k;
+            }
+        }
+    for (const QString &k : QStringList(in))
+        if (!want.contains(k)) {
+            in.removeAll(k);
+            done.removeAll(k);
+            any = true;
+            if (m_folders.at(at).value(QStringLiteral("keys")).toStringList().contains(k))
+                setInFolder(id, k, false);
         }
     if (!any)
         return;
     m_folders[at].insert(QStringLiteral("auto"), done);
+    m_folders[at].insert(QStringLiteral("autoIn"), in);
     saveFolders();
 }
 

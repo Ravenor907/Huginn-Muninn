@@ -54,12 +54,37 @@ class TurnClient(
         override fun close() = socket.close()
     }
 
-    /** TCP or TLS: STUN messages and ChannelData (padded to 4) back to back on one stream. */
+    /**
+     * TCP or TLS: STUN messages and ChannelData (padded to 4) back to back on one stream. 1.54: writes go through a
+     * small queue on a thread of their own, so a stream that stops moving (the network dropped) never blocks a caller:
+     * the call's sending, its hang-up and every call button stay free. When the queue is full the oldest goes (late
+     * sound is no use; requests are asked again).
+     */
     private class StreamLink(val socket: Socket) : Link {
         private val input = DataInputStream(socket.getInputStream().buffered())
         private val output: OutputStream = socket.getOutputStream()
         override val reliable = true
-        override fun write(b: ByteArray) = synchronized(output) { output.write(b); output.flush() }
+        private val queue = java.util.concurrent.LinkedBlockingDeque<ByteArray>()
+        @Volatile private var dead = false
+        private val writer = Thread({
+            try {
+                while (!dead) {
+                    val b = queue.poll(1, TimeUnit.SECONDS) ?: continue
+                    output.write(b); if (queue.isEmpty()) output.flush()
+                }
+            } catch (_: Exception) { dead = true }
+        }, "muninn-turn-write").apply { isDaemon = true; start() }
+        override fun write(b: ByteArray) {
+            if (dead) throw java.io.IOException("closed")
+            while (queue.size >= STREAM_QUEUE) queue.pollFirst()
+            queue.offerLast(b)
+        }
+        /** Lets what is queued go out for up to [ms] (the release at the end of a call), then closes. */
+        fun closeAfter(ms: Long) {
+            val until = System.currentTimeMillis() + ms
+            while (!dead && queue.isNotEmpty() && System.currentTimeMillis() < until) try { Thread.sleep(20) } catch (_: InterruptedException) { break }
+            close()
+        }
         override fun read(buf: ByteArray): Int = try {
             input.readFully(buf, 0, 4)
             val l = ((buf[2].toInt() and 0xFF) shl 8) or (buf[3].toInt() and 0xFF)
@@ -70,7 +95,7 @@ class TurnClient(
                 if (Stun.HEADER + l > buf.size) -1 else { input.readFully(buf, 4, Stun.HEADER - 4 + l); Stun.HEADER + l }
             }
         } catch (e: Exception) { -1 }
-        override fun close() = socket.close()
+        override fun close() { dead = true; try { socket.close() } catch (_: Exception) {}; writer.interrupt() }
     }
 
     @Volatile private var link: Link? = null
@@ -280,28 +305,38 @@ class TurnClient(
         }
     }
 
-    /** Releases the allocation (Refresh with lifetime 0) and closes the link. */
+    /**
+     * Releases the allocation (Refresh with lifetime 0) and closes the link. 1.54: returns at once; the release and the
+     * closing happen on a thread of their own, with a time limit, so a dead network never holds up the caller.
+     */
     override fun close() {
         if (closed) return
-        val l = link
-        if (l != null && relayed != null) try {
-            val tid = Stun.newTid()
-            l.write(Stun.encode(Stun.type(Stun.REFRESH, Stun.REQUEST), tid, listOf(Stun.Attr(Stun.A_LIFETIME, Stun.u32(0)),
-                Stun.Attr(Stun.A_USERNAME, login.username.toByteArray(Charsets.UTF_8)),
-                Stun.Attr(Stun.A_REALM, realm.toByteArray(Charsets.UTF_8)),
-                Stun.Attr(Stun.A_NONCE, nonce.toByteArray(Charsets.UTF_8))), key, fingerprint = true))
-        } catch (_: Exception) {}
         closed = true
         refresher?.cancel(false)
         timers.shutdownNow()
-        try { l?.close() } catch (_: Exception) {}
+        soonThread?.interrupt()
+        val l = link
         link = null
+        val bye = if (l != null && relayed != null) try {
+            val tid = Stun.newTid()
+            Stun.encode(Stun.type(Stun.REFRESH, Stun.REQUEST), tid, listOf(Stun.Attr(Stun.A_LIFETIME, Stun.u32(0)),
+                Stun.Attr(Stun.A_USERNAME, login.username.toByteArray(Charsets.UTF_8)),
+                Stun.Attr(Stun.A_REALM, realm.toByteArray(Charsets.UTF_8)),
+                Stun.Attr(Stun.A_NONCE, nonce.toByteArray(Charsets.UTF_8))), key, fingerprint = true)
+        } catch (_: Exception) { null } else null
         key.fill(0)
+        if (l == null) return
+        Thread({
+            try { if (bye != null) l.write(bye) } catch (_: Exception) {}
+            if (l is StreamLink) l.closeAfter(1_500) else try { l.close() } catch (_: Exception) {}
+        }, "muninn-turn-close").apply { isDaemon = true; start() }
     }
 
     companion object {
         /** Packets waiting in [sendSoon], about 0.3 s of voice. */
         private const val SOON_MAX = 16
+        /** Messages waiting for a TCP or TLS link's writer (about a second of a call's sound and pings). */
+        private const val STREAM_QUEUE = 64
 
         /** "turn:host:port?transport=udp", "turns:host:443?transport=tcp". Null for anything else. */
         fun parseUrl(u: String): Server? {

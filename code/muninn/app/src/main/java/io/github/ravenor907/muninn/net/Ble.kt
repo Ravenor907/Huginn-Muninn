@@ -503,10 +503,13 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
 
     // ------------------------------------------------------------------ receiving
 
-    private fun received(c: Conn, frame: ByteArray) {
+    // Throwable: nothing a stranger close by sends may take the Bluetooth thread (and the app) down.
+    private fun received(c: Conn, frame: ByteArray) = try { receivedFrame(c, frame) } catch (_: Throwable) {}
+
+    private fun receivedFrame(c: Conn, frame: ByteArray) {
         val message = c.assembler.add(frame) ?: return
         val text = String(message, Charsets.UTF_8)
-        val o = try { JSONObject(text) } catch (_: Exception) { return }
+        val o = try { SafeJson.obj(text) } catch (_: Exception) { return }
         if (o.optString("t") == "hello") {
             c.name = o.optString("name").ifBlank { c.name }.take(40)
             val key = o.optString("chatKey").ifEmpty { null } ?: o.optString("hint").ifEmpty { null }?.let { hintKey?.invoke(it) }
@@ -526,7 +529,7 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
         // Huginn says hello first; anything before it can't be told apart from a stranger's.
         val key = c.chatKey ?: return
         val f = onMessage ?: return
-        deliver.execute { try { f(key, text) } catch (_: Exception) {} }
+        deliver.execute { try { f(key, text) } catch (_: Throwable) {} }
     }
 
     // ------------------------------------------------------------------ sending

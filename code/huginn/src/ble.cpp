@@ -6,7 +6,9 @@
 #include <QBluetoothLocalDevice>
 #include <QBluetoothUuid>
 #ifdef Q_OS_LINUX
+#include <QDBusArgument>
 #include <QDBusConnection>
+#include <QDBusObjectPath>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusVariant>
@@ -237,6 +239,25 @@ bool Ble::checkAdapter()
                                 "or Huginn wasn't given permission to use it."));
         return false;
     }
+#ifdef Q_OS_LINUX
+    // From scan()'s answer, asked without waiting. A bluetoothd too busy to answer in a few seconds isn't asked to
+    // scan or connect now either: Qt's own BlueZ calls for those wait on the window's thread.
+    switch (m_adapter) {
+    case NoAdapter:
+        unusable(QStringLiteral("No Bluetooth adapter was found."));
+        return false;
+    case AdapterOff:
+        unusable(QStringLiteral("Bluetooth is turned off. Turn it on to text nearby phones without Wi-Fi."));
+        return false;
+    case AdapterSlow:
+        setError(QStringLiteral("Bluetooth stopped responding while looking for phones. Huginn will try again shortly."));
+        return false;
+    case AdapterOn:
+        break;
+    }
+    setError(QString());
+    return true;
+#endif
     // The adapter can appear later (a USB dongle, or BlueZ restarting), so look again until we have one.
     if (!m_local || !m_local->isValid()) {
         delete m_local;
@@ -298,7 +319,50 @@ void Ble::scan()
         m_askingBluez = false;
         const QDBusMessage r = done->reply();
         m_bluezUp = r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty() && r.arguments().constFirst().toBool();
-        scanNow();
+        if (!m_bluezUp || !m_running) {
+            scanNow();
+            return;
+        }
+        // Its adapters and whether one is powered, from BlueZ's object list, again without waiting.
+        m_askingBluez = true;
+        QDBusMessage objects = QDBusMessage::createMethodCall(kBluez, QStringLiteral("/"), QStringLiteral("org.freedesktop.DBus.ObjectManager"),
+                                                              QStringLiteral("GetManagedObjects"));
+        auto *w2 = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(objects, 4000), this);
+        connect(w2, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *got) {
+            got->deleteLater();
+            m_askingBluez = false;
+            const QDBusMessage a = got->reply();
+            if (a.type() != QDBusMessage::ReplyMessage || a.arguments().isEmpty()) {
+                m_adapter = (a.errorName() == QLatin1String("org.freedesktop.DBus.Error.NoReply") || a.errorName() == QLatin1String("org.freedesktop.DBus.Error.Timeout")) ? AdapterSlow : NoAdapter;
+                scanNow();
+                return;
+            }
+            bool any = false, powered = false;
+            const QDBusArgument arg = a.arguments().constFirst().value<QDBusArgument>();
+            arg.beginMap();
+            while (!arg.atEnd()) {
+                arg.beginMapEntry();
+                QDBusObjectPath path;
+                arg >> path;
+                arg.beginMap();
+                while (!arg.atEnd()) {
+                    arg.beginMapEntry();
+                    QString iface;
+                    QVariantMap props;
+                    arg >> iface >> props;
+                    arg.endMapEntry();
+                    if (iface == QLatin1String("org.bluez.Adapter1")) {
+                        any = true;
+                        powered = powered || props.value(QStringLiteral("Powered")).toBool();
+                    }
+                }
+                arg.endMap();
+                arg.endMapEntry();
+            }
+            arg.endMap();
+            m_adapter = !any ? NoAdapter : powered ? AdapterOn : AdapterOff;
+            scanNow();
+        });
     });
 #else
     m_bluezUp = true;

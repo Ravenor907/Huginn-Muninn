@@ -100,13 +100,32 @@ void Chat::setCallsAllowed(const QString &key, bool on)
     // 1.42 (security M4, as Muninn's round 17): a locked device can't tell who rings by the ring key alone, so calls off
     // works like a block for it: their ring tag (cap r2) is taken back at once, a new ring key goes to everyone else who
     // may call, and they no longer get it. Back on: the current one (and a new tag) goes to them.
+    // Their nudges still go to the ring key they hold (they never get the new one): that mailbox stays read for
+    // nudges only, so their messages keep notifying while locked after the usual two days.
     if (!on) {
+        if (m_ringKey && hasCap(key, QLatin1String(RingWire::kRingCap)))
+            m_contacts[key].insert(QStringLiteral("ringBoxHeld"), m_ringKey->mailbox());
         if (m_ringTags)
             m_ringTags->revoke(key);
         renewRingKeys(key);
-    } else if (hasCap(key, QLatin1String(RingWire::kRingCap))) {
-        sendKeys(key, true);
+    } else {
+        m_contacts[key].remove(QStringLiteral("ringBoxHeld"));
+        if (hasCap(key, QLatin1String(RingWire::kRingCap)))
+            sendKeys(key, true);
     }
+    saveContacts();
+    keepRingForNudges();
+}
+
+void Chat::keepRingForNudges()
+{
+    if (!m_ringKey || !ready())
+        return;
+    QStringList boxes;
+    for (auto it = m_contacts.cbegin(); it != m_contacts.cend(); ++it)
+        if (!callsAllowed(it.key()) && !isBlocked(it.key()) && !it.value().value(QStringLiteral("ringBoxHeld")).toString().isEmpty())
+            boxes << it.value().value(QStringLiteral("ringBoxHeld")).toString();
+    m_ringKey->keepForNudges(boxes);
 }
 void Chat::setFilesAllowed(const QString &key, bool on) { setAllowed(key, QStringLiteral("noFiles"), on); }
 

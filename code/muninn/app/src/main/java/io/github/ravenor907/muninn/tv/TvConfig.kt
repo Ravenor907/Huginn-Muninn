@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import org.json.JSONArray
 import org.json.JSONObject
 import java.math.BigInteger
@@ -294,6 +295,12 @@ object TvRules {
         return false to "not newer"
     }
 
+    /**
+     * 1.54: a config at version [newV] is above [floor], the highest version the device ever took (kept through a new
+     * pairing). Only the version it runs now ([curV], when that is the floor) may come again, for 7.2's same-version rule.
+     */
+    fun overFloor(newV: Long, curV: Long?, floor: Long): Boolean = newV > floor || (curV != null && curV >= floor && newV == curV)
+
     /** Whether a TV at config version [curV] with parents [parents] takes the disconnect [d]. */
     fun acceptDisconnect(tvKey: String, parents: Collection<String>, curV: Long, d: JSONObject): Pair<Boolean, String> {
         if (Canon.keys(d) != DISCONNECT_FIELDS) return false to "fields"
@@ -490,7 +497,7 @@ object TvRules {
     fun removedMessage(cfg: JSONObject): String = JSONObject().put("t", "removed").put("cfg", withoutPin(cfg)).toString()
 
     /** [cfg] without its "pin" (the parent PIN's hash), for anyone who isn't one of the device's parents. */
-    fun withoutPin(cfg: JSONObject): JSONObject = if (!cfg.has("pin")) cfg else JSONObject(cfg.toString()).apply { remove("pin") }
+    fun withoutPin(cfg: JSONObject): JSONObject = if (!cfg.has("pin")) cfg else SafeJson.obj(cfg.toString()).apply { remove("pin") }
 
     /**
      * The config in a "removed" [o], read only if it is a well-formed config for [tvKey], doesn't list [me] as a

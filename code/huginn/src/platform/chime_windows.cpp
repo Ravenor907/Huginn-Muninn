@@ -48,10 +48,21 @@ void Chime::stop()
 
 void Chime::play()
 {
-    if (m_wav.isEmpty())
+    if (m_wav.isEmpty() || volume() <= 0)
         return;
+    // PlaySound has no volume: below 100% a scaled copy plays. The copy it may still be reading is never changed:
+    // this Chime's sound is stopped first.
+    if (volume() < 100 && (m_scaled.isEmpty() || m_scaledAt != volume())) {
+        if (s_playing == this) {
+            PlaySoundW(nullptr, nullptr, 0);
+            s_playing = nullptr;
+        }
+        m_scaled = Platform::scaledWav(m_wav, volume() / 100.0);
+        m_scaledAt = volume();
+    }
+    const QByteArray &bytes = volume() < 100 && !m_scaled.isEmpty() ? m_scaled : m_wav;
     // Asynchronous: returns at once. A new call cuts off one still playing, which is fine for a chime.
-    if (PlaySoundW(reinterpret_cast<LPCWSTR>(m_wav.constData()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT))
+    if (PlaySoundW(reinterpret_cast<LPCWSTR>(bytes.constData()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT))
         s_playing = this;
 }
 

@@ -93,15 +93,16 @@ class NetLogicTest {
         val most = (Limits.LONGEST + 1) * 86_400L
         assertEquals(31 * 86_400L, NetLogic.SINCE_MAX_S)
         assertEquals(now - most, NetLogic.since(0, now))                         // never finished: the longest limit back
-        assertEquals(now - 600 - 2_400, NetLogic.since(now - 600, now))         // 40 minutes before the last finish
-        // Offline for more than two days: still asked from 40 minutes before the last finish.
-        assertEquals(now - 5 * 86_400 - 2_400, NetLogic.since(now - 5 * 86_400, now))
+        assertEquals(now - 600 - 10_800, NetLogic.since(now - 600, now))        // 3 hours before the last finish
+        // Offline for more than two days: still asked from 3 hours before the last finish.
+        assertEquals(now - 5 * 86_400 - 10_800, NetLogic.since(now - 5 * 86_400, now))
         assertEquals(now - most, NetLogic.since(now - 40 * 86_400, now))        // never more than the longest limit
         assertTrue(NetLogic.since(now, now) <= now - 600)                       // always past the 10-minute blur
         assertEquals(0, NetLogic.since(0, 100))
-        // Round 14: a sender 11 minutes slow, with the full 10-minute blur, is still asked for.
+        // Round 14: a sender 11 minutes slow, with the full 10-minute blur, is still asked for; 1.54: even 2 hours slow.
         val sent = now - 11 * 60 - 599
         assertTrue(sent >= NetLogic.since(now, now))
+        assertTrue(now - 2 * 3600 - 599 >= NetLogic.since(now, now))
         // The cursor is kept in the relay's time: a receiver 11 minutes fast doesn't move it ahead.
         assertEquals(now, NetLogic.cursor(now + 660, -660))
         assertEquals(now, NetLogic.cursor(now, null))

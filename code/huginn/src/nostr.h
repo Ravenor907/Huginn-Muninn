@@ -135,11 +135,15 @@ public:
     // An "OK false" reason after which that relay will never take the event (blocked, invalid, pow, restricted, error).
     // "rate-limited", "auth-required" and unknown reasons may pass later; "duplicate" means it has it.
     static bool refusedForGood(const QString &reason);
+    // An "OK false" reason that blames the event's time (created_at too far ahead or behind, already expired): this
+    // device's clock is off. The last time one came (ms, 0: never), for the status line.
+    static bool clockRefusal(const QString &reason);
+    static qint64 clockRefusedAt();
     // An event's created_at is up to this many seconds before the real time (section 20.3).
     static constexpr qint64 kBlurS = 600;
-    // Round 14: a relay is asked from this long before it last finished sending: the blur plus 30 minutes for a
-    // sender's clock that is off. What comes again is dropped as seen.
-    static constexpr qint64 kSinceSlackS = kBlurS + 30 * 60;
+    // Round 14: a relay is asked from this long before it last finished sending: the blur plus 2 hours for a
+    // sender's clock that is off (live events come on a request with no since at all). What comes again is dropped as seen.
+    static constexpr qint64 kSinceSlackS = kBlurS + 2 * 3600;
     // The longest message limit in days (section 16).
     static constexpr int kLongestDays = 30;
     // NIP-40 expiration for an event made at createdAt (already blurred): that time plus kBlurS plus the longest message
@@ -153,6 +157,8 @@ public:
     // NIP-01: the event id is the SHA-256 of [0,pubkey,created_at,kind,tags,content] as compact JSON.
     static QByteArray serialize(const QString &pubkey, qint64 createdAt, int kind, const QJsonArray &tags, const QString &content);
     static QString idOf(const QJsonObject &ev);
+    // What a refused event is remembered by: a hash of the whole event (never the id it claims), 32 bytes.
+    static QByteArray rejectKey(const QJsonObject &ev);
     // A signed event. createdAt < 0 means now; empty aux means random.
     static QJsonObject event(int kind, const QJsonArray &tags, const QString &content, const QByteArray &secret,
                              qint64 createdAt = -1, const QByteArray &aux = QByteArray());

@@ -475,6 +475,7 @@ bool RingWire::mayUse(qint64 wt, qint64 nowS) { return nowS - wt <= kWrapUseS &&
 // A day key stamped more than a day ahead (made while the clock ran fast) is not kept: it would stay the newest and
 // make a new one on every call once the clock is put back.
 bool RingWire::keep(qint64 t, qint64 nowS) { return nowS - t < kWrapKeepS && t - nowS <= kWrapAheadS; }
+bool RingWire::retain(qint64 t, qint64 nowS) { return nowS - t < kWrapKeepS && t - nowS < kWrapKeepS; }
 bool RingWire::rotateDue(qint64 newest, qint64 nowS) { return newest < 0 || nowS - newest >= kWrapNewS || newest - nowS > kWrapAheadS; }
 
 // ------------------------------------------------------------------ this device's day keys
@@ -511,10 +512,10 @@ WrapKeys::Day WrapKeys::current(qint64 nowS)
 {
     load();
     const qsizetype before = m_days.size();
-    m_days.removeIf([nowS](const Day &d) { return !RingWire::keep(d.t, nowS); });
+    m_days.removeIf([nowS](const Day &d) { return !RingWire::retain(d.t, nowS); });
     const Day *newest = nullptr;
     for (const Day &d : std::as_const(m_days))
-        if (!newest || d.t >= newest->t)
+        if (RingWire::keep(d.t, nowS) && (!newest || d.t >= newest->t))
             newest = &d;
     if (newest && !RingWire::rotateDue(newest->t, nowS)) {
         const Day keepIt = *newest;
@@ -533,7 +534,7 @@ WrapKeys::Day WrapKeys::current(qint64 nowS)
 WrapKeys::Day WrapKeys::renew(qint64 nowS)
 {
     load();
-    m_days.removeIf([nowS](const Day &d) { return !RingWire::keep(d.t, nowS); });
+    m_days.removeIf([nowS](const Day &d) { return !RingWire::retain(d.t, nowS); });
     const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
     const QString pub = b64(kp.publicDer);
     const Day d{RingWire::wrapId(pub), pub, kp.privateDer, nowS};
@@ -546,7 +547,7 @@ ChatCrypto::KeyPair WrapKeys::find(const QString &id, qint64 nowS)
 {
     load();
     for (const Day &d : std::as_const(m_days))
-        if (d.id == id && RingWire::keep(d.t, nowS))
+        if (d.id == id && RingWire::retain(d.t, nowS))
             return ChatCrypto::KeyPair{d.priv, QByteArray::fromBase64(d.pub.toLatin1())};
     return {};
 }
@@ -556,7 +557,7 @@ QList<WrapKeys::Day> WrapKeys::kept(qint64 nowS)
     load();
     QList<Day> out;
     for (const Day &d : std::as_const(m_days))
-        if (RingWire::keep(d.t, nowS))
+        if (RingWire::retain(d.t, nowS))
             out << d;
     return out;
 }
@@ -575,7 +576,7 @@ QByteArray WrapKeys::openEnvelope(const QString &content, const ChatCrypto::KeyP
     if (o.contains(QStringLiteral("w"))) {
         plain = RingWire::openWrap(o, me, [&days, nowS](const QString &id) {
             for (const Day &d : days)
-                if (d.id == id && RingWire::keep(d.t, nowS))
+                if (d.id == id && RingWire::retain(d.t, nowS))
                     return ChatCrypto::KeyPair{d.priv, QByteArray::fromBase64(d.pub.toLatin1())};
             return ChatCrypto::KeyPair();
         }, &opened);
@@ -592,7 +593,7 @@ QByteArray WrapKeys::openEnvelope(const QString &content, const ChatCrypto::KeyP
 void WrapKeys::prune(qint64 nowS)
 {
     load();
-    if (m_days.removeIf([nowS](const Day &d) { return !RingWire::keep(d.t, nowS); }) > 0)
+    if (m_days.removeIf([nowS](const Day &d) { return !RingWire::retain(d.t, nowS); }) > 0)
         save();
 }
 
@@ -754,6 +755,13 @@ void RingKey::load()
         m_older = pairOf(older);
         m_olderUntil = m_older.mailbox.isEmpty() ? 0 : older.value(QStringLiteral("until")).toInteger();
         m_made = o.value(QStringLiteral("made")).toInteger();
+        for (const QJsonValue &v : o.value(QStringLiteral("nudgeOnly")).toArray()) {
+            const Pair p = pairOf(v.toObject());
+            if (!p.mailbox.isEmpty())
+                m_nudgeOnly << p;
+        }
+        for (const QJsonValue &v : o.value(QStringLiteral("nudgeBoxes")).toArray())
+            m_nudgeBoxes << v.toString();
     }
     if (m_now.mailbox.isEmpty()) {
         m_now.keys = ChatCrypto::newKeyPair();
@@ -783,6 +791,14 @@ bool RingKey::save() const
         older.insert(QStringLiteral("until"), m_olderUntil);
         o.insert(QStringLiteral("older"), older);
     }
+    if (!m_nudgeOnly.isEmpty()) {
+        QJsonArray a;
+        for (const Pair &p : m_nudgeOnly)
+            a << pairJson(p.keys, p.secret);
+        o.insert(QStringLiteral("nudgeOnly"), a);
+    }
+    if (!m_nudgeBoxes.isEmpty())
+        o.insert(QStringLiteral("nudgeBoxes"), QJsonArray::fromStringList(m_nudgeBoxes));
     // Readable by this user only (like the certificate's key, tls.cpp), swapped in one step.
     return writeSwapped(m_path, compact(o));
 }
@@ -813,6 +829,9 @@ QStringList RingKey::mailboxes()
         out << m_old.mailbox;
     if (m_olderUntil > nowMs() && !m_older.mailbox.isEmpty())
         out << m_older.mailbox;
+    for (const Pair &p : std::as_const(m_nudgeOnly))
+        if (!out.contains(p.mailbox))
+            out << p.mailbox;
     return out;
 }
 
@@ -828,6 +847,9 @@ QList<QByteArray> RingKey::nostrSecrets()
         out << m_old.secret;
     if (m_olderUntil > nowMs() && m_older.secret.size() == 32)
         out << m_older.secret;
+    for (const Pair &p : std::as_const(m_nudgeOnly))
+        if (p.secret.size() == 32 && !out.contains(p.secret))
+            out << p.secret;
     return out;
 }
 
@@ -856,7 +878,12 @@ bool RingKey::nudge(const QString &content, RingWire::Nudge *n)
         return true;
     if (m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openNudgeContent(content, m_old.keys, n))
         return true;
-    return m_olderUntil > nowMs() && !m_older.keys.privateDer.isEmpty() && RingWire::openNudgeContent(content, m_older.keys, n);
+    if (m_olderUntil > nowMs() && !m_older.keys.privateDer.isEmpty() && RingWire::openNudgeContent(content, m_older.keys, n))
+        return true;
+    for (const Pair &p : std::as_const(m_nudgeOnly))
+        if (RingWire::openNudgeContent(content, p.keys, n))
+            return true;
+    return false;
 }
 
 void RingKey::renew()
@@ -865,8 +892,12 @@ void RingKey::renew()
     load();
     // Round 18 (m1): an old one still read keeps its own end, one place further back.
     if (m_oldUntil > nowMs() && !m_old.mailbox.isEmpty()) {
+        if (!m_older.mailbox.isEmpty())
+            retire(m_older);
         m_older = m_old;
         m_olderUntil = m_oldUntil;
+    } else if (!m_old.mailbox.isEmpty()) {
+        retire(m_old);
     }
     m_old = m_now;
     m_oldUntil = nowMs() + kOldKeepMs;
@@ -892,11 +923,13 @@ bool RingKey::dropOld()
     load();
     bool gone = false;
     if (m_olderUntil != 0 && m_olderUntil <= nowMs()) {
+        retire(m_older);
         m_older = Pair();
         m_olderUntil = 0;
         gone = true;
     }
     if (m_oldUntil != 0 && m_oldUntil <= nowMs()) {
+        retire(m_old);
         m_old = Pair();
         m_oldUntil = 0;
         gone = true;
@@ -906,8 +939,36 @@ bool RingKey::dropOld()
     return gone;
 }
 
+void RingKey::retire(const Pair &p)
+{
+    if (p.mailbox.isEmpty() || !m_nudgeBoxes.contains(p.mailbox))
+        return;
+    for (const Pair &q : std::as_const(m_nudgeOnly))
+        if (q.mailbox == p.mailbox)
+            return;
+    m_nudgeOnly << p;
+}
+
+void RingKey::keepForNudges(const QStringList &mailboxes)
+{
+    if (m_forgotten)
+        return;
+    load();
+    QStringList boxes = mailboxes;
+    boxes.removeDuplicates();
+    boxes.sort();
+    const qsizetype before = m_nudgeOnly.size();
+    m_nudgeOnly.removeIf([&boxes](const Pair &p) { return !boxes.contains(p.mailbox); });
+    if (boxes == m_nudgeBoxes && m_nudgeOnly.size() == before)
+        return;
+    m_nudgeBoxes = boxes;
+    save();
+}
+
 void RingKey::forget()
 {
+    m_nudgeOnly.clear();
+    m_nudgeBoxes.clear();
     QFile::remove(m_path);
     QFile::remove(m_path + QStringLiteral(".new"));
     m_now = Pair();
@@ -1135,13 +1196,15 @@ bool RingWire::selfTest(const QString &vectorsPath)
         const QByteArray got = openWrap(sealed, me, [&](const QString &id) { return again.find(id, t0 + 39 * kDayS); }, &o1);
         openWrap(sealed, me, [&](const QString &id) { return again.find(id, t0 + 40 * kDayS); }, &o2);
         check("own day keys", same && d1.id != d0.id && got == "hi" && o1 && !o2);
-        // A clock put back: the key stamped days ahead goes, and the one made then stays (no new key on every call).
+        // A clock put back: the key stamped days ahead stays and still opens (contacts seal to it), but a new one is
+        // made once and stays the newest (no new key on every call).
         QByteArray fastStored;
         WrapKeys fast([&fastStored] { return fastStored; }, [&fastStored](const QByteArray &b) { fastStored = b; });
         const WrapKeys::Day ahead = fast.current(t0 + 5 * kDayS);
         const WrapKeys::Day back1 = fast.current(t0);
         const WrapKeys::Day back2 = fast.current(t0 + 60);
-        check("clock put back", back1.id != ahead.id && back2.id == back1.id && fast.find(ahead.id, t0).privateDer.isEmpty()
+        check("clock put back", back1.id != ahead.id && back2.id == back1.id && !fast.find(ahead.id, t0).privateDer.isEmpty()
+                                    && fast.kept(t0).size() == 2 && retain(t0 + 5 * kDayS, t0)
                                     && !keep(t0 + kDayS + 1, t0) && keep(t0 + kDayS, t0));
     }
     // What contacts announced: the ring key as said, a day key only when newer, used for a week.

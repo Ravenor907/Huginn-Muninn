@@ -3,7 +3,9 @@ import Huginn
 
 // The 9-dot pattern, like Android's, in Huginn's colors. Draw with a finger or the mouse, or with
 // the controller or the arrow keys: move the ring to a dot, A (Enter) starts there, moving on picks
-// up each dot the ring reaches, A again is done and B starts over.
+// up each dot the ring reaches, A again is done and B starts over. X lifts the line: the ring then moves without
+// picking dots up, and A (or X again) puts it down on the dot under the ring, so diagonal and knight moves (0 to 4,
+// 0 to 5) can be drawn with the D-pad too.
 // Passing straight over a dot in between picks it up too, as on Android.
 // Settings › Privacy and lock › Hide the pattern as I draw: the line and the lit dots stay hidden;
 // each dot gives a short pulse as it's picked up, so you know it registered.
@@ -17,6 +19,7 @@ Item {
     property int pulse: -1            // the dot pulsing now (the trail hidden)
     Timer { id: pulseOff; interval: 180; onTriggered: { pad.pulse = -1; canvas.requestPaint() } }
     property bool drawing: false      // a controller pattern is under way
+    property bool lifted: false       // X: the ring moves without picking dots up
     property bool keyed: false        // the D-pad or arrow keys have been used, so the ring shows
     property point finger: Qt.point(-1, -1)
     signal done(var dots)
@@ -52,17 +55,19 @@ Item {
         const d = dots
         dots = []
         drawing = false
+        lifted = false
         finger = Qt.point(-1, -1)
         canvas.requestPaint()
         if (d.length) done(d)
     }
-    function clear() { dots = []; drawing = false; canvas.requestPaint() }
+    function clear() { dots = []; drawing = false; lifted = false; finger = Qt.point(-1, -1); canvas.requestPaint() }
     // A wrong pattern: a short shake, as on the phone.
     function shake() { if (Theme.motion) shaking.restart() }
 
     function move(to) {
         cursor = to
-        if (drawing) add(to)
+        if (drawing && !lifted) add(to)
+        else if (drawing) finger = center(to)   // lifted: the line follows the ring to where it goes down
     }
     // B is only used here while a pattern is under way; otherwise the lock gets it (Back).
     function handleButton(b) {
@@ -73,8 +78,14 @@ Item {
         case "left": move(cursor % 3 ? cursor - 1 : cursor); break
         case "right": move(cursor % 3 < 2 ? cursor + 1 : cursor); break
         case "a":
-            if (drawing) finish()
+            if (drawing && lifted) { lifted = false; finger = Qt.point(-1, -1); add(cursor) }
+            else if (drawing) finish()
             else { dots = []; drawing = true; add(cursor) }
+            break
+        case "x":
+            if (!drawing) return false
+            if (lifted) { lifted = false; finger = Qt.point(-1, -1); add(cursor) }
+            else lifted = true
             break
         case "b":
             if (!drawing) return false

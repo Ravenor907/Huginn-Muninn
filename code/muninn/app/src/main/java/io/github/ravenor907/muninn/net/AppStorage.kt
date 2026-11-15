@@ -35,7 +35,8 @@ object AppStorage {
         Spot('c', "app", Kind.SENT, "app"),
         // Muninn's own update downloads.
         Spot('c', "updates", Kind.UPDATE, "updates"),
-        // Files on their way in or out over the internet, and camera shots before sending.
+        // Left in the cache by older versions, and camera shots before sending. Copies waiting to go and files still
+        // arriving live outside the cache (FileLink.Host.filesDir), so neither Android nor Clear caches can lose them.
         Spot('c', "files", Kind.CACHE, "files"),
         Spot('c', "camera", Kind.CACHE, "camera"),
         // An app's details read on a Kids' TV.

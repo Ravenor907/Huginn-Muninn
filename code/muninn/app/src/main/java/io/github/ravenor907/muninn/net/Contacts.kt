@@ -39,7 +39,7 @@ class Contacts(context: Context, private val vault: Vault) {
         // Keep what was already learned about them (caps, the s1 binding, their message limit): a group change
         // must never forget it, or messages to them go out in a form their app has stopped taking.
         val c = (old ?: Contact(chatKey, "", mb, verified = false)).copy(name = name.take(40).ifBlank { old?.name ?: "Someone" },
-            mailbox = mb, ratchet = true, groupOnly = true, caps = old?.caps.orEmpty() + setOf("r1", "g1", "c1"))
+            mailbox = mb, ratchet = true, groupOnly = true, caps = old?.caps.orEmpty() + ASSUMED)
         if (old == c) return
         _all.value = _all.value.filterNot { it.chatKey == chatKey } + c
         save()
@@ -89,11 +89,19 @@ class Contacts(context: Context, private val vault: Vault) {
     }
 
     private fun load(): List<Contact> = try {
-        val a = JSONArray(vault.read(file) ?: return emptyList())
+        val a = SafeJson.arr(vault.read(file) ?: return emptyList())
         (0 until a.length()).map { ChatWire.contactFromJson(a.getJSONObject(it)) }
     } catch (e: Exception) { vault.loadFailed(file, e); emptyList() }
 
     companion object {
+        /** What a group peer is assumed to speak before anything came from them (3.7): never proof of more. */
+        val ASSUMED = setOf("r1", "g1", "c1")
+
+        /**
+         * 1.54: nothing is known of what their app speaks: no caps, or only the assumed ones (a real app always says
+         * more). Such a peer counts as unknown (spec 6.3, 6.7): included in group sends, rung, and probed, as Huginn does.
+         */
+        fun unknownCaps(caps: Set<String>): Boolean = ASSUMED.containsAll(caps)
         const val PREFIX = ChatWire.PREFIX
         /** What the QR holds: a page that opens Muninn, or offers the download if it isn't installed.
          *  The code is after "#", which browsers never send to the server. */
@@ -116,7 +124,7 @@ class Contacts(context: Context, private val vault: Vault) {
             val i = text.indexOf(PREFIX)
             if (i < 0) return 0
             val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
-            return try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(body))).optLong("x") * 1000 } catch (e: Exception) { 0 }
+            return try { SafeJson.obj(String(java.util.Base64.getUrlDecoder().decode(body))).optLong("x") * 1000 } catch (e: Exception) { 0 }
         }
 
         /** An invite link that works once: whoever adds it is added back at once, no asking (the token is used up). */
@@ -125,7 +133,7 @@ class Contacts(context: Context, private val vault: Vault) {
             val i = text.indexOf(PREFIX)
             if (i < 0) return false
             val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
-            return try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(body))).optBoolean("1") } catch (e: Exception) { false }
+            return try { SafeJson.obj(String(java.util.Base64.getUrlDecoder().decode(body))).optBoolean("1") } catch (e: Exception) { false }
         }
 
         /** Finds a contact code anywhere in pasted text (a whole message is fine). */
@@ -135,7 +143,7 @@ class Contacts(context: Context, private val vault: Vault) {
             if (i < 0) return null
             val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
             return try {
-                val o = JSONObject(String(java.util.Base64.getUrlDecoder().decode(body)))
+                val o = SafeJson.obj(String(java.util.Base64.getUrlDecoder().decode(body)))
                 val key = o.getString("k")
                 ChatCrypto.publicFrom(key)   // must be a real key
                 // Whoever gave you their code is who they say: the code itself carries their key.
@@ -166,7 +174,7 @@ class Folders(private val read: () -> String?, private val write: (String) -> Un
     private fun load(): List<Folder> {
         if (text == null) return DEFAULTS.map { Folder(newId(), it) }.also { save(it, emptyList()) }
         return try {
-            val a = JSONObject(text).getJSONArray("folders")
+            val a = SafeJson.obj(text).getJSONArray("folders")
             val l = (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
                 val k = o.optJSONArray("k")
                 Folder(o.getString("id"), o.getString("n"), if (k == null) emptyList() else (0 until k.length()).map { k.getString(it) },
@@ -179,7 +187,7 @@ class Folders(private val read: () -> String?, private val write: (String) -> Un
     }
 
     private fun loadTop(): List<String> = try {
-        val a = JSONObject(text ?: return emptyList()).optJSONArray("top")
+        val a = SafeJson.obj(text ?: return emptyList()).optJSONArray("top")
         if (a == null) emptyList() else (0 until a.length()).map { a.getString(it) }
     } catch (e: Exception) { emptyList() }
 
@@ -310,7 +318,7 @@ class Trash(private val read: () -> String?, private val write: (String) -> Unit
     val all: StateFlow<Map<String, Long>> = _all.asStateFlow()
 
     private fun load(): Map<String, Long> = try {
-        val o = JSONObject(read() ?: return emptyMap()).getJSONObject("trash")
+        val o = SafeJson.obj(read() ?: return emptyMap()).getJSONObject("trash")
         o.keys().asSequence().associateWith { o.getLong(it) }
     } catch (e: Exception) { emptyMap() }
 
@@ -367,7 +375,7 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     val all: StateFlow<State> = _all.asStateFlow()
 
     private fun load(): State = try {
-        val o = JSONObject(read() ?: return State())
+        val o = SafeJson.obj(read() ?: return State())
         val m = o.optJSONObject("muted")
         fun set(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
         val c = o.optJSONObject("colors")

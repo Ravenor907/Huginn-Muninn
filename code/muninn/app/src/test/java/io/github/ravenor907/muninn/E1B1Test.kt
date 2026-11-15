@@ -184,7 +184,10 @@ class E1B1Test {
         assertFalse(ChatWire.useRatchet("file", c.copy(caps = c.caps + "e1")))
     }
 
-    /** A day key stamped more than a day ahead (the clock was set back) is dropped, and doesn't make a new key every call. */
+    /**
+     * A day key stamped more than a day ahead (the clock was set back) isn't the newest any more, and doesn't make a new
+     * key every call. 1.54: it is kept (it still opens what contacts wrapped to it) until 40 days old by its own stamp.
+     */
     @Test fun clockSetBackMakesOneNewDayKey() {
         var stored: String? = null
         var writes = 0
@@ -193,13 +196,17 @@ class E1B1Test {
         val ahead = keys.current(t0 + 3 * RingWire.DAY_S)
         val now = keys.current(t0)
         assertTrue(now.id != ahead.id)
-        assertNull(keys.find(ahead.id, t0))
+        assertNotNull(keys.find(ahead.id, t0))
+        keys.prune(t0)
+        assertNotNull(keys.find(ahead.id, t0))
         val w = writes
         assertEquals(now.id, keys.current(t0 + 60).id)
         assertEquals(now.id, keys.current(t0 + 3600).id)
         assertEquals(w, writes)
-        assertFalse(RingWire.keep(t0 + RingWire.DAY_S + 1, t0))
-        assertTrue(RingWire.keep(t0 + RingWire.DAY_S, t0))
+        assertTrue(RingWire.keep(t0 + RingWire.DAY_S + 1, t0))
+        assertFalse(RingWire.usable(t0 + RingWire.DAY_S + 1, t0))
+        assertTrue(RingWire.usable(t0 + RingWire.DAY_S, t0))
+        assertFalse(RingWire.keep(t0 - RingWire.WRAP_KEEP_S, t0))
         // Less than a day ahead: kept and used, still no new key every call.
         val k2 = WrapKeys({ null }, { })
         val soon = k2.current(t0 + 12 * 3600)

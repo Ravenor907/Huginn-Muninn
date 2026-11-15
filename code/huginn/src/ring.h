@@ -84,6 +84,9 @@ Announce announceOf(const QJsonObject &r, qint64 nowS);
 bool mayUse(qint64 wt, qint64 nowS);
 // Kept: under 40 days old and no more than a day ahead (a key stamped further ahead is deleted).
 bool keep(qint64 t, qint64 nowS);
+// What this device keeps of its own day keys: under 40 days old by their own stamp (and under 40 days ahead). One stamped ahead of the clock (the
+// clock was put back) is kept and still opens what contacts sealed to it; it only never counts as the newest (keep).
+bool retain(qint64 t, qint64 nowS);
 bool rotateDue(qint64 newest, qint64 nowS);   // newest < 0: none yet
 
 // Caps n1 and n2 (protocol.md 23.3): nudges. A real message (text, photo, voice or video message, file offer, group
@@ -198,8 +201,9 @@ public:
         qint64 t = 0;
     };
     WrapKeys(std::function<QByteArray()> read, std::function<void(const QByteArray &)> write);
-    // The day key to announce now: a new one when the newest is a day old. Old ones past keeping go, and so do ones
-    // stamped more than a day ahead (a clock put back never makes a new key on every call).
+    // The day key to announce now: a new one when the newest is a day old. Old ones past keeping go; ones stamped more
+    // than a day ahead stay (contacts still seal to them) but never count as the newest, so a clock put back makes
+    // one new key, not one on every call.
     Day current(qint64 nowS);
     // A new day key now, whatever the newest's age (after a restore: the backup's keys may be older than what
     // contacts hold). It is the one current() gives from then on.
@@ -284,6 +288,10 @@ public:
     qint64 madeAt();
     // True (once) when the old ring mailbox just stopped being read.
     bool dropOld();
+    // The ring mailboxes a contact with calls off here still holds (they never get a new key): a replaced one of these is
+    // still read after kOldKeepMs, for nudges only (it never rings), so their messages keep notifying while locked.
+    // Ones no longer named go. Saved with the keys.
+    void keepForNudges(const QStringList &mailboxes);
     // Erase everything and Move: the file goes, and no ring mailbox is read. A new key is made only when publicKey() or
     // mailbox() is asked for again (Chat, once there is a vault again).
     void forget();
@@ -303,6 +311,9 @@ private:
     // lock set and then changed the same day) never stop a mailbox a contact may still ring early.
     Pair m_older;
     qint64 m_olderUntil = 0;
+    QList<Pair> m_nudgeOnly;      // replaced keys read for nudges only (keepForNudges)
+    QStringList m_nudgeBoxes;     // the mailboxes asked for there
+    void retire(const Pair &p);   // a pair stops being read: kept for nudges when asked for
     qint64 m_made = 0;       // ms: when m_now was made
     bool m_loaded = false;
     bool m_forgotten = false;

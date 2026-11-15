@@ -272,7 +272,8 @@ public:
     static QVariant saved(const QString &key, const QVariant &fallback) { return store().value(key, fallback); }
     // Every QSettings Huginn opens: org()'s "Huginn" in the default format. On the Windows portable build that is an
     // INI file in the data folder beside Huginn.exe, never the registry (platform/portable.cpp sets it at start);
-    // elsewhere it is the usual settings file.
+    // elsewhere it is the usual settings file. Qt's system-wide fallback is pointed inside the data folder there
+    // (portable.cpp pointQtAt), so a C:\ProgramData\Huginn\Huginn.ini another account made is never read.
     static QSettings store() { return QSettings(QSettings::defaultFormat(), QSettings::UserScope, org(), QStringLiteral("Huginn")); }
     // The organization Huginn's settings are kept under: "Huginn", or the self-tests' own name on their throwaway
     // profile (WifiSelfTest::isolate), so they never touch the real ones.

@@ -30,6 +30,7 @@
 
 #include "../platform/notify.h"
 #include "../platform/chime.h"
+#include "../sounds.h"
 
 namespace
 {
@@ -730,11 +731,13 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
 void CallManager::ring(bool on)
 {
     if (on) {
-        // Do not disturb: the call still shows, without sound.
-        if (Settings::hushed())
+        // Do not disturb, quiet hours or Settings › Notifications › Call ringtone off: the call still shows (and its
+        // notification), without sound.
+        if (Settings::hushed() || !Sounds::ringOn())
             return;
         m_ringtone->play();
         m_ringer.start();
+        Sounds::note(QStringLiteral("Call"), peerName(), QStringLiteral("Ringing"));
     } else {
         m_ringer.stop();
         m_ringtone->stop();

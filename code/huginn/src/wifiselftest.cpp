@@ -3,6 +3,7 @@
 #include "chat.h"
 #include "chatcrypto.h"
 #include "chatwire.h"
+#include "filelink.h"
 #include "lan.h"
 #include "localsend.h"
 #include "platform/chime.h"
@@ -164,6 +165,10 @@ void begin(Run *run)
 {
     run->check("home-network address rules", Lan::selfTest());
     run->check("received file names stay in the save folder", LocalSend::selfTest());
+    run->check("the shared relay count is believed only up to 66 GB a day so far this month",
+               FileLink::relayShared(1000 * 1000000000LL, 1) == FileLink::kSharedPerDayBytes
+                   && FileLink::relayShared(500 * 1000000000LL, 20) == 500 * 1000000000LL && FileLink::relayShared(-5, 3) == 0
+                   && FileLink::relayShared(5000 * 1000000000LL, 31) < FileLink::kRelayStopBytes * 3);
     std::printf("wifi resources: %s, %s\n", qPrintable(Platform::resource(QStringLiteral("raven_message.wav"))),
                 qPrintable(Platform::resource(QStringLiteral("raven-gold.png"))));
 #ifdef Q_OS_WIN

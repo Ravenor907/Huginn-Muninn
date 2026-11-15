@@ -3,6 +3,7 @@
 #include "talkkey.h"
 #include "call/roommanager.h"
 #include "platform/chime.h"
+#include "sounds.h"
 
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -188,6 +189,8 @@ void GlobalKeys::cue(bool on, bool deafen)
         (on ? m_deafOn : m_deafOff)->play();
     else
         (on ? m_cueOn : m_cueOff)->play();
+    Sounds::note(deafen ? QStringLiteral("Deafen sound") : QStringLiteral("Mute sound"), QString(),
+                 QStringLiteral("Mute or deafen was pressed in a call or voice room"));
 }
 
 bool GlobalKeys::everywhere() const

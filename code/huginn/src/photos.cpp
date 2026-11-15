@@ -14,20 +14,47 @@ namespace Photos
 {
 namespace
 {
+QByteArray encodeAt(const QImage &img, int q)
+{
+    QByteArray out;
+    QBuffer buf(&out);
+    buf.open(QIODevice::WriteOnly);
+    img.save(&buf, "JPEG", q);
+    return out;
+}
+
 QByteArray encode(QImage img, int limit)
 {
-    // Best quality that fits the size limit; shrinks further if even low quality doesn't fit.
+    // Best quality that fits the size limit; shrinks further if even low quality doesn't fit. The first try's size
+    // says how far down to start, so a big picture isn't encoded six times over.
+    static const int kQualities[] = {85, 75, 65, 55, 45, 35};
     while (true) {
-        for (int q : {85, 75, 65, 55, 45, 35}) {
-            QByteArray out;
-            QBuffer buf(&out);
-            buf.open(QIODevice::WriteOnly);
-            img.save(&buf, "JPEG", q);
+        const QByteArray first = encodeAt(img, kQualities[0]);
+        if (first.size() <= limit)
+            return first;
+        // Roughly, each step down saves a fifth; steps that can't fit are passed over.
+        int at = 1;
+        for (qint64 guess = first.size() * 4 / 5; at < 5 && guess > limit * 5 / 4; guess = guess * 4 / 5)
+            ++at;
+        // From the guess down; one step back up first, in case it was too pessimistic.
+        for (int i = qMax(1, at - 1); i < 6; ++i) {
+            const QByteArray out = encodeAt(img, kQualities[i]);
             if (out.size() <= limit)
                 return out;
         }
         img = img.scaled(qMax(1, int(img.width() * 0.75)), qMax(1, int(img.height() * 0.75)), Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
+}
+
+// No transparency in a JPEG: a see-through picture goes on white (as GIF stills do), anything else as it is.
+QImage opaque(const QImage &img)
+{
+    if (!img.hasAlphaChannel())
+        return img.convertToFormat(QImage::Format_RGB32);
+    QImage flat(img.size(), QImage::Format_RGB32);
+    flat.fill(Qt::white);
+    QPainter(&flat).drawImage(0, 0, img);
+    return flat;
 }
 }
 
@@ -35,14 +62,18 @@ QByteArray prepare(const QString &path, bool hd)
 {
     QImageReader r(path);
     r.setAutoTransform(true);   // phones and cameras store some photos sideways; turn them upright
+    const int side = hd ? 2048 : 640;
+    // Decoded at about the size it is sent at, not in full: a JPEG decodes straight at a fraction of its size, so a
+    // 48 MP photo never needs its whole picture in memory. Twice the size first, then smoothed down, keeps it sharp.
+    const QSize full = r.size();
+    if (full.isValid() && qMax(full.width(), full.height()) > 2 * side)
+        r.setScaledSize(full.scaled(2 * side, 2 * side, Qt::KeepAspectRatio));
     QImage img = r.read();
     if (img.isNull())
         return {};
-    const int side = hd ? 2048 : 640;
     if (qMax(img.width(), img.height()) > side)
         img = img.scaled(side, side, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    img = img.convertToFormat(QImage::Format_RGB32);   // no transparency in a JPEG
-    return scrub(encode(img, hd ? 2 * 1024 * 1024 : 60 * 1024));
+    return scrub(encode(opaque(img), hd ? 2 * 1024 * 1024 : 60 * 1024));
 }
 
 QByteArray prepareImage(const QImage &in, int side, int limit)
@@ -52,8 +83,7 @@ QByteArray prepareImage(const QImage &in, int side, int limit)
     QImage img = in;
     if (qMax(img.width(), img.height()) > side)
         img = img.scaled(side, side, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    img = img.convertToFormat(QImage::Format_RGB32);   // no transparency in a JPEG
-    return scrub(encode(img, limit));
+    return scrub(encode(opaque(img), limit));
 }
 
 QByteArray scrub(const QByteArray &b)

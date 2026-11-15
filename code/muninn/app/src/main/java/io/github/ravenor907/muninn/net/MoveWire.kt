@@ -66,7 +66,7 @@ object MoveWire {
         if (i < 0) return null
         val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
         return try {
-            val o = JSONObject(String(Base64.getUrlDecoder().decode(body)))
+            val o = SafeJson.obj(String(Base64.getUrlDecoder().decode(body)))
             val a = o.getJSONArray("a")
             val c = Code((0 until minOf(a.length(), 8)).map { a.getString(it) }.filter { lanAddr(it) }, o.getString("e"), Base64.getUrlDecoder().decode(o.getString("s")),
                 o.optString("n").take(40).ifBlank { "your other device" }, o.getString("app"))
@@ -117,6 +117,76 @@ object MoveWire {
             out.write(ByteBuffer.allocate(4).putInt(data.size).array()); out.write(data)
         }
         return out.toByteArray()
+    }
+
+    /**
+     * [pack], streamed: entries go in one by one, and each [PART] of the payload goes to [emit] as soon as it's full, so
+     * only one entry and one part are ever in memory. [finish] sends the last part; then [sha] and [size] are the payload's.
+     */
+    class Packer(private val emit: (Int, ByteArray) -> Unit) {
+        private val buf = ByteArray(PART)
+        private var at = 0
+        private var index = 0
+        private val md = MessageDigest.getInstance("SHA-256")
+        var size = 0L
+            private set
+        lateinit var sha: String
+            private set
+
+        private fun put(b: ByteArray) {
+            var o = 0
+            while (o < b.size) {
+                val t = minOf(b.size - o, PART - at)
+                System.arraycopy(b, o, buf, at, t); at += t; o += t
+                if (at == PART) flush()
+            }
+        }
+        private fun flush() {
+            val part = buf.copyOf(at)
+            md.update(part); size += at
+            emit(index++, part); at = 0
+        }
+        fun entry(name: String, data: ByteArray) {
+            val n = name.toByteArray()
+            put(ByteBuffer.allocate(4).putInt(n.size).array()); put(n)
+            put(ByteBuffer.allocate(4).putInt(data.size).array()); put(data)
+        }
+        fun finish() {
+            if (at > 0 || index == 0) flush()
+            sha = ChatWire.hex(md.digest())
+        }
+    }
+
+    /** A part that didn't open (another key, changed, or missing): which one. */
+    class BadPart(val index: Int) : java.io.IOException("part $index didn't open")
+
+    /**
+     * The payload read back part by part ([part] gives part i opened, or null when it doesn't open), hashing as it goes:
+     * [sha] once read to the end.
+     */
+    class Parts(private val n: Int, private val part: (Int) -> ByteArray?) : java.io.InputStream() {
+        private val md = MessageDigest.getInstance("SHA-256")
+        private var i = 0
+        private var cur = ByteArray(0)
+        private var at = 0
+        private fun next(): Boolean {
+            while (at >= cur.size) {
+                if (i >= n) return false
+                cur = part(i) ?: throw BadPart(i)
+                md.update(cur); at = 0; i++
+            }
+            return true
+        }
+        override fun read(): Int = if (!next()) -1 else cur[at++].toInt() and 0xFF
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            if (!next()) return -1
+            val t = minOf(len, cur.size - at)
+            System.arraycopy(cur, at, b, off, t); at += t
+            return t
+        }
+        /** The payload's hash, once every part was read. */
+        fun sha(): String { while (next()) { at = cur.size }; return ChatWire.hex(md.digest()) }
     }
 
     fun unpack(blob: ByteArray): List<Pair<String, ByteArray>>? = try {

@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.content.Context
 import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
@@ -85,7 +86,7 @@ object HavDevice {
     }
 
     private fun read(s: String): HavText? {
-        val json = JSONObject(s).getString("text")
+        val json = SafeJson.obj(s).getString("text")
         val map = Havamal.textIn(json) ?: return null
         return HavText(Havamal.hash(json), json, map)
     }
@@ -185,7 +186,7 @@ object HavParent {
     fun load(app: Muninn) {
         _mine.value = try {
             app.vault.read(file(app))?.let { s ->
-                val o = JSONObject(s)
+                val o = SafeJson.obj(s)
                 val json = o.getString("text")
                 val map = Havamal.textIn(json) ?: return@let null
                 Mine(HavText(Havamal.hash(json), json, map), map.size, o.optInt("of", map.size))

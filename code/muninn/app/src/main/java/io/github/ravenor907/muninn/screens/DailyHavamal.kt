@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -124,7 +125,7 @@ object DailyHav {
         if (loaded) return
         // Round 19: a read that failed (the vault not open yet) is tried again next time, not taken as "none".
         var failed = false
-        val o = try { app.vault.read(file(app))?.let { JSONObject(it) } } catch (e: Exception) { failed = file(app).exists(); null }
+        val o = try { app.vault.read(file(app))?.let { SafeJson.obj(it) } } catch (e: Exception) { failed = file(app).exists(); null }
         val map = o?.optString("text")?.let { Havamal.textIn(it) }
         _own.value = if (o == null || map == null) null else Own(map, map.size, o.optInt("of", map.size))
         loaded = !failed

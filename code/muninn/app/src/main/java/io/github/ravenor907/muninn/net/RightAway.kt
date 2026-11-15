@@ -18,7 +18,7 @@ class RightAway(private val read: () -> String?, private val write: (String) -> 
     val all: StateFlow<State> = _all.asStateFlow()
 
     private fun load(): State = try {
-        val o = JSONObject(read() ?: return State())
+        val o = SafeJson.obj(read() ?: return State())
         fun set(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
         State(set("added"), set("removed"))
     } catch (e: Exception) { State() }

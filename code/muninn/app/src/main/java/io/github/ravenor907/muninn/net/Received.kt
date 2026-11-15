@@ -70,6 +70,33 @@ object Received {
         } catch (_: Exception) { false }
     }
 
+    /** Kinds that install an app, run as a program or can load things from the internet when opened: asked first. */
+    private val ASK_FIRST = FileLink.RISKY + setOf("apks", "xapk", "apkm", "html", "htm", "xhtml", "svg", "mht", "mhtml")
+
+    /** Opening [name] asks first ([openChecked]). */
+    fun asksFirst(name: String): Boolean = Sharing.cleanName(name).substringAfterLast('.', "").lowercase().trim() in ASK_FIRST
+
+    /**
+     * Open, from a button: an app installer, a program or a web page asks first (its real kind, said plainly), and
+     * "Nothing on this device opens this kind of file." when nothing does.
+     */
+    fun openChecked(context: Context, uri: String, name: String) {
+        val go = { if (!open(context, uri, name)) io.github.ravenor907.muninn.ui.Ui.say("Nothing on this device opens this kind of file.", true) }
+        if (!asksFirst(name)) { go(); return }
+        val shown = Sharing.cleanName(name)
+        val app = FileText.isApp(shown)
+        val what = when {
+            app -> "This file installs an app on this phone."
+            Sharing.kindOf(shown) == "Program" || shown.substringAfterLast('.', "").lowercase() in setOf("exe", "msi", "bat", "cmd", "ps1", "vbs", "js", "jar", "scr", "sh") ->
+                "This file is a program."
+            shown.substringAfterLast('.', "").lowercase() in setOf("html", "htm", "xhtml", "svg", "mht", "mhtml") ->
+                "This file is a web page or drawing that can reach the internet by itself when it opens."
+            else -> "This kind of file can hold apps or programs."
+        }
+        io.github.ravenor907.muninn.ui.Ui.sure(io.github.ravenor907.muninn.ui.Ask(if (app) "Install an app?" else "Open $shown?",
+            "$what ${FileLink.RISKY_NOTE}", "Open", danger = true) { go() })
+    }
+
     /** A saved file is still there (Files: "Moved or deleted" when it isn't). */
     fun exists(context: Context, uri: String): Boolean = uri.isNotEmpty() && try {
         context.contentResolver.openInputStream(Uri.parse(uri))?.use { true } ?: false

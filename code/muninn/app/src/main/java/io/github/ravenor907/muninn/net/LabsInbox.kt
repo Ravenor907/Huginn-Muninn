@@ -34,7 +34,7 @@ class LabsInbox(context: Context, private val vault: Vault) {
         loaded = true
         val list = try {
             vault.read(store)?.let { t ->
-                val a = JSONArray(t)
+                val a = SafeJson.arr(t)
                 (0 until a.length()).map { a.getJSONObject(it) }.map {
                     Report(it.getString("id"), it.getString("k"), it.optString("n"), it.optString("p").ifEmpty { null }, it.optString("a"),
                         it.optString("v"), it.optString("os"), it.optString("m"), it.optString("t"), it.optLong("at"), it.optString("s"))

@@ -24,7 +24,9 @@ import java.net.Inet4Address
  */
 object Move {
     /** On the new device. [state]: "shown" (code on screen), "hello" (emoji to check), "receiving", "done". */
-    data class Incoming(val state: String, val emoji: String = "", val from: String = "", val have: Int = 0, val of: Int = 0, val confirmed: Boolean = false)
+    data class Incoming(val state: String, val emoji: String = "", val from: String = "", val have: Int = 0, val of: Int = 0, val confirmed: Boolean = false,
+                        /** "failed": what went wrong. */
+                        val note: String = "")
     /** On the old device. [state]: "checking" (emoji to check), "moving" (locked, sending), "moved". */
     data class Outgoing(val state: String, val emoji: String = "", val to: String = "", val sent: Int = 0, val of: Int = 0, val note: String = "",
                         /** "Moved to": linking is still possible (10 minutes after the move). */
@@ -57,20 +59,23 @@ object Move {
 
     // ---- what's shown before the vault opens (no secrets)
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private fun shown(c: Context, side: String) = prefs(c).getString(side, null)?.let { try { JSONObject(it) } catch (e: Exception) { null } }
+    private fun shown(c: Context, side: String) = prefs(c).getString(side, null)?.let { try { SafeJson.obj(it) } catch (e: Exception) { null } }
     private fun show(c: Context, side: String, o: JSONObject?) { prefs(c).edit().apply { if (o == null) remove(side) else putString(side, o.toString()) }.commit() }
 
     // ---- the secrets, in the vault
-    private fun vaultJson(a: Muninn): JSONObject = try { a.vault.read(File(a.filesDir, FILE))?.let { JSONObject(it) } } catch (e: Exception) { null } ?: JSONObject()
+    private fun vaultJson(a: Muninn): JSONObject = try { a.vault.read(File(a.filesDir, FILE))?.let { SafeJson.obj(it) } } catch (e: Exception) { null } ?: JSONObject()
     private fun json(a: Muninn, side: String): JSONObject? = vaultJson(a).optJSONObject(side)
     private fun put(a: Muninn, side: String, o: JSONObject?) {
         val all = vaultJson(a)
         if (o == null) all.remove(side) else all.put(side, o)
         try { if (all.length() == 0) File(a.filesDir, FILE).delete() else a.vault.write(File(a.filesDir, FILE), all.toString()) } catch (_: Exception) {}
         val mirror = o?.let { JSONObject().put("state", it.optString("state")).put("to", it.optString("to")).put("from", it.optString("from"))
-            .put("emoji", it.optString("emoji")).put("at", it.optLong("at")) }
+            .put("emoji", it.optString("emoji")).put("at", it.optLong("at")).put("note", it.optString("note")) }
         show(a, side, mirror)
     }
+
+    /** States of a move to here after which nothing more is taken. */
+    private val FINAL = setOf("taking", "taken", "done", "failed")
 
     /** Muninn started (before the vault opens): an unfinished move on this device goes on, locked. */
     fun init(a: Muninn) {
@@ -82,11 +87,19 @@ object Move {
                 "checking" -> show(a, "out", null)
             }
         }
-        shown(a, "in")?.let { o -> _incoming.value = Incoming(o.optString("state"), o.optString("emoji"), o.optString("from")) }
+        shown(a, "in")?.let { o -> _incoming.value = Incoming(o.optString("state"), o.optString("emoji"), o.optString("from"), note = o.optString("note")) }
     }
 
     /** The vault is open: a "Moved to" whose 10 minutes are over drops K. */
     fun ready(a: Muninn) {
+        // A take-in that never finished (Muninn stopped in the middle, out of memory or killed): failed, said once, and
+        // never started again by itself, so it can't stop Muninn over and over. The old device hears "failed".
+        json(a, "in")?.let { s ->
+            if (s.optString("state") == "taking") {
+                File(a.cacheDir, "move-in").deleteRecursively()
+                fail(a, s, "Muninn stopped while taking everything in. Nothing here changed. Try again, or leave pictures out with a backup instead.")
+            }
+        }
         val o = json(a, "out") ?: return
         if (o.optString("state") == "moved" && System.currentTimeMillis() - o.optLong("at") > LINK_MS) {
             put(a, "out", JSONObject().put("state", "moved").put("to", o.optString("to")).put("at", o.optLong("at")))
@@ -140,11 +153,11 @@ object Move {
     fun handle(body: String): Pair<Int, String> = synchronized(lock) {
         val a = app ?: return 503 to "{}"
         if (!a.ready.value) return 503 to "{}"
-        val p = try { JSONObject(body) } catch (e: Exception) { return 400 to "{}" }
+        val p = try { SafeJson.obj(body) } catch (e: Exception) { return 400 to "{}" }
         val s = json(a, "in") ?: return 404 to "{}"
         when (p.optString("t")) {
             "hello" -> {
-                if (s.optString("state") == "done") return 409 to "{}"
+                if (s.optString("state") in FINAL) return 409 to "{}"
                 val e = p.optString("e")
                 // Once parts started coming, only the same old device.
                 if (s.has("old") && s.optString("old") != e && s.optString("state") != "shown") return 409 to "{}"
@@ -160,7 +173,7 @@ object Move {
                 return 200 to JSONObject().put("m", MoveWire.readyMac(k, e)).toString()
             }
             "part" -> {
-                if (s.optString("state") == "done") return 409 to "{}"
+                if (s.optString("state") in FINAL) return 409 to "{}"
                 val k = s.optString("k").ifEmpty { return 403 to "{}" }.let { ChatCrypto.b64d(it) }
                 val i = p.optInt("i", -1); val n = p.optInt("n"); val h = p.optString("h")
                 if (n < 1 || n > 100_000 || i !in 0 until n || h.length != 64) return 400 to "{}"
@@ -180,6 +193,9 @@ object Move {
                 val h = s.optString("h"); val n = s.optInt("n")
                 val st = when {
                     s.optString("state") == "done" -> "done"
+                    // Being taken in, or taken in and restarting: never "need" again, so nothing is sent or taken in twice.
+                    s.optString("state") == "taking" || s.optString("state") == "taken" -> "taking"
+                    s.optString("state") == "failed" -> "failed"
                     h.isEmpty() || missing(a, n).isNotEmpty() -> "need"
                     !s.optBoolean("ok") -> "confirm"
                     else -> { Thread { try { finishIfReady(a) } catch (_: Exception) {} }.start(); "taking" }
@@ -213,26 +229,52 @@ object Move {
         if (!s.optBoolean("ok") || s.optString("state") != "receiving") return
         val n = s.optInt("n"); val h = s.optString("h")
         if (n < 1 || missing(a, n).isNotEmpty()) return
+        if (!a.ready.value) return
         val k = ChatCrypto.b64d(s.getString("k"))
         val dir = File(a.cacheDir, "move-in")
-        val out = java.io.ByteArrayOutputStream()
-        for (i in 0 until n) out.write(MoveWire.open(k, File(dir, i.toString()).readText(), MoveWire.partAad(i, n, h)) ?: run { File(dir, i.toString()).delete(); return })
-        val blob = out.toByteArray()
-        if (MoveWire.sha256Hex(blob) != h) { dir.deleteRecursively(); return }
-        val entries = MoveWire.unpack(blob) ?: return
-        val files = (entries.firstOrNull { it.first == COMMON }?.let { MoveCommon.toMuninn(a, JSONObject(String(it.second))) } ?: entries)
-            .filter { it.first != FILE && it.first != OUT_FILE }
-        if (!a.ready.value) return
+        // From here on status says "taking": the old device waits, and a second take-in can't start.
+        put(a, "in", s.put("state", "taking"))
         // Done, and when: kept in the restored vault, so the old device hears "done" and may ask to link for 10 minutes.
-        val done = s.put("state", "done").put("at", System.currentTimeMillis())
-        // What was here is kept in a "kept-" folder first, as Restore does, so a mistaken move loses nothing.
-        try { a.vault.keepCopy() } catch (_: Exception) { }
-        Backup.restore(a, a.vault, BackupFormat.Opened(BackupFormat.Header(1, ByteArray(0), 0, "", "muninn"),
-            files + (FILE to JSONObject().put("in", done).toString().toByteArray())))
+        val done = JSONObject(s.toString()).put("state", "done").put("at", System.currentTimeMillis())
+        try {
+            // What was here is kept in a "kept-" folder first, as Restore does, so a mistaken move loses nothing. No copy, no move.
+            try { a.vault.keepCopy() } catch (e: Exception) {
+                fail(a, s, "There isn't room to keep a copy of what's here first, so nothing was taken in. Free some space and try again.")
+                return
+            }
+            // Streamed part by part into the restore, one file at a time: any size the old device could send fits.
+            val parts = MoveWire.Parts(n) { i -> MoveWire.open(k, File(dir, i.toString()).readText(), MoveWire.partAad(i, n, h)) }
+            Backup.restore(a, a.vault) { stage ->
+                var common: ByteArray? = null
+                BackupFormat.entries(parts, { true }) { name, d ->
+                    if (name == COMMON) common = d
+                    else if (name != FILE && name != OUT_FILE && !name.startsWith(VaultCore.MOVE_OUT + "/")) stage(name, d!!)
+                }
+                if (parts.sha() != h) throw java.io.IOException("the payload didn't check out")
+                common?.let { c -> MoveCommon.toMuninn(a, SafeJson.obj(String(c))).forEach { (name, d) -> if (name != FILE && name != OUT_FILE) stage(name, d) } }
+                stage(FILE, JSONObject().put("in", done).toString().toByteArray())
+            }
+        } catch (e: MoveWire.BadPart) {
+            // That part goes and is asked for again.
+            File(dir, e.index.toString()).delete()
+            put(a, "in", s.put("state", "receiving"))
+            return
+        } catch (e: Throwable) {
+            dir.deleteRecursively()
+            fail(a, s, if (e is OutOfMemoryError) "Too big to take in on this device. Nothing here changed." else "Couldn't take it in. Nothing here changed.")
+            return
+        }
+        put(a, "in", s.put("state", "taken"))
         show(a, "in", JSONObject().put("state", "done").put("from", s.optString("from")).put("at", done.optLong("at")))
         dir.deleteRecursively()
         _incoming.value = Incoming("done", from = s.optString("from"))
         Thread { Thread.sleep(4000); Backup.restart(a) }.start()
+    }
+
+    /** The take-in failed: said here, and to the old device ("failed"), which is then its own again. */
+    private fun fail(a: Muninn, s: JSONObject, note: String) {
+        put(a, "in", s.put("state", "failed").put("note", note))
+        _incoming.value = Incoming("failed", from = s.optString("from"), note = note)
     }
 
     // ------------------------------------------------------------------ the old device
@@ -253,7 +295,7 @@ object Move {
         for (addr in addrs) {
             val r = post(addr, hello.toString()) ?: continue
             if (r.first != 200) continue
-            if (!MoveWire.same(try { JSONObject(r.second).optString("m") } catch (e: Exception) { "" }, MoveWire.readyMac(k, mine))) continue
+            if (!MoveWire.same(try { SafeJson.obj(r.second).optString("m") } catch (e: Exception) { "" }, MoveWire.readyMac(k, mine))) continue
             put(a, "out", JSONObject().put("state", "checking").put("addr", addr).put("all", JSONArray(addrs)).put("k", ChatCrypto.b64(k))
                 .put("to", c.n).put("app", c.app).put("emoji", MoveWire.emoji(k)))
             _outgoing.value = Outgoing("checking", MoveWire.emoji(k), c.n)
@@ -270,15 +312,22 @@ object Move {
         val o = json(a, "out") ?: return "Start again from the new device's code."
         if (o.optString("state") != "checking") return null
         locked = true
-        val entries = try {
-            if (o.optString("app") == "muninn") Backup.entries(a, a.vault).filter { it.first != FILE && it.first != OUT_FILE }
-            else listOf(COMMON to MoveCommon.fromMuninn(a).toString().toByteArray())
-        } catch (e: Exception) { locked = false; return "Couldn't gather your chats (${e.message})." }
-        val blob = MoveWire.pack(entries)
-        // Kept in the vault until the move is done, so an interrupted one goes on after a restart.
-        a.vault.writeBytes(File(a.filesDir, OUT_FILE), blob)
-        put(a, "out", o.put("state", "moving").put("h", MoveWire.sha256Hex(blob)).put("n", MoveWire.parts(blob.size.toLong())))
-        _outgoing.value = Outgoing("moving", o.optString("emoji"), o.optString("to"), 0, MoveWire.parts(blob.size.toLong()))
+        // Packed straight into sealed parts in the vault, one file at a time: a big account never has to fit in memory.
+        // Kept until the move is done, so an interrupted one goes on after a restart.
+        val dir = File(a.filesDir, VaultCore.MOVE_OUT)
+        val packer = MoveWire.Packer { i, part -> a.vault.writeBytes(File(dir, i.toString()), part) }
+        try {
+            dir.deleteRecursively(); dir.mkdirs()
+            if (o.optString("app") == "muninn") Backup.entries(a, a.vault, skip = { it == FILE || it == OUT_FILE }) { name, d -> packer.entry(name, d) }
+            else packer.entry(COMMON, MoveCommon.fromMuninn(a).toString().toByteArray())
+            packer.finish()
+        } catch (e: Throwable) {
+            dir.deleteRecursively(); locked = false
+            return if (e is OutOfMemoryError) "Too big to gather on this device." else "Couldn't gather your chats (${e.message})."
+        }
+        val n = MoveWire.parts(packer.size)
+        put(a, "out", o.put("state", "moving").put("h", packer.sha).put("n", n).put("dir", true))
+        _outgoing.value = Outgoing("moving", o.optString("emoji"), o.optString("to"), 0, n)
         try { a.nostr.keepAlive = false } catch (_: Exception) {}
         Thread { send(a) }.start()
         return null
@@ -294,7 +343,7 @@ object Move {
     fun abort(a: Muninn, note: String = "Moving stopped. This device is yours again.") {
         stop = true
         locked = false
-        try { File(a.filesDir, OUT_FILE).delete() } catch (_: Exception) {}
+        try { File(a.filesDir, OUT_FILE).delete(); File(a.filesDir, VaultCore.MOVE_OUT).deleteRecursively() } catch (_: Exception) {}
         if (a.ready.value) put(a, "out", null) else show(a, "out", null)
         _outgoing.value = null
         try { a.nostr.keepAlive = true; a.nostr.connect() } catch (_: Exception) {}
@@ -309,14 +358,18 @@ object Move {
         val o = json(a, "out") ?: return
         val k = ChatCrypto.b64d(o.getString("k"))
         val h = o.getString("h"); val n = o.getInt("n")
-        val blob = a.vault.readBytes(File(a.filesDir, OUT_FILE)) ?: return
+        // The parts, sealed in the vault one by one (a move begun before they were kept that way: the whole payload).
+        val dir = File(a.filesDir, VaultCore.MOVE_OUT)
+        val blob = if (o.optBoolean("dir")) null else (a.vault.readBytes(File(a.filesDir, OUT_FILE)) ?: return)
+        fun part(i: Int): ByteArray? = if (blob != null) blob.copyOfRange(i * MoveWire.PART, minOf(blob.size, (i + 1) * MoveWire.PART))
+            else a.vault.readBytes(File(dir, i.toString()))
         val addrs = listOf(o.getString("addr")) + o.optJSONArray("all").let { x -> if (x == null) emptyList() else (0 until x.length()).map { x.getString(it) } }
         var tries = 0
         while (!stop) {
             var st: JSONObject? = null
             for (addr in addrs.distinct()) {
                 val r = post(addr, JSONObject().put("t", "status").toString()) ?: continue
-                val j = try { JSONObject(r.second) } catch (e: Exception) { continue }
+                val j = try { SafeJson.obj(r.second) } catch (e: Exception) { continue }
                 // Signed with K over the state and the payload's hash (empty before the first part reached it).
                 val state = j.optString("state")
                 val good = MoveWire.same(j.optString("m"), MoveWire.statusMac(k, state, h)) || (state == "need" && MoveWire.same(j.optString("m"), MoveWire.statusMac(k, state, "")))
@@ -335,15 +388,17 @@ object Move {
             val addr = st.getString("@addr")
             when (st.optString("state")) {
                 "done" -> { finishMoved(a, o); return }
+                // The new device couldn't take it in (and says so with K): this one is yours again.
+                "failed" -> { abort(a, "${o.optString("to")} couldn't take everything in, so moving stopped. This device is yours again."); return }
                 "need" -> {
                     val m = st.optJSONArray("missing")
                     val want = if (m == null || m.length() == 0) (0 until n).toList() else (0 until m.length()).map { m.getInt(it) }
                     for (i in want) {
                         if (stop) return
-                        val part = blob.copyOfRange(i * MoveWire.PART, minOf(blob.size, (i + 1) * MoveWire.PART))
+                        val part = part(i) ?: run { abort(a, "This device couldn't read what it packed, so moving stopped. This device is yours again."); return }
                         val body = JSONObject().put("t", "part").put("i", i).put("n", n).put("h", h).put("d", MoveWire.seal(k, part, MoveWire.partAad(i, n, h)))
                         val r = post(addr, body.toString())
-                        if (r?.first == 200) _outgoing.value = _outgoing.value?.copy(sent = try { JSONObject(r.second).optInt("have") } catch (e: Exception) { 0 }, of = n, note = "")
+                        if (r?.first == 200) _outgoing.value = _outgoing.value?.copy(sent = try { SafeJson.obj(r.second).optInt("have") } catch (e: Exception) { 0 }, of = n, note = "")
                     }
                 }
                 "confirm" -> { _outgoing.value = _outgoing.value?.copy(sent = n, of = n, note = "Tap \"They match\" on ${o.optString("to")}."); Thread.sleep(1500) }

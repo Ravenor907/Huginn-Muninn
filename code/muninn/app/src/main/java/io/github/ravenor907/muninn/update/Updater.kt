@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.update
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -101,6 +102,9 @@ class Updater(private val context: Context, private val identity: Identity) {
         if (_state.value.busy) return
         identity.preRelease = false
         identity.labs = false
+        // Labs goes off as it does from its own switch: the activity log stops recording and is cleared.
+        io.github.ravenor907.muninn.net.ActivityLog.on = false
+        io.github.ravenor907.muninn.net.ActivityLog.clear()
         _state.value = _state.value.copy(busy = true, status = "Checking for updates…")
         pool.execute {
             try {
@@ -268,7 +272,7 @@ class Updater(private val context: Context, private val identity: Identity) {
             if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
             r.body?.string() ?: throw IOException("No body")
         }
-        val a = JSONArray(text)
+        val a = SafeJson.arr(text)
         var best: String? = null
         var bestUrl: String? = null
         var bestSha: String? = null

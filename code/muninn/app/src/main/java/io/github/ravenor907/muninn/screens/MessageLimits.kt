@@ -82,6 +82,21 @@ fun GroupLimitPanel(app: Muninn, g: String, s: Proto06.State, admin: Boolean) {
         }
     }
     TypeRulesLink()
+    // Family consent: whether this Family group counts as Family on this phone (only this person's own choice).
+    if (type == Limits.FAMILY) {
+        @Suppress("UNUSED_VARIABLE") val asks by app.chat.groups.familyAsks.collectAsState()
+        @Suppress("UNUSED_VARIABLE") val all by app.chat.groups.all.collectAsState()
+        val on = app.chat.groups.familyTrusted(g)
+        Text("Family on this device: " + if (on) "On" else "Off", style = Type.normal, modifier = Modifier.padding(top = 8.dp))
+        Text(if (on) "Its people's files arrive without asking, they can call you directly, and they're in your Family folder."
+            else "An ordinary group here: files ask first, and nobody from it goes in your Family folder.", style = Type.small)
+        MButton(if (on) "Not Family" else "Add as Family", Modifier.padding(vertical = 8.dp), if (on) Kind.Normal else Kind.Accent) {
+            if (on) app.chat.groups.answerFamily(g, false)
+            else Ui.sure(io.github.ravenor907.muninn.ui.Ask("Add ${s.name} as Family?", FAMILY_ASK_TEXT, "Add as Family", cancel = "Not Family") {
+                app.chat.groups.answerFamily(g, true)
+            })
+        }
+    }
     val me = app.identity.publicKey
     val older = s.members.filter { it.k != me && app.chat.contacts.get(it.k)?.caps?.let { c -> c.isNotEmpty() && Limits.CAP !in c } == true }
     if (older.isNotEmpty()) Text("Needs an update: " + older.joinToString(", ") { memberName(app, it) },

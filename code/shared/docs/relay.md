@@ -32,15 +32,41 @@ pieces go through the call relay (protocol.md 32): TURN only, never the relay Wo
 keeps the month's count. A file's login costs the Worker what a call's does (10 minutes a login, renewed while it moves).
 
 `POST {WORKER_URL}/meter`, the body of `/turn` with the install token (required) plus `mb`: what this install moved since
-it last said, in MB, at most 5000; 0 only asks. An install counts for at most 100,000 MB a day. Apps say it about every 200 MB, and ask at most every 6 hours when
-deciding about a send. The answer is `{"mb": <the month's total for everyone>}`. One row a month, the last month kept, plus a
-per-install count for the day (by install, never by address) so one install can't run the month up.
+it last said, in MB, at most 5000; 0 only asks. Apps say it about every 200 MB, and ask at most every 6 hours when
+deciding about a send. The answer is `{"mb": <the month's total for everyone>}`.
+
+`APP_SECRET` is in every download, so anyone can make installs and report made-up numbers. The Worker bounds what they
+can add:
+
+- Only an install registered at least 2 days earlier (`since` in its token) is counted. A younger one's report with
+  `mb` over 0 gets 429 `meter_wait` with `retry` (seconds until it is 2 days old); the app keeps the amount and says it later.
+- Per install: at most 10,000 MB a day and 50,000 MB a month. Per address group (IPv4 /24, IPv6 /48, keyed as for
+  logins): 30,000 MB a day. What goes past a cap is dropped (200, nothing written).
+- At most 100 counted reports a day per install and 1000 for everyone (each writes 6 rows); past that 429
+  `meter_limit` until the next UTC day, and the app keeps the amount.
+
+So the ten made-up installs that could once add 1,000,000 MB in minutes now add at most 30,000 MB a day from one
+address group, and reaching 950 GB takes at least 19 installs, 2 days old, reporting for 5 days or more. Rows: `meter`
+holds the month's total and each counted install's share (`<month>:<id>`), the last month kept; `counts` holds the
+day's `m:` (install), `mi:` (address group), `mn:` (reports by the install) and `mc` (reports by everyone).
 
 Calls through the relay count too, both ways, when each call ends. Both ends of a relayed file or call count what they
 moved, so the total runs high, never low.
 
 At 800 GB in a month (the free tier is 1,000 GB, shared with calls) relayed videos go as the 720p copy and Settings says
-so. At 950 GB the relay carries no more files that month (they go Nearby, direct or over Tor); calls are unchanged. Until a release deploys this route, or if the Worker can't be reached, apps go by their own count.
+so. At 950 GB the relay carries no more files that month (they go Nearby, direct or over Tor); calls are unchanged.
+
+Each app goes by its own count first. The 950 GB stop comes only from what this install itself relayed. The shared
+total is advisory: it is believed only up to twice the even pace of the free month (66 GB for each day of the month so
+far), and it can only bring the 720p copy, never the stop. Huginn: `FileLink::relayShared`, `relayOver`,
+`relayStopped`. If the Worker can't be reached, apps go by their own count alone.
+
+**The Worker's own stop.** The Worker can't see the bytes TURN relays, and a file uses the same `/turn` login as a call
+(both apps keep one cached login for both), so it can't stop a modified app from relaying files. What it does: a `/turn`
+request may carry `"f": 1` (any other value is a 400) to say the login is for a relayed file; once the month's count
+above reaches 950,000 MB such a request gets 429 `month_limit` with `retry` until the next UTC month, and calls (no `f`)
+are unchanged. Apps don't send `f` yet: they need a login of their own for files to use it. The owner's billing alert
+(README step H) stays the real ceiling; setting `DAILY_MINUTES` to 60 all but stops the relay for a day.
 
 ## Constants
 
@@ -70,6 +96,8 @@ can use up only the small pool of logins without a token, never the logins of in
 `tok` (1.36) is the install token (below), left out when the install has none; older apps never send it.
 `rn` (round 17) says the app renews its relay before the login ends ("Renewal" below); it is the JSON number `1` (or `true`)
 when sent, and any other value is a 400. Only `/turn` carries it, never `/register`.
+`f` (optional) is the JSON number `1` (or `true`) for a login meant for a relayed file ("Relayed media" below); any
+other value is a 400.
 
 - `id`: lowercase hex SHA-256 (64 chars) of a random 32-byte relay id that each install makes once and keeps in
   its vault (`relayId` in `secrets.json`).
@@ -100,12 +128,17 @@ once, with a proof of work, and gets a short-lived token the Worker signs:
   on a thread of its own. It is bound to `t`, so it can't be worked out ahead of time beyond the 300 s skew. Vector:
   `id` = 64 `a`, `t` = 1800000000: the smallest `pow` is 465984 (the Worker's test, Muninn `TurnTest`, Huginn
   `--call-selftest`).
-- 200: `{"tok": "<exp>.<since>.<32 hex>", "exp": <unix seconds>}`, good for 7 days. `since` is when the install
-  registered (Unix seconds); every token a login renews keeps it. The token is HMAC-SHA256 over
-  `"tok2:" + id + ":" + exp + ":" + since`, keyed with the Worker secret `TOKEN_KEY` when set, else with a key made from
+- 200: `{"tok": "<exp>.<since>.<origin>.<32 hex>", "exp": <unix seconds>}`, good for 7 days. `since` is when the
+  install registered (Unix seconds) and `origin` (16 hex) is a keyed hash of the address group it registered from;
+  every token a login renews keeps both. The token is HMAC-SHA256 over
+  `"tok3:" + id + ":" + exp + ":" + since + ":" + origin`, keyed with the Worker secret `TOKEN_KEY` when set, else with a key made from
   `TURN_KEY_API_TOKEN`, cut to 16 bytes. Changing either makes every install register again, nothing worse. Tokens in the
   1.36 form `<exp>.<32 hex>` (HMAC over `"tok:" + id + ":" + exp`) are still taken, as registered `exp` less 7 days,
-  and come back in the new form. The apps treat the token as opaque text either way.
+  and so are tokens `<exp>.<since>.<32 hex>` (HMAC over `"tok2:" + id + ":" + exp + ":" + since`); both come back in
+  the new form, with the origin of the address group their first login comes from.
+- `/register` may also carry the install's old `tok`. If it is this Worker's, for this `id`, and ran out less than 30
+  days ago (or is still good), the new token keeps its `since` and `origin`, so a device that went a week without
+  relaying isn't new again. Apps don't send it yet. The apps treat the token as opaque text either way.
 - 401 `bad_pow` (the work doesn't check out), 401 `stale` and `bad_sig` as for `/turn`, 429 `ip_reg_limit` (20
   registrations a day per address group: IPv4 /24, IPv6 /48) or `reg_limit` (2000 a day for everyone). A full day
   refuses new registrations only, never logins.
@@ -154,7 +187,7 @@ Errors are JSON `{"error": "<code>"}`:
 | 413 | `too_large` | Body over 1 KB (refused before it is read). Bug in the app. Don't retry. |
 | 401 | `stale`, `bad_sig` | Clock wrong or wrong `APP_SECRET`. After `stale`, one more try with `t` corrected by `now`; else don't retry this call. |
 | 401 | `bad_token`, `token_expired` | Drop the token, register again (once), ask again. |
-| 429 | `id_limit`, `ip_limit`, `global_limit`, `busy`, `slow_down` | A budget is used up ("Limits" below). The body says how long until it may work: `{"error":"busy","retry":1800}` (seconds). Apps that send `rn` ask again no sooner than that (at least 60 s, at most until the next UTC day); older apps, and any 429 without `retry`, wait until the next UTC day. |
+| 429 | `id_limit`, `ip_limit`, `global_limit`, `busy`, `slow_down`, `month_limit` (only with `f`); `/meter`: `meter_wait`, `meter_limit` | A budget is used up ("Limits" below). The body says how long until it may work: `{"error":"busy","retry":1800}` (seconds). Apps that send `rn` ask again no sooner than that (at least 60 s, at most until the next UTC day); older apps, and any 429 without `retry`, wait until the next UTC day. |
 | 502 | `upstream` | Cloudflare TURN API failed. Retry later. |
 | 503 | `limits_unavailable`, `not_configured` | Worker not set up, or its limits storage is missing or down. Retry later. |
 
@@ -215,17 +248,26 @@ carries the call ("On demand"), so the minutes are time spent relaying. Each UTC
 
 | Budget | With a token | Without a token |
 | --- | --- | --- |
-| Per install (`id`, the install the token was signed for) | 900 minutes (90 renewing logins, or 30 old ones) | 60 (2 logins) |
+| Per install (`id`, the install the token was signed for) | 600 minutes (60 renewing logins, or 20 old ones) | 60 (2 logins) |
+| Per origin (the address group the install registered from, in its token) | 2400 minutes | none |
 | Per address group (IPv4 /24, IPv6 /48) | none for an established install; 1440 minutes shared by installs registered less than 2 days ago | 120 (4 logins) |
 | Pool | the day's budget below | 900 minutes (30 logins) of their own; using it up never touches logins with a token |
 
 Round 18: logins with a token are keyed by the install first. An address group is never a limit for an install
 registered 2 days ago or more: a carrier's shared addresses (CGNAT), a school or an office can hold hundreds of
-households, and each install has its own 900 minutes. Only young installs share a group's 1440 minutes, so tokens
+households, and each install has its own 600 minutes. What an install is counted by instead is its origin: the address
+group it registered from, signed into its token, so it stays the same wherever the install logs in. Installs farmed on
+one network all share its 2400 minutes. Refused: `ip_limit`.
+
+Why these numbers: an attacker with `APP_SECRET` can register installs (20 a day per address group) and wait 2 days
+until they count as established. At 900 minutes each, 56 such installs used up the day's 50,000 minutes. At 600 each
+it takes 84 installs, and at 2400 per origin they must come from at least 21 different address groups. A family's few
+devices, each relaying only when no Wi-Fi, Bluetooth or direct path works, fit easily. Only young installs share a group's 1440 minutes, so tokens
 registered in bulk on one network can't take more than that while they are new (and past 60% they get `busy`, below).
 
-A family's day fits: several devices on one home or carrier network, about 10 hours of relayed calls a day each, is
-60 renewing logins (600 minutes) per device, under 900, and the address group never counts against them. Calls on
+A family's day fits: 4 devices registered on one home network, about 10 hours of relayed calls a day each, is 60
+renewing logins (600 minutes) per device, and 2400 for their origin; the address they call from never counts against
+them. Calls on
 the home Wi-Fi, over Bluetooth or on a direct path cost nothing.
 
 For everyone:
@@ -251,9 +293,9 @@ registers once; every login renews its token, and an install that can't register
 
 The Worker counts in one SQLite-backed Durable Object (`RelayLimits`, binding `LIMITS`). One request is checked and
 counted in a single step inside it, so requests at the same moment can't pass a budget. Rows (`counts`, keyed by the
-day): `d` the day, `h<HH>` the hour, `u:` the install, for a young install's login `y:` its address group, and for
-logins without a token also `g` their pool and `l:` their address group; registrations `rg` and `r:`. A login with a
-token writes 3 rows (4 while young), one without 5, a registration 2. Rows from earlier days are deleted when the first request of a new day arrives. If the binding is
+day): `d` the day, `h<HH>` the hour, `u:` the install, `o:` its origin (keyed by the day like the address keys), for a
+young install's login `y:` its address group, and for logins without a token also `g` their pool and `l:` their address
+group; registrations `rg` and `r:`. A login with a token writes 4 rows (5 while young), one without 5, a registration 2. Rows from earlier days are deleted when the first request of a new day arrives. If the binding is
 missing or the object fails, the Worker answers 503 `limits_unavailable` and hands out nothing.
 
 The address key is HMAC-SHA256 (key: the Worker secret `TURN_KEY_API_TOKEN`) of `"ip:" + day + ":" + group` (for
@@ -267,8 +309,8 @@ Every request that reaches the Worker counts against the free plan's 100,000 a d
 they are used up Cloudflare refuses requests until the next UTC day. Inside the Worker, each check is cheaper than the
 next, and nothing past a failed check runs:
 
-1. Path and method: anything but `POST /turn`, `POST /register` and `GET /health` is a 404 or 405 at once, its body never
-   read.
+1. Path and method: anything but `POST /turn`, `POST /register`, `POST /meter` and `GET /health` is a 404 or 405 at
+   once, its body never read.
 2. Configuration, then `Content-Length` over 1 KB: 503 or 413, body never read.
 3. Per Worker instance, in memory only: at most 60 POSTs a minute from one address group (429 `slow_down`, `retry` 60;
    round 18: up from 20, so a shared network isn't slowed down). Each Cloudflare location runs its own instances, so
@@ -294,8 +336,8 @@ Why these Cloudflare parts (all within the free plan, no other service):
 - Durable Object with SQLite storage for the counts: free with 100,000 requests and 100,000 rows written a day, and
   one object gives exact counts. KV would be eventually consistent (two places could both pass a cap) and allows only
   1000 writes a day on the free plan.
-- With every budget used up: about 5000 logins with `rn` x at most 4 rows, 30 without x 5, 2000 registrations x 2 =
-  about 24,200 rows written, and as many deleted the next day (about 48,400 in all); at most one Durable Object request per Worker request that passes
+- With every budget used up: about 5000 logins with `rn` x at most 5 rows, 30 without x 5, 2000 registrations x 2,
+  1000 counted meter reports x 6 = about 35,150 rows written, and as many deleted later (about 70,300 in all); at most one Durable Object request per Worker request that passes
   steps 1 to 6.
 - The Cache API does nothing on `workers.dev`, and a cached answer would still count as a Worker request, so the Worker
   caches in instance memory instead (steps 3, 5 and 6). `/health` and 404 answers say they may be cached by anything in

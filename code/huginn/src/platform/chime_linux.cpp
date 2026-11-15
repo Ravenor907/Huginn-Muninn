@@ -33,6 +33,9 @@ Chime::~Chime() = default;
 
 void Chime::play()
 {
+    if (volume() <= 0)
+        return;
+    m_effect->setVolume(volume() / 100.0);
     m_effect->play();
 }
 

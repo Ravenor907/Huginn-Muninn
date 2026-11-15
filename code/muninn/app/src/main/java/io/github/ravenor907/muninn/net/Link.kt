@@ -348,15 +348,15 @@ class LinkReplay {
     @Synchronized
     fun save(): String {
         dirty = false
-        return JSONObject().put("s", org.json.JSONArray(stamps.toList())).put("n", JSONObject().apply { seen.forEach { (k, v) -> put(k, v) } })
-            .put("old", org.json.JSONArray(older.toList())).put("off", JSONObject().apply { offset.forEach { (k, v) -> put(k, v) } }).toString()
+        return JSONObject().put("s", JSONArray(stamps.toList())).put("n", JSONObject().apply { seen.forEach { (k, v) -> put(k, v) } })
+            .put("old", JSONArray(older.toList())).put("off", JSONObject().apply { offset.forEach { (k, v) -> put(k, v) } }).toString()
     }
 
     @Synchronized
     fun load(text: String?) {
         if (text.isNullOrEmpty()) return
         try {
-            val o = JSONObject(text)
+            val o = SafeJson.obj(text)
             o.optJSONArray("s")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { stamps.add(it) } }
             o.optJSONObject("n")?.let { n -> n.keys().forEach { k -> seen[k] = n.optLong(k) } }
             o.optJSONArray("old")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { older.add(it) } }
@@ -390,7 +390,7 @@ class LinkReplay {
         /** [json] with "lts" and "ln" added (what every link frame carries from 1.4). */
         fun stamp(json: String, nowMs: Long = System.currentTimeMillis()): String = try {
             val b = ByteArray(16).also { rng.nextBytes(it) }
-            JSONObject(json).put("lts", nowMs).put("ln", b.joinToString("") { "%02x".format(it.toInt() and 0xFF) }).toString()
+            SafeJson.obj(json).put("lts", nowMs).put("ln", b.joinToString("") { "%02x".format(it.toInt() and 0xFF) }).toString()
         } catch (e: Exception) { json }
     }
 }
@@ -525,6 +525,11 @@ object Link {
     private val heard = java.util.concurrent.ConcurrentHashMap<String, Long>()
     /** The phone's side: companions whose first "sync" said "relink" before They match was pressed here (J11-1). */
     private val relinkSeen = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    /**
+     * The caps of a first "sync" that came from a companion before this phone checked its emoji (the computer pressed They
+     * match first): kept, so this phone's own confirm takes them (l1: the whole account goes then, and its edits are taken).
+     */
+    private val capsSeen = java.util.concurrent.ConcurrentHashMap<String, String>()
     /** The companion's side: when Refresh last asked. */
     @Volatile private var askedAt = 0L
     private val clock = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "muninn-link-clock").apply { isDaemon = true } }
@@ -543,7 +548,7 @@ object Link {
         val h = host ?: return
         try {
             h.read("link.json")?.let { t ->
-                val o = JSONObject(t)
+                val o = SafeJson.obj(t)
                 _companions.value = o.optJSONArray("companions")?.let { a -> (0 until a.length()).map { dev(a.getJSONObject(it)) } }.orEmpty()
                 _phone.value = o.optJSONObject("phone")?.let { dev(it) }
                 _me.value = if (_phone.value != null) o.optJSONObject("me")?.let { LinkWire.readMe(it) } else null
@@ -553,10 +558,10 @@ object Link {
                 _companions.value.forEach { d -> heard[d.key] = hd?.optLong(d.key, 0L)?.takeIf { it > 0L } ?: now }
             }
             h.read("mirror.json")?.let { t ->
-                val o = JSONObject(t)
+                val o = SafeJson.obj(t)
                 _mirror.value = o.keys().asSequence().associateWith { k -> chatOf(o.getJSONObject(k)) }
             }
-            h.read(STORED)?.let { t -> val a = JSONArray(t); _stored.value = (0 until a.length()).map { a.getString(it) }.toSet() }
+            h.read(STORED)?.let { t -> val a = SafeJson.arr(t); _stored.value = (0 until a.length()).map { a.getString(it) }.toSet() }
         } catch (_: Exception) {}
         // Round 16: a device found on an older version is still asked about after a restart.
         ensureReplay(h)
@@ -621,14 +626,14 @@ object Link {
         val h = host ?: return "Not ready."
         val i = code.indexOf(PREFIX)
         if (i < 0) return "That isn't a link code."
-        val o = try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(code.substring(i + PREFIX.length).trim().takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }))) }
+        val o = try { SafeJson.obj(String(java.util.Base64.getUrlDecoder().decode(code.substring(i + PREFIX.length).trim().takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }))) }
             catch (e: Exception) { return "That link code is damaged." }
         val k = o.optString("k")
         try { ChatCrypto.publicFrom(k) } catch (e: Exception) { return "That link code is damaged." }
         if (k == h.myKey()) return "That's this device's own code."
         val d = Device(k, o.optString("p"), o.optString("n").take(40).ifBlank { "Linked device" }, ok = confirmed)
         _companions.value = _companions.value.filterNot { it.key == k } + d
-        heard[k] = System.currentTimeMillis(); relinkSeen.remove(k)
+        heard[k] = System.currentTimeMillis(); relinkSeen.remove(k); capsSeen.remove(k)
         forgetStamps(k)
         save()
         h.send(d, JSONObject().put("t", "hello").put("i", o.optString("i")).put("n", h.myName()).put("p", h.myMailbox()).toString())
@@ -640,9 +645,12 @@ object Link {
     fun confirm(key: String) {
         val h = host ?: return
         _companions.value.firstOrNull { it.key == key && !it.ok }?.let { d ->
-            val now = d.copy(ok = true)
+            // Its first "sync" came before this check: what it said it takes counts now (cap l1: the account goes too).
+            val caps = capsSeen.remove(key).orEmpty()
+            val now = d.copy(ok = true, l1 = d.l1 || LinkAccount.says(caps), l3 = d.l3 || LinkWire.saysL3(caps))
             _companions.value = _companions.value.map { if (it.key == key) now else it }
             save(); syncAll(now); sendMe(true)
+            if (now.l1) later { sendAccount(h, now, full = true) }
             // The computer pressed They match first: its "relink" came before this phone checked it, so it's asked now.
             if (relinkSeen.remove(key)) askReplace(now)
         }
@@ -687,7 +695,7 @@ object Link {
         _companions.value.firstOrNull { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()) }
         _phone.value?.takeIf { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()); dropPhone() }
         _companions.value = _companions.value.filterNot { it.key == key }
-        owed.remove(key); meOwed.remove(key); acctOwed.remove(key); heard.remove(key); relinkSeen.remove(key)
+        owed.remove(key); meOwed.remove(key); acctOwed.remove(key); heard.remove(key); relinkSeen.remove(key); capsSeen.remove(key)
         save()
         forgetStamps(key)
     }
@@ -715,7 +723,7 @@ object Link {
     private fun sendMeTo(h: Host, d: Device, me: JSONObject) {
         if (!me.has("pic")) { meOwed.remove(d.key); h.send(d, me.toString()); return }
         if (h.onLan(d.key) && h.sendLan(d, me.toString())) { meOwed.remove(d.key); return }
-        h.send(d, JSONObject(me.toString()).apply { remove("pic"); put("pk", true) }.toString())
+        h.send(d, SafeJson.obj(me.toString()).apply { remove("pic"); put("pk", true) }.toString())
         meOwed.add(d.key)
     }
 
@@ -854,7 +862,7 @@ object Link {
     private fun loadHashes() {
         if (hashesLoaded) return
         hashesLoaded = true
-        try { host?.read(HASHES)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { hashes[it] = o.getString(it) } } } catch (_: Exception) {}
+        try { host?.read(HASHES)?.let { SafeJson.obj(it) }?.let { o -> o.keys().forEach { hashes[it] = o.getString(it) } } } catch (_: Exception) {}
     }
 
     private fun saveHashes() {
@@ -1023,7 +1031,11 @@ object Link {
             // Not checked here yet: a "send" is answered, so the companion doesn't wait for nothing.
             comp != null && !comp.ok && t == "send" -> answerSend(h, comp, p.optString("id"), false, "confirm")
             // Not checked here yet, but a first "sync" that says "relink" is kept for this phone's own They match (J11-1).
-            comp != null && !comp.ok && t == "sync" && p.optBoolean("f") && p.optBoolean("relink") -> relinkSeen.add(comp.key)
+            comp != null && !comp.ok && t == "sync" && p.optBoolean("f") -> {
+                // Its caps are kept for this phone's own They match, and a "relink" too (J11-1).
+                p.optString("caps").take(200).takeIf { it.isNotBlank() }?.let { capsSeen[comp.key] = it }
+                if (p.optBoolean("relink")) relinkSeen.add(comp.key)
+            }
             comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct" || t == "ping" || t == "read" || t == "pask") -> {}
             // 1.42 (cap l5): this device is the companion and its phone pinged it: the pong says the ping's "pn" back.
             ph != null && t == "ping" -> h.send(ph, LinkWire.pong(p).toString())
@@ -1054,7 +1066,7 @@ object Link {
             comp != null && t == "acct" -> if (comp.l1) later { takeAccount(h, comp, p) }
             // A companion changed my name or status: the phone is the account, so it changes here and goes to every companion.
             comp != null && t == "setme" -> {
-                val q = JSONObject(p.toString()).apply { if (p.optString("n").isBlank()) put("n", h.myProfile().optString("n")) }
+                val q = SafeJson.obj(p.toString()).apply { if (p.optString("n").isBlank()) put("n", h.myProfile().optString("n")) }
                 LinkWire.readMe(q)?.let { m -> h.setMyProfile(m.name, if (p.optString("st").isEmpty()) "" else m.status, m.custom) }
                 sendMe(true)
             }
@@ -1070,17 +1082,18 @@ object Link {
                     when {
                         text.isEmpty() -> answerSend(h, comp, id, false, "empty")
                         // Cap l1: a group chat ("g:" + its id), posted as the same member.
+                        // A send that didn't go isn't remembered: Retry with the same id really tries again.
                         comp.l1 && peer.startsWith("g:") -> when {
                             !firstSend(id) -> answerSend(h, comp, id, true, "")
-                            h.adminsOnlyFor(peer.removePrefix("g:"), ch) -> answerSend(h, comp, id, false, "admins only")
+                            h.adminsOnlyFor(peer.removePrefix("g:"), ch) -> { forgetSend(id); answerSend(h, comp, id, false, "admins only") }
                             h.sendToGroup(peer.removePrefix("g:"), text.take(LinkWire.TEXT_MAX), re, ch) -> answerSend(h, comp, id, true, "")
-                            else -> answerSend(h, comp, id, false, "not in group")
+                            else -> { forgetSend(id); answerSend(h, comp, id, false, "not in group") }
                         }
                         !h.isContactHere(peer) -> answerSend(h, comp, id, false, "not a contact")
                         !firstSend(id) -> answerSend(h, comp, id, true, "")
                         else -> {
                             val mid = if (re.isEmpty()) h.sendAsMeId(peer, text.take(LinkWire.TEXT_MAX)) else h.sendAsMeReply(peer, text.take(LinkWire.TEXT_MAX), re)
-                            if (mid == null) answerSend(h, comp, id, false, "not a contact") else answerSend(h, comp, id, true, "", mid)
+                            if (mid == null) { forgetSend(id); answerSend(h, comp, id, false, "not a contact") } else answerSend(h, comp, id, true, "", mid)
                         }
                     }
                 }
@@ -1341,7 +1354,7 @@ object Link {
             val now = System.currentTimeMillis()
             if (!sendsLoaded) {
                 sendsLoaded = true
-                try { h.read(SENDS)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { sends[it] = o.optLong(it) } } } catch (_: Exception) {}
+                try { h.read(SENDS)?.let { SafeJson.obj(it) }?.let { o -> o.keys().forEach { sends[it] = o.optLong(it) } } } catch (_: Exception) {}
             }
             sends.entries.removeIf { now - it.value > 2 * Limits.DAY }
             if (sends.containsKey(id)) return false
@@ -1349,6 +1362,16 @@ object Link {
             while (sends.size > 1000) sends.remove(sends.keys.first())
             h.write(SENDS, JSONObject().apply { sends.forEach { (k, t) -> put(k, t) } }.toString())
             return true
+        }
+    }
+
+    /** A send recorded by [firstSend] didn't go: forgotten, so the companion's Retry (the same id) is sent for real. */
+    private fun forgetSend(id: String) {
+        if (id.isEmpty()) return
+        val h = host ?: return
+        synchronized(sends) {
+            if (sends.remove(id) == null) return
+            try { h.write(SENDS, JSONObject().apply { sends.forEach { (k, t) -> put(k, t) } }.toString()) } catch (_: Exception) {}
         }
     }
 

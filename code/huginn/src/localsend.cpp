@@ -182,7 +182,17 @@ QString LocalSend::baseFor(const QString &chatKey, bool strict) const
         if (!best || (d.proven && !best->proven) || (d.proven == best->proven && d.seen > best->seen))
             best = &d;
     }
-    return best ? QStringLiteral("%1://%2:%3").arg(best->protocol, Lan::urlHost(best->ip)).arg(best->port) : QString();
+    if (!best)
+        return QString();
+    const QString base = QStringLiteral("%1://%2:%3").arg(best->protocol, Lan::urlHost(best->ip)).arg(best->port);
+    // Requests to it are pinned to this very device, not to whichever device was last seen at that address (someone who
+    // took over a contact's old address can't stand in for them).
+    if (best->protocol == QLatin1String("https")) {
+        if (m_chosen.size() > 256)
+            m_chosen.clear();
+        m_chosen.insert(base, best->id);
+    }
+    return base;
 }
 
 bool LocalSend::provenFor(const QString &chatKey) const
@@ -223,10 +233,18 @@ QString LocalSend::expectedFor(const QUrl &url) const
     // with encryption off has a random fingerprint and no certificate to check.
     if (url.scheme() != QLatin1String("https"))
         return {};
+    const QString chosen = m_chosen.value(QStringLiteral("https://%1:%2").arg(Lan::urlHost(url.host())).arg(url.port(kPort)));
     const Device *best = nullptr;
     for (const Device &d : m_devices)
-        if (d.protocol == QLatin1String("https") && d.ip == url.host() && d.port == url.port(kPort) && (!best || d.seen > best->seen))
-            best = &d;
+        if (d.protocol == QLatin1String("https") && d.ip == url.host() && d.port == url.port(kPort)) {
+            if (!chosen.isEmpty() && d.id == chosen)
+                return d.id;
+            if (!best || d.seen > best->seen)
+                best = &d;
+        }
+    // The device chosen there is gone: still pinned to it (nobody else stands in), so the request fails.
+    if (!chosen.isEmpty())
+        return chosen;
     return best ? best->id : QString();
 }
 
@@ -780,8 +798,10 @@ void LocalSend::onDatagrams()
         const auto known = m_devices.constFind(fp.toUpper());
         if (!announce && known != m_devices.constEnd() && known->ip == ip)
             continue;
-        // Nearby off: only a contact's own announcement is answered, straight to it (never on multicast).
-        if (off() && (!announce || contactIn(o).isEmpty()))
+        // Nearby off: nothing on multicast is answered, not even what claims to be a contact's announcement (anyone can
+        // claim that, and the answer carries the chat key's proof). Contacts are asked only at their own addresses,
+        // over HTTPS with their certificate pinned (askContacts).
+        if (off())
             continue;
         if (asking(ip))
             registerWith(ip, o.value(QStringLiteral("port")).toInt(kPort), o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")), !announce, fp);
@@ -859,7 +879,11 @@ void LocalSend::onConnection(QTcpServer *server)
         Busy::count("LAN connections");
         Busy::nameSocket(s, "lan conn");
         // At most 32 at once (nobody can pile them up), and only from this very network.
-        if (!Lan::isNeighbour(s->peerAddress()) || m_conns.size() >= 32) {
+        // And at most 8 from one address, so one device can't take every place.
+        int fromThere = 0;
+        for (auto c = m_conns.cbegin(); c != m_conns.cend(); ++c)
+            fromThere += c.key()->peerAddress() == s->peerAddress() ? 1 : 0;
+        if (!Lan::isNeighbour(s->peerAddress()) || m_conns.size() >= 32 || fromThere >= 8) {
             // Reached our home-network address from somewhere else (routed in over a VPN, say): no.
             s->abort();
             s->deleteLater();
@@ -868,7 +892,23 @@ void LocalSend::onConnection(QTcpServer *server)
         Conn conn;
         if (auto *ssl = qobject_cast<QSslSocket *>(s))
             conn.peerFp = Tls::fingerprintOf(ssl->peerCertificate());
+        conn.opened = conn.lastData = QDateTime::currentMSecsSinceEpoch();
         m_conns.insert(s, conn);
+        // Idle connections go: the request's head within 15 s, then something at least every 60 s (one waiting for
+        // the person to Accept is timed by the request itself).
+        auto *watch = new QTimer(s);
+        watch->setInterval(5000);
+        connect(watch, &QTimer::timeout, this, [this, s] {
+            const auto it = m_conns.constFind(s);
+            if (it == m_conns.constEnd() || m_pending.socket == s)
+                return;
+            const qint64 t = QDateTime::currentMSecsSinceEpoch();
+            if ((!it->headDone && t - it->opened > 15000) || t - it->lastData > 60000) {
+                Busy::count("LAN connections closed as idle");
+                s->abort();
+            }
+        });
+        watch->start();
         connect(s, &QTcpSocket::readyRead, this, [this, s] {
             Busy::Scope busy("nearby sharing: requests");
             onData(s);
@@ -914,6 +954,7 @@ void LocalSend::onData(QTcpSocket *s)
     if (it == m_conns.end())
         return;
     Conn &c = *it;
+    c.lastData = QDateTime::currentMSecsSinceEpoch();
     if (c.replied) {
         s->readAll();
         return;
@@ -1012,6 +1053,8 @@ void LocalSend::route(QTcpSocket *s, Conn &c)
             reply(s, 500);
             return;
         }
+        // Marked from the start (again once it's whole): a file cut off midway is never left unmarked under its name.
+        Sharing::markFromInternet(f->savedAs);
         c.fileId = fid;
         f->received = 0;
         f->failed = false;
@@ -1172,7 +1215,14 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
             const QJsonObject f = it.value().toObject();
             InFile in;
             in.name = f.value(QStringLiteral("fileName")).toString(QStringLiteral("file"));
-            in.size = qint64(f.value(QStringLiteral("size")).toDouble());
+            // A size below zero (or past any disk) would let a big file slip past the space check below with
+            // another one's: the whole offer is refused.
+            const double size = f.value(QStringLiteral("size")).toDouble(-1);
+            if (!(size >= 0 && size <= 1e15)) {
+                reply(s, 400);
+                return;
+            }
+            in.size = qint64(size);
             in.sha = f.value(QStringLiteral("sha256")).toString();
             total += in.size;
             p.files.insert(it.key(), in);

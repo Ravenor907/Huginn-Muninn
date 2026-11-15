@@ -15,6 +15,9 @@ QtObject {
     // group. More: Pin to top, Archive, Folders, Move up and down (list only), Pinned messages, Copy name. Red: Block,
     // Delete chat, Delete contact. What they can do, Compare emoji, Introduce and How messages travel are in Details.
     function has(fn) { return typeof Chat[fn] === "function" }
+    // Owner decision: what saying yes to a Family group means on this computer ("Add <group> as Family?").
+    readonly property string familyAskText: "As Family, files from its people arrive without asking, they can call you directly, and they go in "
+                                            + "your Family folder. Say yes only if these are your closest people. Leaving the group undoes it."
     // Locked (Main.lockedOut): no one's menu opens and nothing is sent.
     function locked() { return !!Ui.main && Ui.main.lockedOut === true }
     // Round 17 (B1): the current lock first (Main.qml's LockCheck), then then().

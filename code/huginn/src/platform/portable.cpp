@@ -44,11 +44,11 @@ const QString kMark = QStringLiteral(".huginn");
 const QString kMoving = QStringLiteral(".moving");
 
 // Round 19 (FIX 16, m8 Windows): also Huginn's, erased with the rest, but too plain a name to tell a folder is Huginn's by
-// it: Tor's folder, the voices, the wrong-try count, an erase's note of what's left, and the temporary copies a save cut
+// it: Tor's folder, the voices, the dictation model, the wrong-try count, an erase's note of what's left, and the temporary copies a save cut
 // off by a crash leaves beside a file ("ring-key.json.XXXXXX").
 bool erasedToo(const QString &name)
 {
-    static const QStringList kNames = {QStringLiteral("tor"), QStringLiteral("voices"), QStringLiteral("lock-state.json"), QStringLiteral("erase-pending")};
+    static const QStringList kNames = {QStringLiteral("tor"), QStringLiteral("voices"), QStringLiteral("dictation"), QStringLiteral("lock-state.json"), QStringLiteral("erase-pending")};
     static const QStringList kSaving = {QStringLiteral("lock-state.json."), QStringLiteral("ring-key.json."), QStringLiteral("nudge-key.json."),
                                         QStringLiteral("ring-allow.json."), QStringLiteral("erase-pending.")};
     if (kNames.contains(name, Qt::CaseInsensitive))
@@ -73,6 +73,23 @@ bool huginnsOwn(const QString &name)
            || name.startsWith(QLatin1String(".huginn-write-test-"), Qt::CaseInsensitive)
            // Round 17: a sync app's conflict copies of the single-instance lock ("instance-PC2.lock").
            || (name.startsWith(QLatin1String("instance"), Qt::CaseInsensitive) && name.contains(QLatin1String(".lock"), Qt::CaseInsensitive));
+}
+
+// Huginn.exe runs from a folder an archive tool unpacked it to for the moment (opened from inside the zip): the temp
+// folder, or one named the way WinRAR (Rar$EX..), 7-Zip (7zO..) and Windows' own zip folders (Temp1_..) name theirs.
+// Everything kept beside it would go when the tool cleans up.
+bool unpackedForTheMoment(const QString &exeDir, const QString &temp)
+{
+    // Windows paths, also when tested elsewhere.
+    const QString d = QDir::cleanPath(QString(exeDir).replace(QLatin1Char('\\'), QLatin1Char('/')));
+    const QString t = QDir::cleanPath(QString(temp).replace(QLatin1Char('\\'), QLatin1Char('/')));
+    if (!t.isEmpty() && t != QLatin1String("/") && (d.compare(t, Qt::CaseInsensitive) == 0 || d.startsWith(t + QLatin1Char('/'), Qt::CaseInsensitive)))
+        return true;
+    for (const QString &part : d.split(QLatin1Char('/'), Qt::SkipEmptyParts))
+        if (part.startsWith(QLatin1String("Rar$EX"), Qt::CaseInsensitive) || part.startsWith(QLatin1String("7zO"), Qt::CaseInsensitive)
+            || part.startsWith(QLatin1String("Temp1_"), Qt::CaseInsensitive) || part.startsWith(QLatin1String("Rar$DI"), Qt::CaseInsensitive))
+            return true;
+    return false;
 }
 
 // A file anywhere under dir.
@@ -113,6 +130,10 @@ void pointQtAt(const QString &root)
 {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, root);
+    // Qt also reads a system-wide file for any key this one lacks (C:\ProgramData\Huginn\Huginn.ini, which any
+    // account on the computer may create). Settings::store() can't turn that off on each copy it hands out, so the
+    // system scope points at a folder inside this data folder that is never made: nothing is ever read from it.
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, root + QStringLiteral("/.no-system-settings"));
 #ifdef Q_OS_WIN
     // Windows' own file pickers keep recent folders in the registry, so Huginn uses Qt's picker instead.
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
@@ -455,6 +476,13 @@ QString folderProblem()
 {
     if (!s_problem.isEmpty())
         return s_problem;
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+    // Opened from inside the zip: the identity and chats would be made in a folder that is deleted soon.
+    if (!s_root.isEmpty() && unpackedForTheMoment(QFileInfo(s_root).absolutePath(), QDir::tempPath()))
+        return QStringLiteral("Huginn is running from inside the zip file, from a folder Windows or your zip program deletes again soon, so "
+                              "your chats would be lost.\n\nClose this, right-click Huginn-Windows.zip and choose Extract All, unzip it "
+                              "into a folder of your own like C:\\Users\\<you>\\Huginn, and open Huginn.exe from there.");
+#endif
     // The Windows portable build's folder beside Huginn.exe, or Qt's usual data folder elsewhere (the Flatpak's).
     const QString root = !s_root.isEmpty() ? s_root : dataDir();
     if (root.isEmpty())
@@ -887,6 +915,46 @@ bool mergeInto(const QString &from, const QString &to, QString *why)
     return true;
 }
 
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+namespace
+{
+// Deletes what is left of Huginn in AppData and the registry after its move into the data folder: the roaming and local
+// folders and HKCU\Software\<org>\Huginn. True when all of it is gone.
+bool deleteOld(const QString &roam, const QString &local, bool regThere)
+{
+    bool gone = true;
+    if (!roam.isEmpty() && QFileInfo(roam).isDir()) {
+        gone = QDir(roam).removeRecursively() && gone;
+        QDir().rmdir(QFileInfo(roam).absolutePath());   // the "Huginn" folder above, once empty
+    }
+    if (!local.isEmpty() && QFileInfo(local).isDir() && QDir::cleanPath(local) != QDir::cleanPath(roam)) {
+        const QString scratch = local + QStringLiteral("/scratch");
+        for (const QFileInfo &fi : QDir(scratch).entryInfoList(QDir::Files | QDir::Hidden | QDir::System))
+            Scratch::shred(fi.absoluteFilePath());
+        gone = QDir(local).removeRecursively() && gone;
+        QDir().rmdir(QFileInfo(local).absolutePath());
+    }
+    if (regThere) {
+        // HKCU\Software\<org>\Huginn and everything in it, then HKCU\Software\<org> when nothing else is in it.
+        bool orgEmpty = false;
+        {
+            QSettings org(QStringLiteral("HKEY_CURRENT_USER\\Software\\") + Settings::org(), QSettings::NativeFormat);
+            org.remove(QStringLiteral("Huginn"));
+            org.sync();
+            orgEmpty = org.childGroups().isEmpty() && org.childKeys().isEmpty();
+        }
+        if (orgEmpty) {
+            QSettings software(QStringLiteral("HKEY_CURRENT_USER\\Software"), QSettings::NativeFormat);
+            software.remove(Settings::org());
+            software.sync();
+        }
+        gone = gone && !oldSettingsThere();
+    }
+    return gone;
+}
+}
+#endif
+
 bool moveOldData(QString *why)
 {
 #if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
@@ -904,10 +972,32 @@ bool moveOldData(QString *why)
         reg.emplace(QSettings::NativeFormat, QSettings::UserScope, Settings::org(), QStringLiteral("Huginn"));
         regKeys = reg->allKeys();
     }
-    if (root.isEmpty() || (!hasRoam && !hasLocal && !regThere))
+    if (root.isEmpty())
         return true;
+    if (!hasRoam && !hasLocal && !regThere) {
+        // Nothing left in AppData: a note that something was left goes, so data another Huginn puts there later is never taken for it.
+        QSettings ini = Settings::store();
+        if (ini.contains(QStringLiteral("portable/oldLeft2"))) {
+            ini.remove(QStringLiteral("portable/oldLeft2"));
+            ini.sync();
+        }
+        return true;
+    }
     QSettings ini = Settings::store();
     const bool movedIn = ini.value(QStringLiteral("portable/movedIn"), false).toBool();
+    // What the move into this folder couldn't delete then (a file held by antivirus a moment): tried again at every start
+    // until it is gone, never taken for another Huginn's data.
+    if (movedIn && ini.value(QStringLiteral("portable/oldLeft2"), false).toBool()) {
+        reg.reset();
+        const bool gone = deleteOld(roam, local, regThere);
+        CrashLog::note(gone ? QStringLiteral("data: what the move left in AppData is deleted now")
+                            : QStringLiteral("data: what the move left in AppData still couldn't all be deleted; tried again next time"));
+        if (gone) {
+            ini.remove(QStringLiteral("portable/oldLeft2"));
+            ini.sync();
+        }
+        return true;
+    }
     const bool started = ini.value(QStringLiteral("portable/moveStarted"), false).toBool();
     const QString moving = root + QLatin1Char('/') + kMoving;
     // A move that stopped partway last time (a full disk, a file held by antivirus): its parts go and it starts over,
@@ -989,35 +1079,13 @@ bool moveOldData(QString *why)
         *why = failed;
         return false;
     }
-    // Everything is in the data folder: the originals go.
-    bool gone = true;
-    if (hasRoam) {
-        gone = QDir(roam).removeRecursively() && gone;
-        QDir().rmdir(QFileInfo(roam).absolutePath());   // the "Huginn" folder above, once empty
-    }
-    if (hasLocal) {
-        const QString scratch = local + QStringLiteral("/scratch");
-        for (const QFileInfo &fi : QDir(scratch).entryInfoList(QDir::Files | QDir::Hidden | QDir::System))
-            Scratch::shred(fi.absoluteFilePath());
-        gone = QDir(local).removeRecursively() && gone;
-        QDir().rmdir(QFileInfo(local).absolutePath());
-    }
-    if (regThere) {
-        reg.reset();
-        // HKCU\Software\<org>\Huginn and everything in it, then HKCU\Software\<org> when nothing else is in it.
-        bool orgEmpty = false;
-        {
-            QSettings org(QStringLiteral("HKEY_CURRENT_USER\\Software\\") + Settings::org(), QSettings::NativeFormat);
-            org.remove(QStringLiteral("Huginn"));
-            org.sync();
-            orgEmpty = org.childGroups().isEmpty() && org.childKeys().isEmpty();
-        }
-        if (orgEmpty) {
-            QSettings software(QStringLiteral("HKEY_CURRENT_USER\\Software"), QSettings::NativeFormat);
-            software.remove(Settings::org());
-            software.sync();
-        }
-        gone = gone && !oldSettingsThere();
+    // Everything is in the data folder: the originals go. What can't go now is noted and tried again at each start
+    // (and by Erase everything).
+    reg.reset();
+    const bool gone = deleteOld(hasRoam ? roam : QString(), hasLocal ? local : QString(), regThere);
+    if (!gone) {
+        ini.setValue(QStringLiteral("portable/oldLeft2"), true);
+        ini.sync();
     }
     CrashLog::note(QStringLiteral("data: moved Huginn's AppData folders and %1 registry settings into the data folder beside Huginn.exe%2")
                        .arg(keys)
@@ -1034,8 +1102,18 @@ void eraseAll()
     if (s_root.isEmpty())
         return;
     QSettings s = Settings::store();
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+    // What the move from AppData left there is Huginn's too, outside this folder: it goes with the rest.
+    if (s.value(QStringLiteral("portable/oldLeft2"), false).toBool() && s.value(QStringLiteral("portable/movedIn"), false).toBool()) {
+        if (!deleteOld(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation),
+                       QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation), oldSettingsThere()))
+            CrashLog::note(QStringLiteral("data: erase couldn't delete all of what the move left in AppData"));
+    }
+#endif
     s.clear();
     s.sync();
+    // crash.log is held open (Windows can't delete an open file): closed, and nothing more is written to it this run.
+    CrashLog::stop();
     eraseIn(s_root, s.fileName());
 }
 
@@ -1053,9 +1131,19 @@ bool selfTest()
         const QSettings s = Settings::store();
         check("settings are an INI file in the data folder", s.format() == QSettings::IniFormat
                                                                   && QDir::cleanPath(s.fileName()).startsWith(QDir::cleanPath(dataDir()) + QLatin1Char('/')));
+        check("no system-wide settings are read", [] {
+            QSettings sys(QSettings::IniFormat, QSettings::SystemScope, Settings::org(), QStringLiteral("Huginn"));
+            return QDir::cleanPath(sys.fileName()).startsWith(QDir::cleanPath(dataDir()) + QLatin1Char('/'));
+        }());
         check("the cache and scratch files are in the data folder", cacheDir().startsWith(dataDir() + QLatin1Char('/')) && localDir() == dataDir());
     }
 
+    check("a folder unzipped for the moment is told apart",
+          unpackedForTheMoment(QStringLiteral("C:/Users/a/AppData/Local/Temp/Rar$EXa1.234/Huginn"), QStringLiteral("D:/elsewhere"))
+              && unpackedForTheMoment(QStringLiteral("C:\\Users\\a\\AppData\\Local\\Temp\\7zO1234\\Huginn"), QStringLiteral("C:/Users/a/AppData/Local/Temp"))
+              && unpackedForTheMoment(QStringLiteral("C:/Users/a/AppData/Local/Temp/Temp1_Huginn-Windows.zip/Huginn"), QString())
+              && !unpackedForTheMoment(QStringLiteral("C:/Users/a/Huginn"), QStringLiteral("C:/Users/a/AppData/Local/Temp"))
+              && !unpackedForTheMoment(QStringLiteral("C:/Users/a/Temperature/Huginn"), QStringLiteral("C:/Users/a/Temp")));
     QTemporaryDir tmp;
     if (!tmp.isValid()) {
         check("temp folder", false);
@@ -1090,6 +1178,7 @@ bool selfTest()
     // Round 19: Tor's folder, the voices, the count of tries and a save's leftover copy go too.
     put(to + QStringLiteral("/tor/data/state"), "tor");
     put(to + QStringLiteral("/voices/f/model.onnx"), "voice");
+    put(to + QStringLiteral("/dictation/dictation-1/model.onnx"), "model");
     put(to + QStringLiteral("/lock-state.json"), "{}");
     put(to + QStringLiteral("/ring-key.json.Ab12Cd"), "key");
     // Something another program keeps in a folder named data: never Huginn's to erase.

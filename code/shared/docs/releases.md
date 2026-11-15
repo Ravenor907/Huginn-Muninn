@@ -50,8 +50,8 @@ The project signs every release file with its own Ed25519 key. No outside compan
 
 - The public half is in [release-key.pem](release-key.pem) and built into both apps:
   `705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06` (32 bytes, hex).
-- The private half is only in the repository's GitHub secrets, as `RELEASE_SIGNING_KEY` (PEM, PKCS#8). It has
-  never been committed. The release job signs with it and checks the signature against `release-key.pem`
+- The private half is only in GitHub secrets, as `RELEASE_SIGNING_KEY` (PEM, PKCS#8), in the protected `release`
+  environment ("Signing keys" below). It has never been committed. The release job signs with it and checks the signature against `release-key.pem`
   before publishing. If the secret is missing or wrong, the release fails and nothing is published.
 - `<file>.sig` is 64 bytes: the Ed25519 signature (RFC 8032) of the file's raw bytes, made with
   `openssl pkeyutl -sign -rawin`.
@@ -96,7 +96,8 @@ labelled `<next> beta <n>`, for example `0.99 beta 12`: `<next>` is `code/BETA` 
   line is the label. Each `.vsig` signs the text above with the label as its version line (`0.99 beta 12`). While
   it carries the separate files (see "Moving over"), `version.txt` holds the label, with no newline at the end. The
   beta job signs with the same script, key and checks as the release job, needs the same three
-  downloads and the Muninn release keystore, and never deploys the relay. The pre-release is never marked latest.
+  downloads and the Muninn release keystore, and never deploys the relay. Its files get a GitHub build attestation
+  too ("Check the build attestation" below). The pre-release is never marked latest.
 - **The channel.** In Labs mode, Settings has an update channel: Stable or Pre-release. On Stable an app never looks
   at the `beta` tag. On Pre-release it also reads the pre-release's label (from its signatures block, or from
   `https://github.com/Ravenor907/Huginn-Muninn/releases/download/beta/version.txt` when it has none) and installs
@@ -164,7 +165,26 @@ With the GitHub CLI (`gh`):
 gh attestation verify Huginn-Windows.zip --repo Ravenor907/Huginn-Muninn
 ```
 
-It shows the workflow and commit that built the file. The same works for `Huginn.flatpak` and `Muninn.apk`.
+It shows the workflow and commit that built the file. The same works for `Huginn.flatpak` and `Muninn.apk`, and for
+the files of the `beta` pre-release.
+
+## Signing keys
+
+`RELEASE_SIGNING_KEY`, `MUNINN_KEYSTORE_BASE64` and `MUNINN_KEYSTORE_PASSWORD` belong in a GitHub environment named
+`release`, not in the repository's secrets. The jobs that sign (Release, Beta pre-release, and the Muninn build when it
+builds a release or a beta) name that environment; test builds and pull requests don't, so once the keys live only
+there no other workflow, branch or pull request can read them. Until they are moved, the repository's secrets still
+work and nothing changes. To move them (Settings of the repository on github.com):
+
+1. **Settings > Environments > New environment**, name `release`, **Configure environment**.
+2. **Required reviewers**: tick it and add yourself, then **Save protection rules** (each release and beta then waits
+   for your OK under the run's **Review deployments**). Leave **Allow administrators to bypass** off.
+3. **Deployment branches and tags**: **Selected branches and tags**, **Add deployment branch or tag rule**, `main`;
+   again for `beta`.
+4. **Environment secrets > Add environment secret**: `RELEASE_SIGNING_KEY`, `MUNINN_KEYSTORE_BASE64` and
+   `MUNINN_KEYSTORE_PASSWORD`, the same values as now.
+5. Push to `beta` and check the run signs (the Muninn and Beta pre-release jobs pass). Only then
+   **Settings > Secrets and variables > Actions** and delete the three repository secrets of the same names.
 
 ## Windows warnings
 

@@ -191,6 +191,9 @@ Rectangle {
         // Cap g4: a join the admin's app couldn't take says so ("Not let in"), with why when the row is opened.
         Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName, refused: i.refused || "",
                                                   refusedText: i.refusedText || "", tag: i.refused ? "Not let in" : i.waiting ? "Waiting" : "Invite" }))
+        // Owner decision: a Family group gives Family trust here only after your own yes ("Add <group> as Family?").
+        if ("familyAsks" in Chat)
+            Chat.familyAsks.forEach(f => out.push({ kind: "familyask", g: f.g, name: f.name, byName: f.byName, tag: "Family?" }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               tag: r.replaces ? "New key" : "Request" }))
         // Introductions, group members asking and Family offers (i1); a linked phone's chats (companion).
@@ -531,13 +534,13 @@ Rectangle {
                             visible: !parent.parent.person
                             anchors.centerIn: parent
                             size: Theme.px(18)
-                            name: entry.rowData.kind === "ginvite" ? "hash" : entry.rowData.kind === "mirror" ? "phone" : entry.rowData.kind === "archived" ? "folder"
+                            name: entry.rowData.kind === "ginvite" ? "hash" : entry.rowData.kind === "familyask" ? "shield" : entry.rowData.kind === "mirror" ? "phone" : entry.rowData.kind === "archived" ? "folder"
                                 : entry.rowData.kind === "newfrom" ? "bell" : entry.rowData.kind === "verse" ? "text" : "people"
                             color: parent.parent.here || parent.parent.on || entry.rowData.kind === "newfrom" || entry.rowData.kind === "verse" ? Theme.accent : Theme.textMuted
                         }
                         // Requests wait for an answer: a lock badge so they stand out.
                         Rectangle {
-                            visible: entry.rowData.kind === "request" || (entry.rowData.kind === "ginvite" && !entry.rowData.waiting)
+                            visible: entry.rowData.kind === "request" || entry.rowData.kind === "familyask" || (entry.rowData.kind === "ginvite" && !entry.rowData.waiting)
                             anchors.right: parent.right; anchors.bottom: parent.bottom
                             anchors.margins: -Theme.px(2)
                             width: Theme.px(14); height: width; radius: width / 2
@@ -1791,7 +1794,7 @@ Rectangle {
             dropLine = after ? item.y + item.height + listPane.spacing / 2 : item.y + item.labelHeight - listPane.spacing / 2
             return
         }
-        if (e.kind === "ginvite" || e.kind === "request" || e.kind === "intro" || e.kind === "mirror") {
+        if (e.kind === "ginvite" || e.kind === "familyask" || e.kind === "request" || e.kind === "intro" || e.kind === "mirror") {
             const first = entries.findIndex(x => x.kind === "chat" && x.section === "")
             const at = first >= 0 ? first : i + 1
             const it = listPane.itemAtIndex(first >= 0 ? first : i)
@@ -1845,6 +1848,14 @@ Rectangle {
                     () => { const r = Chat.acceptGroupInvite(e.g); if (r === "") Ui.say("Joining " + e.name + "…"); else Ui.say(r, true) }, false, false,
                     () => Chat.declineGroupInvite(e.g))
             Ui.confirm.cancelText = "Decline"
+            return
+        case "familyask":
+            // Yes: files from its people arrive without Accept, they can call you directly and they go in your Family
+            // folder. No (or backing out): it stays an ordinary group here; the group's settings can still say yes.
+            Ui.sure("Add " + e.name + " as Family?", (e.byName ? e.byName + " made it a Family group. " : "") + PeopleActions.familyAskText,
+                    "Add as Family", () => { Chat.answerFamily(e.g, true); Ui.say(e.name + " is Family on this computer.") }, false, false,
+                    () => Chat.answerFamily(e.g, false))
+            Ui.confirm.cancelText = "Not Family"
             return
         case "request":
             if (e.replaces) {

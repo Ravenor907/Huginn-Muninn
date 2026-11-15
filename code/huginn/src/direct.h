@@ -34,6 +34,9 @@ public:
     Q_INVOKABLE void stop();
     // At start: a Direct connect hotspot left behind by a crash is removed (NetworkManager keeps it otherwise).
     void clearLeftovers();
+    // Huginn is closing (aboutToQuit, also after a stop signal from logout or shutdown): the hotspot comes down while
+    // the system bus still answers, so the device isn't left without internet.
+    void shutdown() { takeDown(true); }
 
 Q_SIGNALS:
     void changed();

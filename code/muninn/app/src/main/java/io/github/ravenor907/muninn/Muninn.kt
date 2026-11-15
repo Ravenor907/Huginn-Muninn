@@ -123,7 +123,7 @@ class Muninn : Application() {
         }
         // Until the chats are open, what arrives waits (on the relays, or sealed in the locked store, see Nostr).
         // While locked, nothing in the inbox notifies (it may be a receipt, a check-in or presence): only a nudge does.
-        nostr.onEnvelope = { false }
+        nostr.onEnvelope = { _, _ -> io.github.ravenor907.muninn.net.Nostr.Took.LATER }
         // Round 14: except once per lock, "New activity", when someone known to be on an app that can't nudge is around.
         nostr.onLocked = { lockedActivity() }
         // legacy-peers.json: nothing reads it, so any copy in Muninn's files is deleted.

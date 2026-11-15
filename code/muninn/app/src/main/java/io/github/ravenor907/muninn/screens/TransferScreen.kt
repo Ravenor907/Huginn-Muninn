@@ -287,7 +287,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                 // Received and saved: opened only when asked (never an app installer by itself).
                 if (!it.sent && it.uri.isNotEmpty()) {
                     MButton("Open", Modifier.padding(start = 8.dp)) {
-                        if (!Received.open(context, it.uri, it.name)) Ui.say("Nothing on this device opens this kind of file.", true)
+                        Received.openChecked(context, it.uri, it.name)
                     }
                 }
             }

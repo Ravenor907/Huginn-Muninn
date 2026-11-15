@@ -186,10 +186,15 @@ class CallSession(
             CallLogic.ANSWER_EVERY_MS, CallLogic.ANSWER_EVERY_MS, TimeUnit.MILLISECONDS)
         timers += resend
         set(Phase.CONNECTING)
-        if (!m.startAudio(video = wantVideo || peerVideo)) note = "The microphone isn't available"
-        if (relayAtStart()) startRelay()
+        // 1.54: the call is looked after (relay on demand, ending on path loss) before its sound starts, and a sound
+        // setup that fails never stops the answer halfway.
         every(500) { watch() }
+        if (!startSound(m)) note = "The microphone isn't available"
+        if (relayAtStart()) startRelay()
     }
+
+    /** The call's microphone and speaker; false when they can't run. Never throws (CallMedia retries what won't open). */
+    private fun startSound(m: CallMedia): Boolean = try { m.startAudio(video = wantVideo || peerVideo) } catch (e: Throwable) { false }
 
     fun decline() { if (phase == Phase.INCOMING) end("declined", send = true, t = "decline") }
 
@@ -251,7 +256,7 @@ class CallSession(
         applyPeer()
         answeredAt = System.currentTimeMillis()
         set(Phase.CONNECTING)
-        if (!m.startAudio(video = wantVideo || peerVideo)) note = "The microphone isn't available"
+        if (!startSound(m)) note = "The microphone isn't available"
         // Interop (round 19): this side offered the direct path, but the answer has none (Direct off on their side, or
         // Ultra privacy there). With no Wi-Fi or Bluetooth path either, the relay is asked for now instead of after
         // RELAY_NEED_MS, so the call doesn't wait 2.5 s for it.

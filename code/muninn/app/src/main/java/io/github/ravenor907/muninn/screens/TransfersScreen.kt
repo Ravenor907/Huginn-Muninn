@@ -184,7 +184,7 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, copies: List<
                     // An app installer opens only when the person asks, and on a Kids' TV not at all (a parent approves it).
                     val kids = io.github.ravenor907.muninn.tv.KidMode.saved(context)
                     if (!(kids && FileText.isApp(f.name))) MButton("Open", kind = Kind.Accent) {
-                        if (!Received.open(context, f.uri, f.name)) Ui.say("Nothing on this device opens this kind of file.", true)
+                        Received.openChecked(context, f.uri, f.name)
                     }
                     MButton("Folder", icon = "folder") {
                         if (!Received.showFolder(context)) Ui.say("It's in ${f.folder.ifEmpty { Received.shownRoot() }}. Open it from your Files app.")
@@ -279,7 +279,10 @@ internal fun sendFileFrom(app: Muninn, context: Context, scope: CoroutineScope, 
 /** sendFileFrom's second half: the file copied in, then sent. */
 private fun copyAndSend(app: Muninn, context: Context, where: String, uri: Uri, clean: String, size: Long) {
     run {
-        val tmp = File(File(context.cacheDir, "files").also { it.mkdirs() }, "out-" + System.nanoTime())
+        val tmp = FileLink.outCopy(File(context.cacheDir, "files"))
+        // Too little room for the copy: said first, as the chat's own Send does.
+        val room = try { tmp.parentFile?.usableSpace ?: Long.MAX_VALUE } catch (_: Exception) { Long.MAX_VALUE }
+        if (size > 0 && room < size + 32L * 1024 * 1024) { Ui.say("Not enough space on this phone. Free some up, then try again.", true); return@run }
         val ok = try { context.contentResolver.openInputStream(uri)?.use { ins -> tmp.outputStream().use { ins.copyTo(it) } } != null } catch (e: Exception) { false }
         if (!ok) { tmp.delete(); Ui.say("That file couldn't be opened.", true) }
         else if (where.startsWith("g:")) app.chat.sendGroupFile(where.removePrefix("g:").substringBefore('/'), tmp, clean)?.let { Ui.say(it, true) }
@@ -396,7 +399,7 @@ private fun SharedFileRow(app: Muninn, context: Context, f: Chat.SharedFile, sho
     val kids = io.github.ravenor907.muninn.tv.KidMode.saved(context)
     val canOpen = !f.mine && there && !(kids && FileText.isApp(f.name))
     val canForward = !f.mine && there && f.uri.isNotEmpty()
-    val open: () -> Unit = { if (!Received.open(context, f.uri, f.name)) Ui.say("Nothing on this device opens this kind of file.", true) }
+    val open: () -> Unit = { Received.openChecked(context, f.uri, f.name) }
     val folder: () -> Unit = { if (!Received.showFolder(context)) Ui.say("It's in ${Received.shownRoot()}. Open it from your Files app.") }
     val delete: () -> Unit = {
         if (f.mine) { app.chat.deleteFile(f); Ui.say("Removed from the list. The file itself stays where it was.") }

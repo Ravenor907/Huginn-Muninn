@@ -534,4 +534,102 @@ class GroupsTest {
         assertNull(Groups.partOf(JSONObject().put("ps", set).put("pi", 1).put("pn", io.github.ravenor907.muninn.net.Drafts.MAX_PARTS + 1)))
         assertNull(Groups.partOf(JSONObject().put("ps", set).put("pi", "1").put("pn", 2)))
     }
+
+    @Test
+    fun familyNeedsTheirOwnYes() {
+        // A Folk group, B put straight in, then A makes it Family: B is asked, and it's ordinary on B until B says yes.
+        val g = a.groups.create("Pals")!!
+        assertNull(a.groups.addDirect(g, b.key, "Moose", b.mailbox)); pump()
+        assertFalse(b.groups.familyTrusted(g))
+        assertNull(a.groups.setLimit(g, Limits.FAMILY, 14)); pump()
+        assertTrue(a.groups.familyTrusted(g))          // my own change
+        assertFalse(b.groups.familyTrusted(g))         // theirs: not without a yes
+        assertEquals(g, b.groups.familyAsks.value.single().g)
+        b.groups.answerFamily(g, false)
+        assertTrue(b.groups.familyAsks.value.isEmpty())
+        assertFalse(b.groups.familyTrusted(g))
+        // "Not Family" is remembered: turned Folk and Family again, it isn't asked again.
+        assertNull(a.groups.setLimit(g, Limits.FOLK, 7)); pump()
+        assertNull(a.groups.setLimit(g, Limits.FAMILY, 14)); pump()
+        assertTrue(b.groups.familyAsks.value.isEmpty())
+        b.groups.answerFamily(g, true)
+        assertTrue(b.groups.familyTrusted(g))
+        // Turned Folk: the trust goes; Family again: asked again.
+        assertNull(a.groups.setLimit(g, Limits.FOLK, 7)); pump()
+        assertFalse(b.groups.familyTrusted(g))
+        assertNull(a.groups.setLimit(g, Limits.FAMILY, 14)); pump()
+        assertFalse(b.groups.familyTrusted(g))
+        assertTrue(b.groups.familyAsks.value.any { it.g == g })
+        b.groups.answerFamily(g, true)
+        // Kept across a restart; leaving takes the trust away.
+        b.start()
+        assertTrue(b.groups.familyTrusted(g))
+        b.groups.leave(g)
+        assertFalse(b.groups.familyTrusted(g))
+        // Made Family here: trusted at once. Added to someone else's Family group: asked.
+        val f = a.groups.create("Home", Limits.FAMILY)!!
+        assertTrue(a.groups.familyTrusted(f))
+        assertNull(a.groups.addDirect(f, b.key, "Moose", b.mailbox)); pump()
+        assertTrue(b.groups.group(f) != null)
+        assertFalse(b.groups.familyTrusted(f))
+        assertTrue(b.groups.familyAsks.value.any { it.g == f })
+    }
+
+    @Test
+    fun familyGroupsFromBeforeStayTrusted() {
+        val f = a.groups.create("Home", Limits.FAMILY)!!
+        // A store from before 1.54 has no consent record: its Family groups stay trusted, without asking.
+        val o = JSONObject(a.files[Groups.FILE]!!)
+        o.remove("famOk"); o.remove("famNo")
+        a.files[Groups.FILE] = o.toString()
+        a.start()
+        assertTrue(a.groups.familyTrusted(f))
+        assertTrue(a.groups.familyAsks.value.isEmpty())
+    }
+
+    @Test
+    fun anUnreadableStoreIsNeverSavedOver() {
+        val g = family()
+        a.groups.sendText(g, Proto06.MAIN, "hi"); pump()
+        a.files[Groups.FILE] = "{\"groups\": [ broken"
+        a.start()
+        assertNotNull(a.files[Groups.FILE + ".unreadable"])
+        a.groups.create("Another")
+        assertEquals("{\"groups\": [ broken", a.files[Groups.FILE])   // not written over
+        assertTrue(a.files[Groups.CHATS]!!.contains("hi"))              // the chats still load and stay
+    }
+
+    @Test
+    fun invitesLastAWeekAndTheirSenderHearsWhenOneRunsOut() {
+        val g = a.groups.create("Pals")!!
+        assertNull(a.groups.invite(g, b.key))
+        clock += 2 * 3_600_000L
+        pump()
+        assertEquals(1, b.groups.pending.value.size)   // two hours later it's still good
+        clock += Groups.INVITE_MS
+        a.groups.create("Tick")                       // anything that prunes
+        assertTrue(a.notices.any { it.contains("ran out unanswered") })
+    }
+
+    @Test
+    fun aForgedReportIsDroppedAndChannelsAreReadOneAtATime() {
+        val g = family()
+        val other = a.groups.addChannel(g, "news", false).let { a.state(g).channels.first { it.n == "news" }.id }
+        pump()
+        b.groups.sendText(g, Proto06.MAIN, "from Moose"); c.groups.sendText(g, other, "news from Bear"); pump()
+        val msg = a.groups.messages.value[g]!!.first { it.text == "from Moose" }
+        // C says B's message was written by A's ... by C's word only: names someone who didn't write it.
+        val forged = JSONObject().put("t", "report").put("g", g).put("id", Proto06.newLogicalId()).put("msg", msg.id).put("k", c.key).put("text", "made up")
+        a.groups.receive("group", b.key, "Moose", b.mailbox, forged)
+        assertTrue(a.groups.reportsByGroup.value[g].orEmpty().isEmpty())
+        val real = JSONObject().put("t", "report").put("g", g).put("id", Proto06.newLogicalId()).put("msg", msg.id).put("k", b.key).put("text", "made up")
+        a.groups.receive("group", c.key, "Bear", c.mailbox, real)
+        val r = a.groups.reportsByGroup.value[g]!!.single()
+        assertEquals("from Moose", r.text)   // this phone's own copy, not the reporter's words
+        assertTrue(r.checked)
+        // #general read: the other channel stays unread.
+        a.groups.markRead(g, Proto06.MAIN)
+        assertTrue(a.groups.messages.value[g]!!.first { it.text == "news from Bear" }.seen.not())
+        assertTrue(a.groups.hasUnseen(g))
+    }
 }

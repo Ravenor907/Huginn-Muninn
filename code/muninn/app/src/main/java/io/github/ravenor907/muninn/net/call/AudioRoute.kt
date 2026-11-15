@@ -36,6 +36,12 @@ object AudioRoute {
     @Volatile private var chosen = AUTOMATIC
     @Volatile private var preferSpeaker = false
     @Volatile private var video = false
+    /**
+     * 1.54, a TV: the call plays where the TV plays everything (its own speakers, HDMI, ARC or eARC to a soundbar),
+     * through the media path. Android's call routing skips HDMI and ARC, and forcing a call device picks the TV's
+     * built-in speaker even while its sound goes to a soundbar, so nothing is forced here.
+     */
+    @Volatile var tv = false; private set
     private val main = Handler(Looper.getMainLooper())
     private val watch = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = refresh()
@@ -46,8 +52,9 @@ object AudioRoute {
      * A call or room took the audio: route it and follow devices. [speaker]: a voice room, so the speaker unless a
      * headset is connected. [video]: a video call, likewise.
      */
-    fun start(audio: AudioManager, speaker: Boolean = false, video: Boolean = false) {
+    fun start(audio: AudioManager, speaker: Boolean = false, video: Boolean = false, tv: Boolean = false) {
         am = audio
+        this.tv = tv
         chosen = AUTOMATIC
         preferSpeaker = speaker
         this.video = video
@@ -66,6 +73,23 @@ object AudioRoute {
         } catch (_: Exception) {}
         _outputs.value = emptyList()
         _current.value = null
+        tv = false
+    }
+
+    /** An output device's kind in a few words, for the TV call sound check ("HDMI ARC", "speaker"...). */
+    fun typeName(type: Int): String = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "speaker"
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "earpiece"
+        AudioDeviceInfo.TYPE_HDMI -> "HDMI"
+        AudioDeviceInfo.TYPE_HDMI_ARC -> "HDMI ARC"
+        29 -> "HDMI eARC"   // TYPE_HDMI_EARC (Android 12)
+        AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_LINE_DIGITAL, AudioDeviceInfo.TYPE_AUX_LINE -> "line out"
+        AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_ACCESSORY, AudioDeviceInfo.TYPE_USB_HEADSET -> "USB"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "headphones"
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth call"
+        AudioDeviceInfo.TYPE_TELEPHONY -> "telephony"
+        else -> "type $type"
     }
 
     /** The camera came on mid-call: it's a video call now, so the speaker unless a headset is connected or the person chose. */
@@ -102,6 +126,12 @@ object AudioRoute {
         val all = list(a)
         _outputs.value = all
         val pick = pickOutput(all, chosen, preferSpeaker, video)
+        if (tv) {
+            // A TV: never a forced call device (see [tv]); the sound follows the TV's own output.
+            try { if (Build.VERSION.SDK_INT >= 31) a.clearCommunicationDevice() else @Suppress("DEPRECATION") { a.isSpeakerphoneOn = false } } catch (_: Exception) {}
+            _current.value = null
+            return
+        }
         try {
             if (Build.VERSION.SDK_INT >= 31) {
                 val dev = pick?.let { p -> a.availableCommunicationDevices.firstOrNull { idOf(it) == p.id } }

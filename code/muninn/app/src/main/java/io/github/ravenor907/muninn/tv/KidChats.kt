@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import io.github.ravenor907.muninn.ui.fitBars
 import io.github.ravenor907.muninn.ui.padBars
 import android.content.Context
@@ -179,7 +180,7 @@ internal object KidHoldStore {
     @Synchronized fun load(app: Muninn) {
         if (loaded) return
         loaded = true
-        list.value = try { app.vault.read(file(app))?.let { KidK14.heldIn(org.json.JSONArray(it)) } } catch (_: Exception) { null } ?: emptyList()
+        list.value = try { app.vault.read(file(app))?.let { KidK14.heldIn(SafeJson.arr(it)) } } catch (_: Exception) { null } ?: emptyList()
     }
 
     private fun save(app: Muninn) { try { app.vault.write(file(app), KidK14.heldJson(list.value).toString()) } catch (_: Exception) {} }

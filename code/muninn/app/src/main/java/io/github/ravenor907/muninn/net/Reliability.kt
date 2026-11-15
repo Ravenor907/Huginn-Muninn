@@ -81,11 +81,11 @@ object NetBackoff {
 
 /**
  * Asking a relay for the inbox in pages, as Huginn's nostr.cpp does: a relay hands over at most its own limit of
- * stored events, so a full answer (at least [full] events before EOSE) is followed by a request for the ones before
- * its oldest (`until`), until a page comes back short. Only then is the relay's EOSE cursor moved on. Never a
- * plain `limit`, which would silently drop the rest.
+ * stored events (some cap well below 100), so any answer with events in it is followed by a request for the ones
+ * before its oldest (`until`), until a page brings nothing older. Only then is the relay's EOSE cursor moved on.
+ * Never a plain `limit`, which would silently drop the rest.
  */
-class InboxPaging(private val full: Int = PAGE_FULL) {
+class InboxPaging {
     private class Page { var count = 0; var oldest = 0L; var until = 0L }
     private val pages = HashMap<String, Page>()
     /** Relays whose inbox request finished handing over what it held (live from then on). */
@@ -96,20 +96,29 @@ class InboxPaging(private val full: Int = PAGE_FULL) {
 
     /** An event on the inbox request ([page] false) or the page request: only stored ones (before EOSE) count. */
     @Synchronized fun stored(url: String, page: Boolean, createdAt: Long) {
-        if (if (!page) url in live else (pages[url]?.until ?: 0L) == 0L) return
+        if (!backlog(url, page)) return
         val p = pages.getOrPut(url) { Page() }
         p.count++
         if (createdAt > 0 && (p.oldest <= 0 || createdAt < p.oldest)) p.oldest = createdAt
     }
 
     /**
+     * An event on the inbox request ([page] false) or the page request is one the relay held (catch-up), not one sent
+     * live: before the inbox request's EOSE, or on a page asked for.
+     */
+    @Synchronized fun backlog(url: String, page: Boolean): Boolean =
+        if (!page) url !in live else (pages[url]?.until ?: 0L) != 0L
+
+    /**
      * EOSE on the inbox request or the page request. Returns the `until` for the next page, or null when everything
-     * has come (then the page request is closed, if it was one, and the cursor may move).
+     * has come (then the page request is closed, if it was one, and the cursor may move). Whatever the relay's own page
+     * size: a page with anything older than the last one asks again; one with nothing older (empty, or only events at
+     * the same second as `until`, which `until` takes in again) ends it, so it never loops.
      */
     @Synchronized fun end(url: String, page: Boolean): Long? {
         if (!page) live.add(url)
         val p = pages.getOrPut(url) { Page() }
-        val more = p.count >= full && p.oldest > 0 && (p.until == 0L || p.oldest < p.until)
+        val more = p.count > 0 && p.oldest > 0 && (p.until == 0L || p.oldest < p.until)
         if (more) { p.until = p.oldest; p.count = 0; return p.until }
         pages.remove(url)
         return null
@@ -120,8 +129,37 @@ class InboxPaging(private val full: Int = PAGE_FULL) {
 
     /** A page request is going on this relay (its cursor waits). */
     @Synchronized fun paging(url: String): Boolean = (pages[url]?.until ?: 0L) != 0L
+}
 
-    companion object { const val PAGE_FULL = 100 }
+/**
+ * The relay event ids already taken ([Nostr]), the newest [max] of them (as many as Huginn keeps), so a copy from
+ * another relay, or the same one again, is dropped before any work. Kept as the first 64 bits of each id, so 20000 of
+ * them stay small in memory and on disk; nobody can make an event with a chosen id, so a false match is as good as
+ * impossible. Only ids of events checked and taken go in (never an id an event merely claims).
+ */
+class SeenIds(private val max: Int = MAX) {
+    private val ids = LinkedHashSet<Long>()
+
+    @Synchronized fun contains(id: String): Boolean = key(id)?.let { it in ids } ?: false
+    /** False when it was there already. */
+    @Synchronized fun add(id: String): Boolean {
+        val k = key(id) ?: return false
+        if (!ids.add(k)) return false
+        while (ids.size > max) ids.remove(ids.first())
+        return true
+    }
+    @Synchronized fun remove(id: String) { key(id)?.let { ids.remove(it) } }
+    @Synchronized fun size(): Int = ids.size
+    @Synchronized fun clear() { ids.clear() }
+    /** For saving: oldest first, 16 hex characters each. */
+    @Synchronized fun toList(): List<String> = ids.map { java.lang.Long.toHexString(it).padStart(16, '0') }
+
+    companion object {
+        const val MAX = 20_000
+        /** The first 16 hex characters of an event id as a number, or null when it isn't one. */
+        fun key(id: String): Long? =
+            if (id.length < 16) null else try { java.lang.Long.parseUnsignedLong(id.substring(0, 16), 16) } catch (_: NumberFormatException) { null }
+    }
 }
 
 /**
@@ -180,4 +218,36 @@ class ChangedOnly {
 
     private fun digest(text: String): String =
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
+}
+
+/**
+ * 1.54: reactions and edits (room "mx") that came before the message they're for. The relays hand the newest over
+ * first, and a resend may beat the original, so one for a message not here yet is held [HOLD_MS] (at most [MAX] in all,
+ * the oldest going first) and handed back when that message lands. Plain Kotlin, so the tests check it.
+ */
+class MxPending(private val holdMs: Long = HOLD_MS, private val max: Int = MAX) {
+    private class Held(val from: String, val msg: String, val name: String, val p: org.json.JSONObject, val at: Long)
+    private val held = ArrayList<Held>()
+
+    @Synchronized fun hold(from: String, msg: String, name: String, p: org.json.JSONObject, now: Long) {
+        held.removeAll { now - it.at > holdMs }
+        held.add(Held(from, msg, name, p, now))
+        while (held.size > max) held.removeAt(0)
+    }
+
+    /** What waited for [from]'s message [msg] (name, the reaction or edit), oldest first; each is handed back once. */
+    @Synchronized fun take(from: String, msg: String, now: Long): List<Pair<String, org.json.JSONObject>> {
+        held.removeAll { now - it.at > holdMs }
+        val mine = held.filter { it.from == from && it.msg == msg }
+        if (mine.isEmpty()) return emptyList()
+        held.removeAll { it.from == from && it.msg == msg }
+        return mine.map { it.name to it.p }
+    }
+
+    @Synchronized fun size(): Int = held.size
+
+    companion object {
+        const val HOLD_MS = 30 * 60_000L
+        const val MAX = 300
+    }
 }

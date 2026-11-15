@@ -66,7 +66,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * their phone rings even while Muninn is locked there. Once per call.
      */
     private fun ring(contactKey: String, json: String) {
-        val o = try { JSONObject(json) } catch (e: Exception) { return }
+        val o = try { SafeJson.obj(json) } catch (e: Exception) { return }
         if (o.optString("t") != "offer" || o.has("g")) return
         val c = contacts.get(contactKey) ?: return
         if (RingWire.RING_CAP !in c.caps) return
@@ -148,7 +148,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** Round 17: a part of a long message ("ps", "pi", "pn", as in groups, 3.8 and 11.2): its set, place and count. */
                    val part: String = "", val partAt: Int = 0, val partOf: Int = 0,
                    /** A longer video from Family or trusted (up to 3 minutes, through FileLink): kept in pieces (BigVideo), its first frame under [photo]. */
-                   val big: Boolean = false)
+                   val big: Boolean = false,
+                   /** 1.54, theirs, in memory only: the ratchet sending chain it came on (part of its "d") and its number "n" there. */
+                   val chain: String = "", val seq: Int = -1)
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false,
@@ -306,7 +308,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val probed = ConcurrentHashMap<String, Long>()
     private val groupDir = File(context.filesDir, "groups")
     /** Group chats: state, members, channels and messages. Chat is how its envelopes travel. */
-    val groups: Groups = Groups(id.keys, id.publicKey, GroupHost(), { vault.read(File(groupDir, it)) }, { f, t -> groupDir.mkdirs(); vault.write(File(groupDir, f), t) })
+    val groups: Groups = Groups(id.keys, id.publicKey, GroupHost(), { vault.read(File(groupDir, it)) }, { f, t -> groupDir.mkdirs(); vault.write(File(groupDir, f), t) },
+        loadFailed = { f -> vault.loadFailed(File(groupDir, f)) })
     /** Contact folders: local only. */
     val folders = Folders({ vault.read(File(context.filesDir, "folders.json")) }, { vault.write(File(context.filesDir, "folders.json"), it) })
     /** Muted, archived and marked unread: on this phone only. */
@@ -348,7 +351,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             groups.failStaleBig()
         } catch (_: Exception) {}
         queueWaiting()
-        try { vault.read(s1Store)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { s1Bound[it] = o.optLong(it) } } } catch (_: Exception) {}
+        try { vault.read(s1Store)?.let { SafeJson.obj(it) }?.let { o -> o.keys().forEach { s1Bound[it] = o.optLong(it) } } } catch (_: Exception) {}
         FileLink.resend = { p, file, n, g -> bg {
             if (g.isEmpty()) sendFile(p, file, n)?.let { notices.tryEmit(it) }
             else sendMemberFile(p, file, n, FileLink.preparing(p, n, file.length(), g), g)
@@ -373,6 +376,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun relay(peer: String, file: File, name: String): String? = relayFile(peer, file, name)
             override fun nameOf(peer: String) = this@Chat.nameOf(peer)
             override fun cacheDir(): File = File(context.cacheDir, "files").also { it.mkdirs() }
+            // Copies waiting to go and files still arriving: kept where Android and Clear caches leave them (no backup either).
+            override fun filesDir(): File = File(context.noBackupFilesDir, "files").also { it.mkdirs() }
             override fun notice(text: String) { notices.tryEmit(text) }
             override fun videosOutDir(): File? = try { videosOut() } catch (_: Exception) { null }
             override fun hasF5(peer: String) = MediaRoute.CAP in capsOf(peer) || envCaps[peer]?.contains(MediaRoute.CAP) == true
@@ -440,7 +445,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             // Cap f3 (27.7): resume and long waits.
             override fun resumes(peer: String) = FileLink.RESUME_CAP in capsOf(peer) || envCaps[peer]?.contains(FileLink.RESUME_CAP) == true
             // A big file waiting for Accept or Decline: a notification as a message gets (it waits up to a day).
-            override fun offered(where: String, from: String, text: String) { arrivals.tryEmit(Triple(this@Chat.nameOf(from), text, where)) }
+            override fun offered(where: String, from: String, text: String) {
+                // A 1:1 offer from someone who isn't a contact: their chosen name is marked, never shown as a contact's.
+                val who = this@Chat.nameOf(from).let { if (where == from && !isContact(from)) stranger(it) else it }
+                arrivals.tryEmit(Triple(who, text, where))
+            }
             // Cap f3: stopped files of theirs kept to go on from, across a restart (7 days), in the vault.
             override fun readKept(): String? = vault.read(File(context.filesDir, "keptparts.json"))
             override fun writeKept(text: String) { vault.write(File(context.filesDir, "keptparts.json"), text) }
@@ -533,7 +542,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun applyAccount(item: LinkAccount.Item) {
                 val v = item.v
                 when (item.k) {
-                    "me" -> if (v != null) LinkWire.readMe(JSONObject(v.toString()))?.let { m -> setMyProfile(m.name, m.status, m.custom) }
+                    "me" -> if (v != null) LinkWire.readMe(SafeJson.obj(v.toString()))?.let { m -> setMyProfile(m.name, m.status, m.custom) }
                     "contact" -> {
                         val c = contacts.contact(item.id) ?: return
                         if (item.del || v == null) { removeContact(item.id); return }
@@ -638,14 +647,24 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         // Someone came close by or onto the Wi-Fi: what waits for them goes now (nearbyNow), without waiting for a timer.
         retryScope.launch { kotlinx.coroutines.flow.merge<Any>(ble.peers, net.devices).collect { wakeRetry() } }
-        nostr.onEnvelope = { content ->
+        nostr.onEnvelope = { content, held ->
             try {
                 val plain = unwrap(content)
-                if (plain != null) { receive(plain, "internet"); true }
+                if (plain != null) {
+                    // 1.54: what the relays (or the locked store) held comes in a burst: a higher per-sender rate for it.
+                    // Turned away as too many at once (429): left on the relays and asked for again, never lost.
+                    backlog.set(held)
+                    val code = try { receive(plain, "internet").first } finally { backlog.set(false) }
+                    if (code == 429) Nostr.Took.BUSY else Nostr.Took.TAKEN
+                }
                 // Cap e1 after a restore: for a day key not here yet, not taken (so not marked seen) for 7 days.
-                else !waitsForDayKey(content)
-            } catch (_: Exception) { true }
+                else if (waitsForDayKey(content)) Nostr.Took.LATER else Nostr.Took.TAKEN
+            // Throwable: one bad event (however it breaks) is taken as handled, so it's marked seen and never comes back
+            // to crash every start.
+            } catch (_: Throwable) { Nostr.Took.TAKEN }
         }
+        // 1.54: this phone's clock looks wrong (a relay refused an event's time, or the relays all disagree with it).
+        nostr.onClockOff = { notices.tryEmit("This phone's date and time look wrong, so messages over the internet may not go through. Check Date and time in Settings.") }
         // A backup was restored: a new day key, announced to every e1 contact now.
         if (prefs.getBoolean(Backup.RESTORE_ANNOUNCE, false)) {
             prefs.edit().remove(Backup.RESTORE_ANNOUNCE).apply()
@@ -672,6 +691,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save(); wrapKeys.prune()
             // A ring mailbox replaced after a block: 2 days later it isn't asked for any more.
             // A nudge mailbox replaced with it (cap n2) too.
+            // 1.54: nobody has calls off now: keys kept for their nudges go after the usual 2 days.
+            if (contacts.all.value.none { it.noCalls && !it.groupOnly }) ringKey?.release()
             val ringGone = ringKey?.prune() == true
             val nudgeGone = nudgeKey?.prune() == true
             if (ringGone || nudgeGone) nostr.resubscribe() } catch (_: Exception) {} } }
@@ -882,7 +903,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private fun unwrap(content: String): String? {
         val raw = String(Base64.getDecoder().decode(content))
-        val o = JSONObject(raw)
+        val o = SafeJson.obj(raw)
         if (!o.has("e")) return raw   // not sealed
         // Cap e1: wrapped for one of my day keys as well; one that's gone (or never was) doesn't open.
         if (o.has("w")) return RingWire.openWrap(o, id.keys) { wrapKeys.find(it) }?.let { String(it) }
@@ -894,7 +915,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** An e1 wrapping that didn't open names a day key not here, within 7 days of a restore ([RingWire.waitForDayKey]). */
     private fun waitsForDayKey(content: String): Boolean = try {
-        val o = JSONObject(String(Base64.getDecoder().decode(content)))
+        val o = SafeJson.obj(String(Base64.getDecoder().decode(content)))
         o.has("w") && RingWire.waitForDayKey(wrapKeys.find(o.getString("w")) != null, prefs.getLong(Backup.RESTORED_AT, 0L), System.currentTimeMillis())
     } catch (e: Exception) { false }
 
@@ -919,7 +940,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun probeCaps(peerKey: String) {
         val c = contacts.get(peerKey)
         if (c == null && !_met.value.containsKey(peerKey)) return
-        if (c != null && "g1" in c.caps) return
+        // 1.54: a group peer stored with only the assumed caps is still asked (nothing came from them yet).
+        if (c != null && "g1" in c.caps && !Contacts.unknownCaps(c.caps)) return
         val now = System.currentTimeMillis()
         if (now - (probed[peerKey] ?: 0L) < 3_600_000L) return
         probed[peerKey] = now
@@ -1018,7 +1040,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             bg {
                 try {
                     if (!on) {
-                        r.renew()
+                        // 1.54: they keep nudging to the key they hold (they never get the new one), so its mailbox stays
+                        // read for nudges only (never rings) while anyone has calls off, and their messages still alert.
+                        r.renew(nudges = true)
                         nostr.resubscribe()
                         announceKeys { RingWire.RING_CAP in it.caps && it.chatKey != peerKey && !it.noCalls }
                     } else announceKeys { RingWire.RING_CAP in it.caps && it.chatKey == peerKey }
@@ -1125,7 +1149,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         forget(listOf(msgId))
         outbox.drop(msgId); outbox.drop(UNSEND + msgId); tries.remove(msgId)
         edit { map ->
-            map[peerKey]?.firstOrNull { it.id == msgId }?.photo?.takeIf { it.isNotEmpty() }?.let { File(photosDir, it).delete() }
+            map[peerKey]?.firstOrNull { it.id == msgId }?.photo?.takeIf { it.isNotEmpty() }?.let { blobFile(it)?.delete() }
             map[peerKey] = map[peerKey].orEmpty().filterNot { it.id == msgId }
             true
         }
@@ -1137,7 +1161,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         edit { map ->
             val list = map[peerKey] ?: return@edit false
             val m = list.firstOrNull { it.id == msgId && it.mine && it.unsent.isEmpty() } ?: return@edit false
-            if (m.photo.isNotEmpty()) File(photosDir, m.photo).delete()
+            if (m.photo.isNotEmpty()) blobFile(m.photo)?.delete()
             target = m
             map[peerKey] = list.map { if (it.id == msgId) it.copy(text = "", photo = "", voice = 0, unsent = "You", state = "unsending", failed = false) else it }
             true
@@ -1203,7 +1227,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun receive(body: String, via: String, from: String = ""): Pair<Int, String> {
         // Moving to another device: nothing comes in here any more (it waits for the new device).
         if (Move.locked) return 503 to "{}"
-        val o = try { JSONObject(body) } catch (e: Exception) { return 400 to "{}" }
+        val o = try { SafeJson.obj(body) } catch (e: Exception) { return 400 to "{}" }
         val fromKey = o.optString("fromKey")
         val name = o.optString("fromName").take(40).ifEmpty { "Someone" }
         if (fromKey.isEmpty() || fromKey == id.publicKey) return 400 to "{}"
@@ -1236,7 +1260,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** On a Kids' Device: only a full-size video offer is answered (declined, see FileLink.onSignal). Anything else is turned away. */
     private fun kidVideoOffer(fromKey: String, text: String): Pair<Int, String> {
-        val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+        val p = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
         if (p.optString("t") != "offer" || !p.has("vid") || !FileLink.ok(p)) return 403 to "{}"
         FileLink.onSignal(fromKey, p)
         return 200 to "{}"
@@ -1364,7 +1388,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         var lp: More.Preview? = null
         var part: TextPart? = null
         if (envRoom == "rich") {
-            val p = try { JSONObject(plain) } catch (e: Exception) { return 400 to "{}" }
+            val p = try { SafeJson.obj(plain) } catch (e: Exception) { return 400 to "{}" }
             if (!Rich.ok("rich", p)) return 400 to "{}"
             opened = p.getString("text"); re = p.optString("re")
             // Cap m2: a poll or a link preview. A malformed one is left out; the text still shows.
@@ -1385,21 +1409,23 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Linked devices: only a paired device (or one answering my link code) gets past Link.receive, and a sync sends many at once.
         else if (room != "receipt" && room != "link") synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
-            if (q.size >= 5) return 429 to "{}"
+            if (q.size >= rate(5)) return 429 to "{}"
             q.addLast(now)
         }
         // Section 9: text over the limit is malformed and refused, never cut.
         if ((room == "private" || room == "nearby") && Proto06.chars(opened) > MAX) return 400 to "{}"
         val text = opened
         val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
+        val rh = o.optJSONObject("rh")
         val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re, poll = poll, preview = lp,
-            part = part?.set ?: "", partAt = part?.i ?: 0, partOf = part?.n ?: 0)
+            part = part?.set ?: "", partAt = part?.i ?: 0, partOf = part?.n ?: 0,
+            chain = rh?.optString("d").orEmpty().take(32), seq = rh?.optInt("n", -1) ?: -1)
         // A message from them ends their "typing".
         if (room == "private" && fromKey in _typing.value) _typing.update { it - fromKey }
         when (room) {
             "mx" -> {
                 if (contacts.contact(fromKey) == null && !_met.value.containsKey(fromKey)) return 403 to "{}"
-                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                val p = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
                 // Cap m2: a vote on a poll; everything else is m1.
                 if (p.opt("t") == "vote") { if (!More.ok("mx", p)) return 400 to "{}"; takeVote(fromKey, p) }
                 else if (!Rich.ok("mx", p)) return 400 to "{}"
@@ -1409,7 +1435,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             "live" -> {
                 if (contacts.contact(fromKey) == null && !_met.value.containsKey(fromKey)) return 403 to "{}"
-                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                val p = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
                 if (!Rich.ok("live", p)) return 400 to "{}"
                 if (Rich.fresh(Rich.ts(p), now)) {
                     val on = p.getBoolean("on")
@@ -1426,7 +1452,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 // Cap p1: a picture and colour, only from a contact or someone in a group with me right now.
                 val c = contacts.get(fromKey)
                 if (c == null || (c.groupOnly && !groups.sharesGroup(fromKey))) return 403 to "{}"
-                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                val p = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
                 // Cap p2: someone asks for my picture, or says mine came.
                 if (p.opt("t") == ProfileWire.ASK || p.opt("t") == ProfileWire.ACK) {
                     if (ProfileWire.CAP2 !in c.caps || !ProfileWire.ctlOk(p)) return 400 to "{}"
@@ -1439,7 +1465,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             "call" -> {
                 // Contacts and group peers; someone met only while close by or on the same Wi-Fi.
-                if (contacts.get(fromKey) == null && !(via != "internet" && _met.value.containsKey(fromKey))) return 403 to "{}"
+                val metHere = via != "internet" && _met.value.containsKey(fromKey)
+                if (contacts.get(fromKey) == null && !metHere) return 403 to "{}"
+                // A group member who isn't a contact here may only take part in group calls and voice rooms: never ring
+                // this phone for a 1:1 call (under a name they chose).
+                if (!isContact(fromKey) && !metHere && Permissions.isDirectOffer(opened)) return 403 to "{}"
                 // Calls turned off for them (the press-and-hold sheet): their ring never reaches this phone.
                 if (!callsAllowed(fromKey) && Permissions.isRing(opened)) return 200 to "{}"
                 onSignal(fromKey, opened); return 200 to "{}"
@@ -1506,7 +1536,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             "receipt" -> {
                 // Group peers send receipts too (a caps probe, or its answer).
                 if (contacts.get(fromKey) == null && !_met.value.containsKey(fromKey)) return 403 to "{}"
-                val r = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                val r = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
                 // Section 9: at most 40 ids a receipt; more is malformed and refused.
                 val a = r.optJSONArray("ids") ?: return 400 to "{}"
                 if (a.length() > Proto06.MAX_RECEIPT_IDS) return 400 to "{}"
@@ -1559,7 +1589,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     val m = list.firstOrNull { it.id == gone && !it.mine } ?: return@edit false
                     found = true
                     if (m.unsent.isNotEmpty()) return@edit false
-                    if (m.photo.isNotEmpty()) File(photosDir, m.photo).delete()
+                    if (m.photo.isNotEmpty()) blobFile(m.photo)?.delete()
                     map[fromKey] = list.map { if (it.id == gone) it.copy(text = "", photo = "", voice = 0, unsent = name) else it }
                     true
                 }
@@ -1570,11 +1600,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             "link" -> {
                 // Linked devices (companion style): only from a device paired with this one, or answering my link code.
-                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                val p = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
                 if (!Link.receive(fromKey, p, LinkWire.lanOk(via, directOn()), relayed = via == "internet")) return 403 to "{}"
             }
             "file" -> {
-                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                val p = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
                 // Contacts, and members of a group for that group's files (cap f2, 27.2): their offer names the group,
                 // their answer is to a file of mine on its way to them.
                 val g = p.optString("g")
@@ -1586,7 +1616,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 FileLink.onSignal(fromKey, p)
             }
             "intro" -> {
-                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                val p = try { SafeJson.obj(text) } catch (e: Exception) { return 400 to "{}" }
                 if (!Trust.ok(p)) return 400 to "{}"
                 if (!takeIntro(fromKey, name, mailbox, p)) return 403 to "{}"
             }
@@ -1599,6 +1629,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     }
                     return 200 to "{}"
                 }
+                // Hidden from people nearby (Nearby off): nobody but contacts gets through close by or on the Wi-Fi.
+                if (via != "internet" && !id.visibleNearby) return 403 to "{}"
                 val m = _met.value[fromKey] ?: if (via != "internet") Met(name, mailbox) else return 403 to "{}"
                 if (text != "yes" || m.theySaid) return 200 to "{}"
                 putMet(fromKey, m.copy(theySaid = true, mailbox = mailbox ?: m.mailbox))
@@ -1670,11 +1702,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val parts = Photos.split(jpeg)
                 if (parts.size > LabsWire.MAX_SHOT_PIECES) { done(false); return@bg }
                 parts.forEachIndexed { i, part ->
-                    bodies += ChatWire.seal(base("photo", shotId, JSONObject(info.toString())).put("i", i).put("n", parts.size),
+                    bodies += ChatWire.seal(base("photo", shotId, SafeJson.obj(info.toString())).put("i", i).put("n", parts.size),
                         part, sk, LabsWire.KEY, null, ChatCrypto::newKeyPair).toString()
                 }
             }
-            val lb = JSONObject(info.toString()).apply { if (shotId.isNotEmpty()) put("s", shotId) }
+            val lb = SafeJson.obj(info.toString()).apply { if (shotId.isNotEmpty()) put("s", shotId) }
             bodies += ChatWire.seal(base("private", UUID.randomUUID().toString(), lb), t.toByteArray(Charsets.UTF_8), sk, LabsWire.KEY, null,
                 ChatCrypto::newKeyPair).toString()
             id.labsReportedAt = System.currentTimeMillis()
@@ -1696,7 +1728,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     // sealed and sent like a message (room "photo"). The other phone puts them back together and
     // answers "delivered" once it has them all. Pieces fit every route: Nearby's 32 KB limit and relays'.
 
-    private class Incoming(val from: String, val parts: Array<ByteArray?>, val started: Long, val file: String = "")
+    private class Incoming(val from: String, val parts: Array<ByteArray?>, val started: Long, val file: String = "") {
+        /** When its last piece came: one that stops coming lets its place go after [PIECES_QUIET_MS]. */
+        @Volatile var touched = started
+    }
     private val incoming = ConcurrentHashMap<String, Incoming>()
     private val pieceTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
 
@@ -1732,7 +1767,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             vault.writeBytes(File(dir, BigVideo.SIZE), file.length().toString().toByteArray())
             return true
-        } catch (e: Exception) { dir.deleteRecursively(); File(photosDir, id).delete(); return false }
+        } catch (e: Exception) { dir.deleteRecursively(); blobFile(id)?.delete(); return false }
     }
 
     /** Plays big video [id] from its sealed pieces (null when it isn't here). */
@@ -1782,16 +1817,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 else {
                     val name = nameOf(from)
                     addPrivate(from, Msg(mid, from, name, "", false, System.currentTimeMillis(), photo = mid, video = ms, big = true)).also { added ->
-                        if (added) { _unread.update { it + from }; arrivals.tryEmit(Triple(contacts.contact(from)?.shown ?: name, "Video", from)) }
+                        if (added) { _unread.update { it + from }; arrivals.tryEmit(Triple(contacts.contact(from)?.shown ?: stranger(name), "Video", from)) }
                     }
                 }
-                if (!ok) { File(photosDir, mid).delete(); bigDir(mid).deleteRecursively() }
+                if (!ok) { blobFile(mid)?.delete(); bigDir(mid).deleteRecursively() }
                 return ok
             } finally { if (theirs != null) bigLocks.remove(theirs) }
         }
     }
     /** One video id kept at a time (two copies arriving at once never undo each other). */
     private val bigLocks = ConcurrentHashMap<String, Any>()
+    /**
+     * A kept picture, voice or video by its id; null for an id that isn't a plain name (it could reach outside the
+     * folder). Every id that comes in is checked where it arrives too; this is the second line.
+     */
+    private fun blobFile(id: String): File? = if (ChatWire.blobIdOk(id)) File(photosDir, id) else null
     private val UUID_FORM = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -1801,7 +1841,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!storeBigVideo(mid, file)) return null
         val ok = if (group) groups.addBigVideo(peerOrGroup, id.publicKey, id.username, mid, ms)
         else addPrivate(peerOrGroup, Msg(mid, peerOrGroup, id.username, "", true, System.currentTimeMillis(), state = "sending", photo = mid, video = ms, big = true))
-        if (!ok) { File(photosDir, mid).delete(); bigDir(mid).deleteRecursively(); return null }
+        if (!ok) { blobFile(mid)?.delete(); bigDir(mid).deleteRecursively(); return null }
         return mid
     }
 
@@ -1930,7 +1970,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val alwaysStore = File(context.filesDir, "files-always.json")
     private val always: MutableSet<String> by lazy {
         java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>()).also { set ->
-            try { vault.read(alwaysStore)?.let { JSONArray(it) }?.let { a -> for (i in 0 until a.length()) set.add(a.getString(i)) } } catch (_: Exception) {}
+            try { vault.read(alwaysStore)?.let { SafeJson.arr(it) }?.let { a -> for (i in 0 until a.length()) set.add(a.getString(i)) } } catch (_: Exception) {}
         }
     }
     fun filesAlways(k: String) = k in always
@@ -1951,7 +1991,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val oldest = System.currentTimeMillis() - Limits.LONGEST * 86_400_000L
         val out = ArrayList<SharedFile>()
         try {
-            vault.read(filesStore)?.let { JSONArray(it) }?.let { a ->
+            vault.read(filesStore)?.let { SafeJson.arr(it) }?.let { a ->
                 for (i in 0 until a.length()) a.optJSONObject(i)?.let { o ->
                     val f = SharedFile(o.optString("w"), o.optString("n"), o.optLong("s"), o.optString("u"), o.optBoolean("m"), o.optLong("t"))
                     if (f.where.isNotEmpty() && f.time >= oldest) out += f
@@ -1985,7 +2025,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** A file as it may be named on the wire (14.1): no folders or control characters, 1 to 200 characters. */
-    fun cleanFileName(name: String) = name.replace('/', '_').replace('\\', '_').filter { it.code >= 0x20 }.take(200).trim().ifBlank { "file" }
+    fun cleanFileName(name: String) = Sharing.cleanName(name).replace('/', '_').replace('\\', '_').filter { it.code >= 0x20 }.take(200).trim().ifBlank { "file" }
 
     /** A small file over the internet route, as a message with its own card. Null when on its way, else why not. */
     private fun relayFile(peerKey: String, file: File, name: String): String? {
@@ -2043,14 +2083,30 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun maxPieces(o: JSONObject) = if (o.optString("kind") == "gif") Gifs.PIECES else Photos.MAX_PIECES
 
     /** Three GIFs over 3.2 MB already coming in: a fourth waits, so memory stays bounded. */
+    /**
+     * A place for a new half-received photo, voice, video or GIF ([key]) from [fromKey]: at most [SLOTS_EACH] per
+     * sender, [SLOTS_OUTSIDERS] for everyone who isn't a contact together, and [SLOTS_ALL] in all. So one sender (or a
+     * stranger with many keys) can't hold every place and block everyone else's.
+     */
+    private fun pieceSlot(key: String, fromKey: String): Boolean {
+        if (incoming.containsKey(key)) return true
+        val all = incoming.values.toList()
+        if (all.count { it.from == fromKey } >= SLOTS_EACH) return false
+        if (!isContact(fromKey) && all.count { !isContact(it.from) } >= SLOTS_OUTSIDERS) return false
+        return all.size < SLOTS_ALL
+    }
+
     private fun bigIncoming() = incoming.values.count { it.parts.size > Photos.MAX_PIECES } >= 3
 
     private fun receivePiece(o: JSONObject, fromKey: String, name: String, via: String): Pair<Int, String> {
         val contact = contacts.contact(fromKey)
         if (contact == null && via == "internet" && !_met.value.containsKey(fromKey)) return 403 to "{}"
+        // Hidden from people nearby (Nearby off): only contacts get through close by or on the Wi-Fi (as "private").
+        if (contact == null && via != "internet" && !id.visibleNearby) return 403 to "{}"
         val msgId = o.optString("id")
         val n = o.optInt("n"); val i = o.optInt("i", -1)
-        if (msgId.isEmpty() || n < 1 || n > maxPieces(o) || i !in 0 until n) return 400 to "{}"
+        // The id names the file it's kept in: only a UUID (as every app sends), never a path ("../..").
+        if (!ChatWire.pieceIdOk(msgId) || n < 1 || n > maxPieces(o) || i !in 0 until n) return 400 to "{}"
         // Cap m2: album fields and video messages must be well-formed.
         if (!More.ok("piece", o)) return 400 to "{}"
         // Files turned off for them: a file's pieces are dropped quietly.
@@ -2058,8 +2114,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // 1.42: files never come through the relays now (Encrypted file sharing, cap f4). An older app's relay file is
         // turned down politely: a card here says why, and they get one short message saying why. Photos, GIFs, voice
         // and video messages still come in pieces as before.
-        if (o.optString("kind") == "file") { oldRelayFile(fromKey, msgId, o.optString("fn"), contact != null); return 200 to "{}" }
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
+        // 1.54: answered with one "delivered" for its id (once its first piece proved it's them), so the older app stops
+        // sending its pieces again for a day; the card here and the short message say it wasn't taken.
+        if (o.optString("kind") == "file") {
+            if ("$fromKey|$msgId" in oldFilesSeen) return 200 to "{}"
+            return opened(o, fromKey, { null }) { _ ->
+                if (oldRelayFile(fromKey, msgId, Sharing.cleanName(o.optString("fn")), contact != null)) receipt(fromKey, listOf(msgId), "delivered", contact?.mailbox ?: mailbox)
+                200 to "{}"
+            }
+        }
         // Already have it (a copy from another route, or a resend): confirm again, or just drop a piece already here.
         val dup = {
             if (known(fromKey, msgId)) { receipt(fromKey, listOf(msgId), "delivered", mailbox); 200 to "{}" }
@@ -2074,7 +2138,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (q.size >= 1000) return 429 to "{}"   // about 15 MB a minute at most
             q.addLast(now)
         }
-        if (incoming.size > 20 && !incoming.containsKey(msgId)) return 429 to "{}"
+        if (!pieceSlot(msgId, fromKey)) return 429 to "{}"
         if (n > Photos.MAX_PIECES && !incoming.containsKey(msgId) && bigIncoming()) return 429 to "{}"
         return opened(o, fromKey, dup) { part -> takePiece(o, fromKey, name, via, msgId, n, i, mailbox, part) }
     }
@@ -2084,26 +2148,28 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val oldFilesTold = ConcurrentHashMap<String, Long>()
 
     /** An older app's relay file ([fn]) from [fromKey]: a card says why here, and a contact is told once in 6 hours. */
-    private fun oldRelayFile(fromKey: String, msgId: String, fn: String, contact: Boolean) {
+    private fun oldRelayFile(fromKey: String, msgId: String, fn: String, contact: Boolean): Boolean {
         if (oldFilesSeen.size > 500) oldFilesSeen.clear()
-        if (!oldFilesSeen.add("$fromKey|$msgId")) return
+        if (!oldFilesSeen.add("$fromKey|$msgId")) return false
         val shown = fn.ifEmpty { "a file" }
         FileLink.oldRelayFile(msgId, fromKey, shown)
         val now = System.currentTimeMillis()
-        if (!contact || now - (oldFilesTold[fromKey] ?: 0L) < 6 * 3_600_000L) return
+        if (!contact || now - (oldFilesTold[fromKey] ?: 0L) < 6 * 3_600_000L) return true
         oldFilesTold[fromKey] = now
         bg { sendPrivate(fromKey, FileLink.oldRelayReply(shown)) }
+        return true
     }
 
     private fun takePiece(o: JSONObject, fromKey: String, name: String, via: String, msgId: String, n: Int, i: Int, mailbox: String?,
                           part: ByteArray): Pair<Int, String> {
         val contact = contacts.contact(fromKey)
-        val kindFile = if (o.optString("kind") == "file") o.optString("fn") else ""
+        val kindFile = if (o.optString("kind") == "file") Sharing.cleanName(o.optString("fn")) else ""
         val inc = incoming.getOrPut(msgId) { Incoming(fromKey, arrayOfNulls(n), System.currentTimeMillis(), kindFile) }
         wakeRetry()   // the loop clears half a photo that never finishes
         if (inc.from != fromKey || inc.parts.size != n) return 400 to "{}"
         synchronized(inc) {
             inc.parts[i] = part
+            inc.touched = System.currentTimeMillis()
             val have = inc.parts.count { it != null }
             // A file shows "Receiving 42%" in the chat while its pieces come in.
             if (inc.file.isNotEmpty() && have < n) FileLink.relayIn(msgId, fromKey, inc.file, have, n)
@@ -2112,7 +2178,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         val voiceMs = if (o.optString("kind") == "voice") o.optInt("ms").coerceIn(1, Voice.MAX_MS) else 0
         val videoMs = if (o.optString("kind") == "video") o.optInt("ms").coerceIn(1, More.VIDEO_MAX_MS) else 0
-        val fileName = if (o.optString("kind") == "file") o.optString("fn") else ""
+        val fileName = if (o.optString("kind") == "file") Sharing.cleanName(o.optString("fn")) else ""
         val gif = o.optString("kind") == "gif"
         val joined = inc.parts.map { it!! }
         val jpeg = (when {
@@ -2140,10 +2206,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 video = videoMs, album = album, albumAt = if (album.isEmpty()) 0 else o.optInt("ai"), albumOf = if (album.isEmpty()) 0 else o.optInt("an"),
                 file = fileName, saved = savedAs?.second ?: "", gif = gif))) {
             _unread.update { it + fromKey }
-            arrivals.tryEmit(Triple(contact?.shown ?: name, when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; fileName.isNotEmpty() -> "File: $fileName"
+            // Not a contact: the name they chose never shows as if it were one.
+            arrivals.tryEmit(Triple(contact?.shown ?: stranger(name), when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; fileName.isNotEmpty() -> "File: $fileName"
                 gif -> "GIF"; album.isNotEmpty() -> "Photos"; else -> "Photo" }, fromKey))
-            if (fileName.isNotEmpty()) notices.tryEmit(savedAs?.let { "File from ${contact?.shown ?: name}: ${it.first} · Saved to Downloads" }
-                ?: "File from ${contact?.shown ?: name}: $fileName. It couldn't be saved to Downloads: tap Save in the chat.")
+            if (fileName.isNotEmpty()) notices.tryEmit(savedAs?.let { "File from ${contact?.shown ?: stranger(name)}: ${it.first} · Saved to Downloads" }
+                ?: "File from ${contact?.shown ?: stranger(name)}: $fileName. It couldn't be saved to Downloads: tap Save in the chat.")
         }
         receipt(fromKey, listOf(msgId), "delivered", mailbox)
         return 200 to "{}"
@@ -2224,7 +2291,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     else -> m.copy(peerKey = to)
                 }
             }
-            map[to] = (moved + map[to].orEmpty()).distinctBy { it.id }.sortedBy { it.time }.takeLast(1000)
+            val all = (moved + map[to].orEmpty()).distinctBy { it.id }.sortedBy { it.time }
+            map[to] = all.takeLast(KEEP_MAX)
+            trimmed(all, map[to]!!)
             true
         }
         if (from in _unread.value) _unread.update { it - from + to }
@@ -2384,7 +2453,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         tries[mine.id] = Tries(0, System.currentTimeMillis() + 30_000)   // the retry loop waits for the preview
         bg {
             // Looked up once, before it's sealed: every try and route then sends the same bytes.
-            LinkPreview.fetch(link)?.let { lp -> update(peerKey, mine.id) { it.copy(preview = lp) } }
+            LinkPreview.fetch(link)?.let { lp -> update(peerKey, mine.id) { it.copy(preview = LinkPreview.fit(it.text, it.re, lp)) } }
             attempt(_private.value[peerKey]?.firstOrNull { it.id == mine.id } ?: mine)
         }
     }
@@ -2446,6 +2515,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Their app speaks m1: replies, reactions, edits, typing and active status. */
     fun hasM1(peerKey: String) = contacts.get(peerKey)?.caps?.contains(Rich.CAP) == true
 
+    /** 1.54: a group peer (or contact) whose app never said anything yet; asked once an hour ([probeCaps]). */
+    private fun unknownPeer(k: String): Boolean {
+        val c = contacts.get(k) ?: return false
+        if (!Contacts.unknownCaps(c.caps) || envCaps[k]?.let { !Contacts.unknownCaps(it) } == true) return false
+        probeCaps(k)
+        return true
+    }
+
     /** My reaction to message [msgId] in the chat with [peerKey] ("" takes it away). Null when done, else what to say. */
     fun react(peerKey: String, msgId: String, e: String): String? {
         if (!Rich.emojiOk(e)) return "That reaction can't be sent."
@@ -2485,10 +2562,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return null
     }
 
+    /**
+     * 1.54: reactions and edits that came before their message (the relays hand the newest over first): held here for
+     * [MxPending.HOLD_MS] and applied when the message lands ([addPrivate]).
+     */
+    private val mxPending = MxPending()
+
     /** A reaction or edit from them, already checked (Rich.check). */
     private fun takeMx(fromKey: String, name: String, p: JSONObject) {
         val msgId = p.getString("msg")
         val ts = Rich.ts(p)
+        // Their message isn't here yet (and wasn't deleted here): held until it comes.
+        if (!deleted.containsKey(msgId) && _private.value[fromKey]?.any { it.id == msgId } != true) {
+            mxPending.hold(fromKey, msgId, name, p, System.currentTimeMillis())
+            return
+        }
         if (p.getString("t") == "react") {
             val e = p.getString("e")
             var mine: Msg? = null
@@ -2546,6 +2634,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Typing in the chat with [peerKey]: "on" at most every 3 s while the text changes, "off" once it's cleared. */
     fun typingTo(peerKey: String, on: Boolean) {
         if (!hasM1(peerKey) || peerKey in id.muted()) return
+        // Active status off ("nobody sees it, both ways"): "typing…" would say I'm here right now, so it never goes out.
+        // (A "stopped" for one already sent still goes, below.)
+        if (on && !id.activeStatus) return
         val now = System.currentTimeMillis()
         val last = typingSent[peerKey] ?: 0L
         if (on && now - last < Rich.TYPING_EVERY_MS) return
@@ -2623,7 +2714,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         val set = Proto06.newLogicalId()
         val ch = if (g != null) groups.messages.value[g]?.lastOrNull { !it.mine }?.ch ?: Proto06.MAIN else ""
-        if (g != null) groups.markRead(g) else markRead(key)
+        // A quick reply reads only the channel it answers in.
+        if (g != null) groups.markRead(g, ch) else markRead(key)
         parts.forEachIndexed { i, p ->
             val part = if (parts.size > 1) TextPart(set, i + 1, parts.size) else null
             if (i > 0) try { Thread.sleep(50) } catch (_: InterruptedException) {}
@@ -2732,7 +2824,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
-    private fun richPayload(m: Msg): String = JSONObject(Rich.richText(m.text, m.re)).apply {
+    private fun richPayload(m: Msg): String = SafeJson.obj(Rich.richText(m.text, m.re)).apply {
         m.poll?.let { put("poll", More.pollJson(it)) }
         m.preview?.let { put("lp", More.previewJson(it)) }
         // Round 17: a part of a long message says which, so the other side reads them in order (11.2).
@@ -2753,7 +2845,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun retryNextDue(now: Long): Long {
         var next = groups.nextDue()
         fun at(t: Long) { if (t < next) next = t }
-        for (e in incoming.values) at(e.started + 15 * 60_000)
+        for (e in incoming.values) at(e.touched + PIECES_QUIET_MS)
         for ((env, v) in mxOut) { at(v.second + DAY + 1); at(tries[env]?.next ?: now) }
         _typing.value.values.forEach { at(it + 1) }
         _active.value.values.forEach { at(it + 1) }
@@ -2781,7 +2873,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         nearbyNow()
         groups.due().forEach { o -> bg { sendGroupOut(o) } }
         // Half a photo or file that never finished.
-        incoming.entries.removeIf { e -> (now - e.value.started > 15 * 60_000).also { gone -> if (gone && e.value.file.isNotEmpty()) FileLink.relayInDone(e.key) } }
+        incoming.entries.removeIf { e -> (now - e.value.touched > PIECES_QUIET_MS).also { gone -> if (gone && e.value.file.isNotEmpty()) FileLink.relayInDone(e.key) } }
         // Cap m1: reactions and edits still on their way, typing and active status that ran out.
         for ((env, v) in mxOut) {
             if (now - v.second > DAY) { mxOut.remove(env); outbox.drop(env); tries.remove(env); saveMx(); continue }
@@ -2847,7 +2939,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** An envelope in room "link" (read from its clear fields only). */
-    private fun linkRoom(body: String): Boolean = try { JSONObject(body).optString("room") == "link" } catch (_: Exception) { false }
+    private fun linkRoom(body: String): Boolean = try { SafeJson.obj(body).optString("room") == "link" } catch (_: Exception) { false }
 
     /** Direct connect's hotspot is on: what comes over it isn't the home Wi-Fi (linked devices' media never goes that way). */
     private fun directOn(): Boolean = try { (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.direct?.state?.value?.on == true } catch (_: Exception) { false }
@@ -2896,7 +2988,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** A cached copy sealed unbound (or without the ratchet) for an app that speaks s1 (or the ratchet): made again. */
     private fun stale(k: String): (String) -> Boolean = { body ->
         try {
-            val o = JSONObject(body)
+            val o = SafeJson.obj(body)
             (strict(k) && !Proof.isBound(o)) || (!ChatWire.isRatchet(o) && (ChatWire.useRatchet(o.optString("room"), contacts.get(k)) ||
                 RingWire.fileRatchet(o.optString("room"), contacts.get(k))))
         } catch (e: Exception) { false }
@@ -3006,40 +3098,66 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // k14: a Kids' Device holds group members no parent approved, and asks its parents about them.
         override fun held(g: String, from: String) = tvHandler?.groupHeld(g, from) == true
         override fun heldBy(g: String, from: String, name: String, groupName: String) { tvHandler?.onGroupHeld(g, from, name, groupName) }
-        override fun deleteBlob(id: String) { File(photosDir, id).delete() }
-        override fun hasM1(k: String) = this@Chat.hasM1(k)
-        override fun hasM2(k: String) = this@Chat.hasM2(k)
+        override fun deleteBlob(id: String) { blobFile(id)?.delete() }
+        // 1.54: a member nothing came from yet counts as unknown, not as unable: they get reactions, edits, video messages
+        // and moderation records (an app without them ignores what it doesn't know), and a probe asks what they speak.
+        override fun hasM1(k: String) = this@Chat.hasM1(k) || unknownPeer(k)
+        override fun hasM2(k: String) = this@Chat.hasM2(k) || unknownPeer(k)
         override fun hasD1(k: String) = this@Chat.hasD1(k) || envCaps[k]?.contains(Limits.CAP) == true
         override fun hasJ1(k: String) = Proto06.J1 in capsOf(k) || envCaps[k]?.contains(Proto06.J1) == true
-        override fun hasG2(k: String) = ModLogic.CAP in capsOf(k) || envCaps[k]?.contains(ModLogic.CAP) == true
+        override fun hasG2(k: String) = ModLogic.CAP in capsOf(k) || envCaps[k]?.contains(ModLogic.CAP) == true || unknownPeer(k)
         override fun hasF2(k: String) = this@Chat.hasF2(k)
         override fun hasG3(k: String) = Proto06.G3 in capsOf(k) || envCaps[k]?.contains(Proto06.G3) == true
         override fun hasG4(k: String) = Proto06.G4 in capsOf(k) || envCaps[k]?.contains(Proto06.G4) == true
         override fun typeChanged(g: String, type: String) { if (type == Limits.FAMILY) bg { familySync() } }
+        override fun nameOf(k: String) = this@Chat.nameOf(k)
+        // Family consent: trust changed (a yes, or a group left or no longer Family): the Family folder follows.
+        override fun familyChanged() { bg { familySync() } }
+        // A Kids' Device: a Family group from one of its parents is the parent's choice, so it isn't asked on the TV.
+        override fun familyAuto(by: String) = (try { io.github.ravenor907.muninn.tv.KidMode.saved(context) } catch (_: Exception) { false }) &&
+            tvHandler?.groupInviteOk(by) == true
     }
-
-    /** Someone in one of my Family groups (16.2): their files and photos arrive by themselves. */
-    fun inFamilyGroup(k: String): Boolean =
-        groups.all.value.values.any { !it.readOnly && Limits.groupType(it.state) == Limits.FAMILY && it.state.has(k) && k != id.publicKey }
 
     /**
-     * Members of my Family groups who are contacts go in my Family folder, once each: moved out by hand, they stay out
-     * (remembered in the vault, "family-placed.json"). No Family folder (deleted by hand): nothing is made again.
+     * Someone in one of my Family groups (16.2) that this phone's person said yes to as Family (Groups.familyTrusted): their
+     * files and photos arrive by themselves. A Family group not answered yet is an ordinary group here.
      */
-    fun familySync() {
-        val fam = folders.all.value.lastOrNull { it.name == "Family" } ?: return
-        val want = groups.all.value.values.filter { !it.readOnly && Limits.groupType(it.state) == Limits.FAMILY }
-            .flatMap { g -> g.state.members.map { it.k } }.filter { it != id.publicKey && isContact(it) }.toSet()
-        if (want.isEmpty()) return
-        val file = File(context.filesDir, "family-placed.json")
-        val saved: List<String>? = try { vault.read(file)?.let { t -> JSONArray(t).let { a -> (0 until a.length()).map { a.getString(it) } } } } catch (e: Exception) { null }
-        val done = saved.orEmpty().toMutableSet()
-        val fresh = want - done
-        if (fresh.isEmpty()) return
-        fresh.forEach { k -> if (k !in fam.keys) folders.put(fam.id, k, true) }
-        done += fresh
-        try { vault.write(file, JSONArray().apply { done.forEach { put(it) } }.toString()) } catch (_: Exception) {}
+    fun inFamilyGroup(k: String): Boolean = k != id.publicKey && groups.trustedFamily().let { t ->
+        groups.all.value.values.any { it.g in t && it.state.has(k) }
     }
+
+    /**
+     * Members of my trusted Family groups who are contacts go in my Family folder, once each: moved out by hand, they
+     * stay out (remembered in the vault, "family-placed.json"). No Family folder (deleted by hand): nothing is made again.
+     * 1.54: whoever this put in the folder itself ("family-from.json") comes out again once no trusted Family group has
+     * them (left, removed from it, or it stopped being Family), so leaving undoes the trust it gave. People put there
+     * by hand, or by an older version, stay.
+     */
+    fun familySync() = synchronized(familyLock) {
+        val fam = folders.all.value.lastOrNull { it.name == "Family" }
+        val trusted = groups.trustedFamily()
+        val want = groups.all.value.values.filter { it.g in trusted }
+            .flatMap { g -> g.state.members.map { it.k } }.filter { it != id.publicKey && isContact(it) }.toSet()
+        fun load(f: File): MutableSet<String>? = try { vault.read(f)?.let { t -> JSONArray(t).let { a -> (0 until a.length()).map { a.getString(it) } } }?.toMutableSet() } catch (e: Exception) { null }
+        val file = File(context.filesDir, "family-placed.json")
+        val fromFile = File(context.filesDir, "family-from.json")
+        val done = load(file) ?: mutableSetOf()
+        val from = load(fromFile) ?: mutableSetOf()
+        val n0 = done.size; val f0 = from.size
+        val drop = from - want
+        // Someone moved out by hand stays out (kept in "done"); the rest can come back with a later trusted group.
+        val byHand = drop.filter { fam == null || it !in fam.keys }.toSet()
+        drop.forEach { k -> if (fam != null && k in fam.keys) folders.put(fam.id, k, false) }
+        done -= (drop - byHand); from -= drop
+        if (fam != null) for (k in want - done) {
+            if (k !in fam.keys) { folders.put(fam.id, k, true); from += k }
+            done += k
+        }
+        if (done.size != n0 || drop.isNotEmpty()) try { vault.write(file, JSONArray().apply { done.forEach { put(it) } }.toString()) } catch (_: Exception) {}
+        if (from.size != f0 || drop.isNotEmpty()) try { vault.write(fromFile, JSONArray().apply { from.forEach { put(it) } }.toString()) } catch (_: Exception) {}
+        Unit
+    }
+    private val familyLock = Any()
 
     /** Invites a contact to group [g]. Null when sent, else what to tell the person. */
     fun inviteToGroup(g: String, peerKey: String): String? {
@@ -3057,7 +3175,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // The time is taken now, before the preview is fetched: the parts after this one (sent a moment later) stay after it.
         // Round 16: a part says its index too, so every member places it among the others (Groups.placePart).
         val at = System.currentTimeMillis()
-        bg { groups.sendText(g, ch, t, re, preview = LinkPreview.fetch(link), at = at, part = part) }
+        bg { groups.sendText(g, ch, t, re, preview = LinkPreview.fetch(link)?.let { LinkPreview.fit(t, re, it) }, at = at, part = part) }
         return true
     }
 
@@ -3076,24 +3194,28 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * straight in; others with groups (g1) get an invite; anyone else is left out. Returns the group (null if
      * none could be made) and what to tell the person.
      */
-    fun startGroup(keys: List<String>): Pair<String?, String> {
+    fun startGroup(keys: List<String>, kind: String = ""): Pair<String?, String> {
         val people = keys.distinct().mapNotNull { contacts.contact(it) }
         if (people.isEmpty()) return null to "Pick at least one contact."
         // Cut to the 40 characters a group name may have (by code points, in Groups.create).
         val name = (listOf(id.username) + people.map { it.shown }).joinToString(", ")
-        val g = groups.create(name) ?: return null to "That group couldn't be made."
+        // The type picked (Family or Folk), as Create makes it.
+        val g = groups.create(name, kind) ?: return null to "That group couldn't be made."
         var invited = 0
         val left = mutableListOf<String>()
+        val full = mutableListOf<String>()
         for (c in people) {
-            when {
-                Rich.CAP in c.caps -> if (groups.addDirect(g, c.chatKey, c.name, c.mailbox ?: "") != null) left += c.shown
-                "g1" in c.caps -> if (groups.invite(g, c.chatKey) == null) invited++ else left += c.shown
-                else -> { probeCaps(c.chatKey); left += c.shown }
+            val why = when {
+                Rich.CAP in c.caps -> groups.addDirect(g, c.chatKey, c.name, c.mailbox ?: "")
+                "g1" in c.caps -> groups.invite(g, c.chatKey).also { if (it == null) invited++ }
+                else -> { probeCaps(c.chatKey); "update" }
             }
+            if (why != null) { if (" is full" in why) full += c.shown else left += c.shown }
         }
         val parts = buildList {
             if (invited > 0) add("$invited invited (they join once they accept)")
             if (left.isNotEmpty()) add("${left.joinToString(", ")} need${if (left.size == 1) "s" else ""} a newer Muninn or Huginn")
+            if (full.isNotEmpty()) add("${full.joinToString(", ")} didn't fit: a group holds ${Proto06.MAX_MEMBERS} people")
         }
         return g to (if (parts.isEmpty()) "Group made. Rename it any time in its settings." else parts.joinToString(". ") + ".")
     }
@@ -3150,7 +3272,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val blob = "g-" + UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, blob), mp4)
         val msgId = groups.sendBlobId(g, ch, blob, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS), only = only)
-        if (msgId == null) { File(photosDir, blob).delete(); return null to "That video didn't send." }
+        if (msgId == null) { blobFile(blob)?.delete(); return null to "That video didn't send." }
         sends.tryEmit(Folders.groupKey(g))
         return msgId to null
     }
@@ -3198,7 +3320,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val blob = "g-" + UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, blob), bytes)
         val ok = groups.sendBlob(g, ch, blob, voiceMs, videoMs, album, gif)
-        if (!ok) File(photosDir, blob).delete() else sends.tryEmit(Folders.groupKey(g))
+        if (!ok) blobFile(blob)?.delete() else sends.tryEmit(Folders.groupKey(g))
         return ok
     }
 
@@ -3272,7 +3394,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         dup()?.let { return it }
         // Who may send what (contacts, members, a join with a live token) is decided by Groups once it's open.
         return opened(o, fromKey, dup) { plain ->
-            val p = try { JSONObject(String(plain, Charsets.UTF_8)) } catch (e: Exception) { return@opened 400 to "{}" }
+            val p = try { SafeJson.obj(String(plain, Charsets.UTF_8)) } catch (e: Exception) { return@opened 400 to "{}" }
             if (!groupRate(room, fromKey)) return@opened 429 to "{}"
             // Someone joining by code isn't a contact yet: what their app speaks decides if they may join a Family or Work group.
             if (contacts.get(fromKey) == null) envCaps[fromKey] = ChatWire.capsOf(o)
@@ -3291,11 +3413,18 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val q = map.getOrPut(k) { ArrayDeque() }
         synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
-            if (q.size >= max) return false
+            if (q.size >= rate(max)) return false
             q.addLast(now)
         }
         return true
     }
+
+    /**
+     * 1.54: true while an envelope the relays (or the locked store) held is handled: after being offline or locked, a
+     * sender's messages all come at once, so the per-sender limits are [BACKLOG_RATE] times higher for them.
+     */
+    private val backlog = ThreadLocal.withInitial { false }
+    private fun rate(max: Int) = if (backlog.get() == true) max * BACKLOG_RATE else max
 
     private fun receiveGroupPiece(o: JSONObject, fromKey: String, name: String): Pair<Int, String> {
         val g = o.optString("g"); val ch = o.optString("ch"); val gid = o.optString("gid"); val env = o.optString("id")
@@ -3317,7 +3446,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (q.size >= 1000) return 429 to "{}"
             q.addLast(now)
         }
-        if (incoming.size > 20 && !incoming.containsKey(key)) return 429 to "{}"
+        if (!pieceSlot(key, fromKey)) return 429 to "{}"
         if (n > Photos.MAX_PIECES && !incoming.containsKey(key) && bigIncoming()) return 429 to "{}"
         return opened(o, fromKey, dup) { part ->
             val inc = incoming.getOrPut(key) { Incoming(fromKey, arrayOfNulls(n), System.currentTimeMillis()) }
@@ -3325,6 +3454,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (inc.from != fromKey || inc.parts.size != n) return@opened 400 to "{}"
             synchronized(inc) {
                 inc.parts[i] = part
+                inc.touched = System.currentTimeMillis()
                 if (inc.parts.any { it == null }) return@opened 200 to "{}"
                 incoming.remove(key)
             }
@@ -3339,7 +3469,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val album = if (al.isEmpty()) null else Triple(al, o.optInt("ai"), o.optInt("an"))
             if (groups.knownEnvelope(env) == null) {
                 vault.writeBytes(File(photosDir, blob), bytes)
-                if (!groups.receivedBlob(fromKey, name, g, ch, gid, blob, voiceMs, videoMs, album, gif) && groups.knownEnvelope(env) == null) File(photosDir, blob).delete()
+                if (!groups.receivedBlob(fromKey, name, g, ch, gid, blob, voiceMs, videoMs, album, gif) && groups.knownEnvelope(env) == null) blobFile(blob)?.delete()
             }
             200 to "{}"
         }
@@ -3373,7 +3503,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val gone = map.remove(peerKey) ?: return@edit false
             forget(gone.map { it.id })
             gone.forEach { outbox.drop(it.id); outbox.drop(UNSEND + it.id) }
-            gone.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete() }
+            gone.forEach { if (it.photo.isNotEmpty()) blobFile(it.photo)?.delete() }
             true
         }
     }
@@ -3405,7 +3535,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             for (k in map.keys.toList()) {
                 val (old, keep) = map[k]!!.partition { it.time < cutoff(days[k] ?: Limits.DEFAULT) }
                 if (old.isEmpty()) continue
-                old.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete(); gone += it.id }
+                old.forEach { if (it.photo.isNotEmpty()) blobFile(it.photo)?.delete(); gone += it.id }
                 map[k] = keep; changed = true
             }
             changed
@@ -3449,8 +3579,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun groupDays(g: String) = groups.group(g)?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT
 
     /** Group [g] is on screen: read, and (cap l2) a linked computer shows it read too. */
-    fun groupRead(g: String) {
-        groups.markRead(g)
+    fun groupRead(g: String, ch: String? = null) {
+        groups.markRead(g, ch)
+        // One channel read while another still has unseen messages: the group stays unread (here and on a linked computer).
+        if (ch != null && groups.hasUnseen(g)) return
         flags.read(Folders.groupKey(g))
         groups.messages.value[g].orEmpty().filter { !it.mine }.maxOfOrNull { it.time }?.let { Link.onRead("g:$g", it) }
     }
@@ -3514,7 +3646,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val kept = rest.takeLast(keep)
                 val drop = old + rest.dropLast(keep)
                 if (drop.isEmpty()) continue
-                drop.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete(); gone += it.id }
+                drop.forEach { if (it.photo.isNotEmpty()) blobFile(it.photo)?.delete(); gone += it.id }
                 map[k] = kept; changed = true; removed += drop.size
             }
             // Oldest blobs first until they fit.
@@ -3523,7 +3655,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             for (m in blobs) {
                 if (total <= maxBlobBytes) break
                 total -= File(photosDir, m.photo).length()
-                File(photosDir, m.photo).delete(); gone += m.id
+                blobFile(m.photo)?.delete(); gone += m.id
                 map[m.peerKey] = map[m.peerKey].orEmpty().filterNot { it.id == m.id }
                 changed = true; removed++
             }
@@ -3552,10 +3684,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun addPrivate(peer: String, m: Msg): Boolean = edit { map ->
         val list = map[peer].orEmpty()
         if (deleted.containsKey(m.id) || list.any { it.id == m.id }) return@edit false
-        // A part of their long message goes before their later parts that came first (round 17).
-        map[peer] = placePart(list, m, System.currentTimeMillis())
+        // A part of their long message goes before their later parts that came first (round 17); 1.54: and any message
+        // of theirs before the later ones of the same send chain that came first.
+        val placed = placePart(list, m, System.currentTimeMillis())
+        map[peer] = placed
+        trimmed(list, placed)
         true
-    }.also { added ->
+    }
+.also { added ->
+        // 1.54: a reaction or edit of it that came first is applied now.
+        if (added && !m.mine) for ((name, p) in mxPending.take(peer, m.id, System.currentTimeMillis())) try { takeMx(peer, name, p) } catch (_: Exception) {}
         if (added) ActivityLog.add("message", "${ActivityLog.id(m.id)} ${if (m.mine) "out new" else "in arrived"}" + (if (m.via.isNotEmpty()) " via ${m.via}" else "") +
             when { m.big -> " (video in chat)"; m.video > 0 -> " (video)"; m.voice > 0 -> " (voice)"; m.photo.isNotEmpty() -> " (photo)"; else -> "" })
         if (added && m.mine && m.state.isNotEmpty()) queue(peer, m.id)
@@ -3565,6 +3703,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     private fun replace(peer: String, m: Msg) = update(peer, m.id) { m }
+
+    /** 1.54: messages a chat's cap dropped ([KEEP_MAX]) take their photos, voice and videos with them. */
+    private fun trimmed(before: List<Msg>, after: List<Msg>) {
+        if (before.size < KEEP_MAX) return
+        val kept = after.mapTo(HashSet()) { it.id }
+        for (x in before) if (x.id !in kept && x.photo.isNotEmpty()) try { File(photosDir, x.photo).delete() } catch (_: Exception) {}
+    }
 
     /** Cap l3: a message a linked computer already has was edited or deleted: it goes again (same id) and replaces it there. */
     private fun linkChanged(peer: String, msgId: String) {
@@ -3617,7 +3762,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         unsentKeeps.toList().forEach { (k, body) ->
             val mailbox = contacts.get(k)?.mailbox ?: _met.value[k]?.mailbox
             // The same sealed "yes" as the first time, not a new one.
-            if (deliver(k, JSONObject(body), mailbox)) unsentKeeps.remove(k)
+            if (deliver(k, SafeJson.obj(body), mailbox)) unsentKeeps.remove(k)
         }
     }
 
@@ -3637,21 +3782,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private fun load() {
         loadOne(store) { text ->
-            val o = JSONObject(text)
+            val o = SafeJson.obj(text)
             _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
         }
-        loadOne(invitesStore) { text -> val o = JSONObject(text); o.keys().forEach { invites[it] = o.optLong(it) } }
-        loadOne(introsStore) { text -> val a = JSONArray(text); _intros.value = (0 until a.length()).map { Trust.fromJson(a.getJSONObject(it)) } }
-        loadOne(onceStore) { text -> val a = JSONArray(text); for (i in 0 until a.length()) once.add(a.getString(i)) }
+        loadOne(invitesStore) { text -> val o = SafeJson.obj(text); o.keys().forEach { invites[it] = o.optLong(it) } }
+        loadOne(introsStore) { text -> val a = SafeJson.arr(text); _intros.value = (0 until a.length()).map { Trust.fromJson(a.getJSONObject(it)) } }
+        loadOne(onceStore) { text -> val a = SafeJson.arr(text); for (i in 0 until a.length()) once.add(a.getString(i)) }
         loadOne(metStore) { text ->
-            val o = JSONObject(text)
+            val o = SafeJson.obj(text)
             _met.value = o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let {
                 Met(it.optString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("i"), it.optBoolean("t"), it.optBoolean("d"), it.optBoolean("v"),
                     Proto06.caps(it.optString("c"))) } }
         }
-        loadOne(deletedStore) { text -> val o = JSONObject(text); o.keys().forEach { deleted[it] = o.optLong(it) } }
-        loadOne(mxStore) { text -> val o = JSONObject(text); o.keys().forEach { e -> o.getJSONObject(e).let { mxOut[e] = it.getString("k") to it.optLong("t") } } }
-        if (id.keepNearbyHistory) loadOne(nearbyStore) { _nearby.value = fromJson(JSONArray(it)) }
+        loadOne(deletedStore) { text -> val o = SafeJson.obj(text); o.keys().forEach { deleted[it] = o.optLong(it) } }
+        loadOne(mxStore) { text -> val o = SafeJson.obj(text); o.keys().forEach { e -> o.getJSONObject(e).let { mxOut[e] = it.getString("k") to it.optLong("t") } } }
+        if (id.keepNearbyHistory) loadOne(nearbyStore) { _nearby.value = fromJson(SafeJson.arr(it)) }
         try {
             if (isLabs()) labs.load()
             prune()
@@ -3672,8 +3817,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 at = if (Groups.partTooOld(x.time, now)) -1 else i
                 break
             }
-            return (if (at < 0) list + m else list.subList(0, at) + m + list.subList(at, list.size)).takeLast(1000)
+            // 1.54: messages that waited (offline, locked) come newest first. Their send order is in the ratchet: the same
+            // sending chain ([Msg.chain]) numbers its messages ([Msg.seq]), so this one goes before the first of theirs from
+            // that chain with a higher number that came within [Groups.PART_AGE_MS].
+            if (at < 0 && !m.mine && m.chain.isNotEmpty() && m.seq >= 0) for (i in maxOf(0, list.size - Groups.PART_WINDOW) until list.size) {
+                val x = list[i]
+                if (x.mine || x.chain != m.chain || x.seq <= m.seq) continue
+                if (!Groups.partTooOld(x.time, now)) at = i
+                break
+            }
+            return (if (at < 0) list + m else list.subList(0, at) + m + list.subList(at, list.size)).takeLast(KEEP_MAX)
         }
+
+        /** The most messages a 1:1 chat keeps (older ones go, with their files, before their time limit only past this). */
+        const val KEEP_MAX = 2000
 
         const val PATH = "/api/huginn/v1/message"
         /** Round 14: the caps this app said when it last started (outside the vault), to notice going back to stable. */
@@ -3684,6 +3841,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val LABS_PAGE = "labs"
         const val MAX = 2000
         const val KEEP_AFTER = 10
+        /** Per-sender limits are this many times higher for what relays held (catch-up) than for live messages. */
+        const val BACKLOG_RATE = 12
         const val INVITE_MS = 60 * 60_000L
         /** A message of mine still "sending" this long (no relay said OK, no proven route took it) shows "Not sent, tap to retry". */
         const val NOT_SENT_MS = 60_000L
@@ -3699,6 +3858,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         /** A change to the chats is written this long after it (more changes meanwhile share the write). */
         private const val SAVE_AFTER_MS = 500L
         private val GROUP_ROOMS = setOf("group", "gmsg", "greceipt")
+        /** Half-received photos, voice, videos and GIFs: per sender, for all non-contacts together, and in all. */
+        const val SLOTS_EACH = 4
+        const val SLOTS_OUTSIDERS = 8
+        const val SLOTS_ALL = 48
+        /** A half-received one whose pieces stopped coming for this long lets its place go. */
+        const val PIECES_QUIET_MS = 5 * 60_000L
         /** Someone who isn't a contact, in lists and notifications: the name they chose, marked so it never passes for a contact's. */
         fun stranger(name: String) = "“$name” · Not a contact · nearby"
     }

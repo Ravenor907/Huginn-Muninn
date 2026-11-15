@@ -72,10 +72,10 @@ fun VaultTrouble(app: Muninn, trouble: VaultCore.Trouble, done: (Boolean) -> Uni
             // The usual Restore from a backup: what's here is set aside (kept) first, then the backup goes in.
             if (restoring) Panel {
                 RestoreFlow(app, onCancel = { restoring = false }) { o ->
-                    val files = Backup.prepare(app, o)
-                    val kept = app.vault.startOverKeeping()
-                    Backup.restore(ctx, app.vault, files)
-                    "Restored. What was here is kept in ${kept.name}. Muninn is restarting."
+                    // A lock that was here isn't dropped by this: the restored vault asks for a new one first, as after Forgot it?.
+                    val lock = app.vault.hadLock()
+                    val kept = Backup.restoreOver(app, o, needsLock = lock)
+                    "Restored. What was here is kept in ${kept.name}. Muninn is restarting." + if (lock) " Set a new lock next." else ""
                 }
             }
             if (status.isNotEmpty()) Text(status, style = Type.small.copy(color = Palette.danger))

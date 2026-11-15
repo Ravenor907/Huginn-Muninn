@@ -55,7 +55,7 @@ object Backup {
     fun create(app: Muninn, uri: Uri, password: String, withFiles: Boolean, progress: (Float) -> Unit): Saved {
         val vault = app.vault
         val created = java.time.Instant.now().toString()
-        val entries = vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES && !BackupFormat.isBigVideo(it.first) &&
+        val entries = vault.sealedFiles().filter { !moveOut(it.first) && it.first != OWN_VERSES && !BackupFormat.isBigVideo(it.first) &&
             (withFiles || !BackupFormat.isMedia(it.first)) }
             .map { (name, f) -> BackupFormat.Entry(name) { vault.readBytes(f) } } +
             BackupFormat.Entry(PREFS_ENTRY) { prefsJson(app).toByteArray() } +
@@ -67,10 +67,18 @@ object Backup {
         return Saved(where(app, uri), out.count, withFiles)
     }
 
-    /** Everything a backup holds, read now (moving to another device, cap x1). */
-    fun entries(context: Context, vault: Vault): List<Pair<String, ByteArray>> =
-        vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES && !BackupFormat.isBigVideo(it.first) }.mapNotNull { (name, f) -> vault.readBytes(f)?.let { name to it } } +
-            (PREFS_ENTRY to prefsJson(context).toByteArray())
+    /** A move's own packed copy on the old device: never in a backup or a move. */
+    private fun moveOut(name: String) = name == "move-out.bin" || name.startsWith(VaultCore.MOVE_OUT + "/")
+
+    /**
+     * Everything a backup holds (moving to another device, cap x1), one file at a time, each read only when [take] is
+     * ready for it, so a big account never has to fit in memory at once. [skip]: names left out.
+     */
+    fun entries(context: Context, vault: Vault, skip: (String) -> Boolean = { false }, take: (String, ByteArray) -> Unit) {
+        vault.sealedFiles().filter { !moveOut(it.first) && it.first != OWN_VERSES && !BackupFormat.isBigVideo(it.first) && !skip(it.first) }
+            .forEach { (name, f) -> vault.readBytes(f)?.let { take(name, it) } }
+        take(PREFS_ENTRY, prefsJson(context).toByteArray())
+    }
 
     private class Counting(o: OutputStream) : FilterOutputStream(o) {
         var count = 0L
@@ -98,8 +106,9 @@ object Backup {
 
     /** Reads and checks a backup. Throws [BackupFormat.WrongPassword] or [BackupFormat.NotABackup]. */
     fun open(context: Context, uri: Uri, password: String): BackupFormat.Opened {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw BackupFormat.NotABackup("Couldn't open that file.")
-        return BackupFormat.open(bytes, password, "muninn")
+        // Streamed: read through once now to check it, and again when it's restored. Any size this phone could make opens.
+        val app = context.applicationContext
+        return BackupFormat.open({ app.contentResolver.openInputStream(uri) ?: throw BackupFormat.NotABackup("Couldn't open that file.") }, password, "muninn")
     }
 
     /** Readable date for "Made ...". */
@@ -117,7 +126,7 @@ object Backup {
         if (BackupFormat.summary(o).app == "muninn") return o
         val shared = o.files.firstOrNull { it.first == BackupFormat.SHARED }?.second
             ?: throw BackupFormat.NotABackup("This backup has nothing Muninn can read.")
-        return BackupFormat.Opened(o.header, MoveCommon.toMuninn(app, JSONObject(String(shared, Charsets.UTF_8))))
+        return BackupFormat.Opened(o.header, MoveCommon.toMuninn(app, SafeJson.obj(String(shared, Charsets.UTF_8))))
     }
 
     /**
@@ -127,6 +136,7 @@ object Backup {
     fun restoreKeeping(app: Muninn, o: BackupFormat.Opened): String {
         val files = prepare(app, o)
         val kept = app.vault.keepCopy()
+        // Read once more from the file: if it no longer checks out, nothing is staged (the kept copy stays).
         restore(app, app.vault, files)
         return kept.name
     }
@@ -135,11 +145,54 @@ object Backup {
      * Replaces everything here with [opened]: files are staged in the vault (swapped in on the next
      * open), settings and identity are written now. Then call [restart].
      */
-    fun restore(context: Context, vault: Vault, opened: BackupFormat.Opened) {
-        vault.stageRestore(opened.files.filter { !it.first.startsWith("@") && it.first != "huginn-settings.dat" })
-        opened.files.firstOrNull { it.first == PREFS_ENTRY }?.let { applyPrefs(context, String(it.second)) }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putLong(RESTORED_AT, System.currentTimeMillis()).putBoolean(RESTORE_ANNOUNCE, true).commit()
+    fun restore(context: Context, vault: Vault, opened: BackupFormat.Opened) = restore(context, vault) { take -> opened.each(take) }
+
+    /** The same, with the files handed over one at a time by [entries] (a move). If it throws, nothing is staged. */
+    fun restore(context: Context, vault: Vault, entries: ((String, ByteArray) -> Unit) -> Unit) {
+        val got = Staged()
+        vault.stageRestore { stage -> entries { n, d -> got.take(n, d, stage) } }
+        settle(context, got)
+    }
+
+    /**
+     * Restore with the lock forgotten (Forgot it?) or unreadable (the trouble screen): what's here is set aside, the backup
+     * staged into a new vault that asks for a new lock first when [needsLock], all in one step that changes nothing if it
+     * fails. The screen stays as it is; call [restart] next. Returns the kept folder.
+     */
+    fun restoreOver(app: Muninn, opened: BackupFormat.Opened, needsLock: Boolean): java.io.File {
+        val o = prepare(app, opened)
+        val got = Staged()
+        val kept = app.vault.restoreOver(needsLock) { stage -> o.each { n, d -> got.take(n, d, stage) } }
+        settle(app, got)
+        return kept
+    }
+
+    /** What a restore picked out of the files on the way: the settings entry and the keys file. */
+    private class Staged {
+        var prefs: ByteArray? = null
+        var secrets: ByteArray? = null
+        fun take(name: String, data: ByteArray, stage: (String, ByteArray) -> Unit) {
+            when {
+                name == PREFS_ENTRY -> prefs = data
+                name.startsWith("@") || name == "huginn-settings.dat" -> {}
+                else -> { if (name == VaultCore.SECRETS) secrets = data; stage(name, data) }
+            }
+        }
+    }
+
+    /** After the files are staged: settings, the mailbox worked out from the restored secret, and this mailbox's relay state gone. */
+    private fun settle(context: Context, got: Staged) {
+        got.prefs?.let { applyPrefs(context, String(it)) }
+        val e = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        // The mailbox is never taken from settings: it's worked out from the restored identity's secret (a Huginn backup or
+        // move carries this device's own settings, with the old mailbox in them).
+        val pub = try { got.secrets?.let { SafeJson.obj(String(it)).optString("nostrSecret") }?.takeIf { it.length == 64 }
+            ?.let { Schnorr.hex(Schnorr.publicKey(Schnorr.unhex(it))) } } catch (_: Exception) { null }
+        if (pub != null) e.putString("nostrPub", pub) else e.remove("nostrPub")
+        e.putLong(RESTORED_AT, System.currentTimeMillis()).putBoolean(RESTORE_ANNOUNCE, true).commit()
+        // The relays' read positions and seen list belonged to the mailbox that was here: the restored one asks for everything.
+        try { (context.applicationContext as? Muninn)?.nostr?.forgetState() } catch (_: Exception) {}
+        try { java.io.File(context.filesDir, "nostr-state.json").delete() } catch (_: Exception) {}
     }
 
     /** Closes Muninn and opens it again, so everything starts from the restored data. */
@@ -165,7 +218,7 @@ object Backup {
     }
 
     private fun applyPrefs(context: Context, json: String) {
-        val o = try { JSONObject(json) } catch (e: Exception) { return }
+        val o = try { SafeJson.obj(json) } catch (e: Exception) { return }
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val e = prefs.edit()
         prefs.all.keys.filter { it !in phoneOnly }.forEach { e.remove(it) }

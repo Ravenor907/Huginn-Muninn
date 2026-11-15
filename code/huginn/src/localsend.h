@@ -183,6 +183,7 @@ private:
         QString fileId;
         QCryptographicHash *hash = nullptr;
         bool replied = false;
+        qint64 opened = 0, lastData = 0;   // ms: a slow or silent connection can't hold a place for long
     };
     struct InFile {
         QString name;
@@ -222,6 +223,8 @@ private:
     QNetworkRequest makeRequest(const QUrl &url, const QString &expected, bool anonymous = false) const;
     void checkPeer(QNetworkReply *r, const QString &expected);
     QString expectedFor(const QUrl &url) const;
+    // The device baseFor() last chose at each base URL ("https://host:port" -> its id): pinned for requests there.
+    mutable QHash<QString, QString> m_chosen;
     void onConnection(QTcpServer *server);
     void onData(QTcpSocket *s);
     void route(QTcpSocket *s, Conn &c);

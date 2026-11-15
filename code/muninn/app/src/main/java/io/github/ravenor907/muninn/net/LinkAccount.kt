@@ -138,6 +138,6 @@ object LinkAccount {
 
     fun save(set: Map<String, Item>): String = JSONObject().put("items", JSONArray().apply { set.values.forEach { put(it.json()) } }).toString()
     fun load(text: String?): Map<String, Item> = try {
-        if (text == null) emptyMap() else LinkedHashMap<String, Item>().apply { readAll(JSONObject(text).optJSONArray("items")).forEach { put(it.key, it) } }
+        if (text == null) emptyMap() else LinkedHashMap<String, Item>().apply { readAll(SafeJson.obj(text).optJSONArray("items")).forEach { put(it.key, it) } }
     } catch (e: Exception) { emptyMap() }
 }

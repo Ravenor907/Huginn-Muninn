@@ -40,7 +40,6 @@ import io.github.ravenor907.muninn.ui.ToggleRow
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -229,11 +228,18 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
             else "Everything on this phone is replaced by the backup. A copy of what's here now is kept first.",
             if (erases) "Erase and restore" else "Restore", danger = true, hold = true) {
             busy = true; error = ""
-            scope.launch {
-                val r = withContext(Dispatchers.IO) { try { Result.success(restore(o)) } catch (e: Exception) { Result.failure<String>(e) } }
-                r.onSuccess { done = it; delay(1500); Backup.restart(ctx) }
-                    .onFailure { busy = false; error = "Restore failed. Nothing changed. ${it.message ?: ""}".trim() }
-            }
+            // On a thread of the app's own, not this screen's: the restore and the restart after it run to the end even
+            // if this screen goes meanwhile (a new window, or the lock screen giving way).
+            val main = android.os.Handler(android.os.Looper.getMainLooper())
+            val appCtx = ctx.applicationContext
+            Thread({
+                val r = try { Result.success(restore(o)) } catch (e: Throwable) { Result.failure<String>(e) }
+                r.onSuccess { text -> main.post { done = text }; try { Thread.sleep(1500) } catch (_: InterruptedException) {}; Backup.restart(appCtx) }
+                    .onFailure { e -> main.post {
+                        busy = false
+                        error = "Restore failed. Nothing changed. " + (if (e is OutOfMemoryError) "Too big for this phone." else e.message ?: "").trim()
+                    } }
+            }, "muninn-restore").start()
         })
     }
 

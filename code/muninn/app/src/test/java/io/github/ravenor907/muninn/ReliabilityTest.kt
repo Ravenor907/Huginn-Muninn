@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn
 
 import io.github.ravenor907.muninn.net.ChangedOnly
 import io.github.ravenor907.muninn.net.InboxPaging
+import io.github.ravenor907.muninn.net.SeenIds
 import io.github.ravenor907.muninn.net.Lru
 import io.github.ravenor907.muninn.net.MemoryBudget
 import io.github.ravenor907.muninn.net.NetBackoff
@@ -90,35 +91,39 @@ class ReliabilityTest {
     // ------------------------------------------------------------------ inbox pages
 
     @Test
-    fun shortAnswerIsAllThereIs() {
-        val p = InboxPaging(full = 3)
+    fun emptyAnswerIsAllThereIs() {
+        val p = InboxPaging()
         p.reset("r")
-        p.stored("r", false, 100); p.stored("r", false, 90)
         assertNull(p.end("r", false))
         assertFalse(p.paging("r"))
         // Live events after EOSE don't count towards a page.
         repeat(5) { p.stored("r", false, 200) }
+        assertFalse(p.backlog("r", false))
         assertNull(p.end("r", false))
     }
 
     @Test
-    fun fullAnswerAsksForTheOnesBefore() {
-        val p = InboxPaging(full = 3)
+    fun anyAnswerAsksForTheOnesBeforeWhateverThePageSize() {
+        // A relay that caps its pages at 2 (well below 100) still hands over everything.
+        val p = InboxPaging()
         p.reset("r")
-        listOf(100L, 95L, 90L).forEach { p.stored("r", false, it) }
-        assertEquals(90L, p.end("r", false))   // full: next page until the oldest
+        assertTrue(p.backlog("r", false))
+        listOf(100L, 95L).forEach { p.stored("r", false, it) }
+        assertEquals(95L, p.end("r", false))
         assertTrue(p.paging("r"))
-        listOf(90L, 85L, 80L).forEach { p.stored("r", true, it) }
-        assertEquals(80L, p.end("r", true))     // full again, and older: one more page
-        listOf(80L, 70L).forEach { p.stored("r", true, it) }
-        assertNull(p.end("r", true))            // short: everything has come
+        assertTrue(p.backlog("r", true))
+        listOf(95L, 85L).forEach { p.stored("r", true, it) }
+        assertEquals(85L, p.end("r", true))     // older ones came: one more page
+        listOf(85L).forEach { p.stored("r", true, it) }
+        assertNull(p.end("r", true))            // nothing older: everything has come
         assertFalse(p.paging("r"))
+        assertFalse(p.backlog("r", true))
     }
 
     @Test
-    fun fullPageWithNoProgressStops() {
+    fun pageWithNoProgressStops() {
         // Every event at the same second: asking until that second again would loop forever.
-        val p = InboxPaging(full = 2)
+        val p = InboxPaging()
         p.reset("r")
         p.stored("r", false, 50); p.stored("r", false, 50)
         assertEquals(50L, p.end("r", false))
@@ -128,10 +133,9 @@ class ReliabilityTest {
 
     @Test
     fun relaysPageOnTheirOwn() {
-        val p = InboxPaging(full = 2)
+        val p = InboxPaging()
         p.reset("a"); p.reset("b")
         p.stored("a", false, 10); p.stored("a", false, 9)
-        p.stored("b", false, 10)
         assertEquals(9L, p.end("a", false))
         assertNull(p.end("b", false))
         // A page event on a relay with no page going is ignored.
@@ -143,7 +147,7 @@ class ReliabilityTest {
 
     @Test
     fun pageEoseWithNoPageAskedIsIgnored() {
-        val p = InboxPaging(full = 2)
+        val p = InboxPaging()
         p.reset("r")
         assertTrue(p.asked("r", page = false))    // the inbox request's EOSE always counts
         assertFalse(p.asked("r", page = true))    // no page asked for: a page EOSE is ignored
@@ -152,6 +156,23 @@ class ReliabilityTest {
         assertTrue(p.asked("r", page = true))     // a page is going now
         assertNull(p.end("r", true))
         assertFalse(p.asked("r", page = true))
+    }
+
+    @Test
+    fun seenIdsKeepTheNewest() {
+        val s = SeenIds(max = 3)
+        val ids = (1..5).map { "%016x".format(it) + "ab".repeat(24) }
+        assertFalse(s.contains(ids[0]))
+        assertTrue(s.add(ids[0])); assertFalse(s.add(ids[0]))
+        ids.drop(1).forEach { s.add(it) }
+        assertEquals(3, s.size())
+        assertFalse(s.contains(ids[0])); assertFalse(s.contains(ids[1]))
+        assertTrue(s.contains(ids[4]))
+        s.remove(ids[4]); assertFalse(s.contains(ids[4]))
+        // Not an id at all: never matched, never kept.
+        assertFalse(s.add("zz")); assertFalse(s.contains("not-hex-at-all-xx"))
+        assertEquals(listOf("%016x".format(3), "%016x".format(4)), s.toList())
+        assertEquals(20_000, SeenIds.MAX)
     }
 
     // ------------------------------------------------------------------ notifications

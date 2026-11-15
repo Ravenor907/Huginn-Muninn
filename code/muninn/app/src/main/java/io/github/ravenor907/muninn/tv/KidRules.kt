@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest

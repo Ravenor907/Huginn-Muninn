@@ -133,7 +133,7 @@ Q_SIGNALS:
     void torChoice();
 
 private:
-    void installNow(const QString &path);
+    void installNow(const QString &path, const QString &version);
     void scheduleNext();
     void periodicCheck();     // the timed (or after sleep) check: only when nothing else is going on
     QTimer m_every;           // the next timed check
@@ -168,6 +168,10 @@ private:
     void verifyThenInstall(const QString &path, const QString &tag);
     void checkThenInstall(const QString &path, const QString &tag, const QString &name, const QByteArray &expected, const QByteArray &sig,
                           const QByteArray &vsig);
+    // checkThenInstall's answer from its worker thread (trouble: 0 checked, 1 unreadable, 2 SHA-256, 3 project
+    // signature, 4 version signature), then on to install or wait for Restart now.
+    void checked(const QString &path, const QString &tag, const QString &version, int trouble, const QByteArray &expected,
+                 const QByteArray &got, const QByteArray &sig, const QByteArray &vsig);
     void installFlatpak(const QString &path);
     void failed(const QString &status);
     Settings *m_settings;
@@ -192,4 +196,8 @@ private:
     void forgetFailure();
     bool m_installing = false;
     QString m_readyPath;
+    // What the waiting update was checked against, so Restart now checks the file again before it goes in.
+    QString m_readyVersion;
+    QByteArray m_readySha, m_readySig, m_readyVsig;
+    bool m_readyBack = false;   // it is Go back to stable's (an older version)
 };

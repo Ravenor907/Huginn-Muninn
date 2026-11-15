@@ -15,8 +15,10 @@ on:
     branches: [beta]
     paths: ['.github/workflows/voices.yml']
 
+# Least privilege: read only unless a job says otherwise. The Gradle build (checksums) runs with a read-only token that
+# isn't kept in .git/config; only the small commit job at the end, which runs no build, may push.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: publish-voices
@@ -26,12 +28,17 @@ jobs:
   voices:
     name: Publish voices
     runs-on: ubuntu-latest
+    # Publishes the voices-1 pre-release (gh release upload). Runs no build tool, only curl, tar and gh.
+    permissions:
+      contents: write
     env:
       TAG: voices-1
       ENGINE: "1.13.8"
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
       - name: Download the Piper voices and the speech engine
         shell: bash
         run: |
@@ -133,8 +140,13 @@ jobs:
   checksums:
     name: Muninn's library checksums
     runs-on: ubuntu-24.04
+    # Runs Gradle (and every plugin it loads) with checking off, so it gets a read-only token and keeps none on disk.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
         with:
           distribution: temurin
@@ -184,6 +196,11 @@ jobs:
     name: Commit the lines and checksums to this branch
     needs: [voices, checksums]
     runs-on: ubuntu-latest
+    # The only job that may push. It runs no build: git, grep and cp on the two files the jobs above produced.
+    # Read the commit's diff of verification-metadata.xml before trusting it: a checksum is only as good as the build
+    # that recorded it.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -210,7 +227,11 @@ jobs:
               [ -n "$name" ] || continue
               grep -qE "^[0-9a-f]{64}  $name\$" code/shared/voices.sha256 || echo "$sum  $name" >> code/shared/voices.sha256
             done < "$RUNNER_TEMP/voice-lines/new.txt"
-            cp "$RUNNER_TEMP/verification/verification-metadata.xml" code/muninn/gradle/verification-metadata.xml
+            # Only checksums: a well-formed file that starts as Gradle writes it, nothing else from the build job.
+            v="$RUNNER_TEMP/verification/verification-metadata.xml"
+            python3 -I -c 'import sys, xml.etree.ElementTree as E; r = E.parse(sys.argv[1]).getroot(); sys.exit(0 if r.tag.endswith("verification-metadata") else 1)' "$v" \
+              || { echo "::error title=Library checksums::the build job's verification-metadata.xml isn't one"; exit 1; }
+            cp "$v" code/muninn/gradle/verification-metadata.xml
             git add code/shared/voices.sha256 code/muninn/gradle/verification-metadata.xml
             if git diff --cached --quiet; then echo "Nothing new to commit."; exit 0; fi
             git commit -q -m "Natural voices' lines and Muninn's library checksums"

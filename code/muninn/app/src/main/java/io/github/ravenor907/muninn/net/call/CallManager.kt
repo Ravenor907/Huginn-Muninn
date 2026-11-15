@@ -1,9 +1,11 @@
 package io.github.ravenor907.muninn.net.call
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.content.Context
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.Net
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.MediaType.Companion.toMediaType
@@ -78,7 +80,8 @@ object CallManager {
         val now = System.currentTimeMillis()
         synchronized(lockedChoice) {
             lockedChoice.entries.removeAll { now - it.value.second > CHOICE_MS }
-            lockedChoice[r.callId] = answered to now
+            // 1.54: kept with when the ring came here (this device's clock), so answering never depends on the caller's.
+            lockedChoice[r.callId] = answered to r.at
         }
         if (lockedRing === r) lockedRing = null
     }
@@ -111,7 +114,7 @@ object CallManager {
             lockedRing = r
             _call.value = Ui(callId, "", LOCKED_NAME, false, CallSession.Phase.INCOMING, 0, false, false, false, false, false, false, false, "",
                 "Unlock Muninn to answer")
-            Ringer.ring(a, callId, "", "")
+            Ringer.ring(a, callId, "", "", silent = quietRing(who))
             // Rings as long as any call does; then quiet, and the next call may ring.
             exec.schedule(Runnable {
                 if (lockedRing !== r) return@Runnable
@@ -121,6 +124,48 @@ object CallManager {
             }, CallLogic.RING_MS, TimeUnit.MILLISECONDS)
         }
     }
+
+    // ------------------------------------------------------------------ muted chats ring silently while locked (1.54)
+
+    /**
+     * Ring tag hashes (cap r2, the same hashes ring-allow.json holds outside the vault) of muted chats, with when the mute
+     * ends: a ring that comes while Muninn is locked can't open the chat flags, so it learns its caller is muted here and
+     * rings silently, as it does unlocked. Written whenever the flags change or Muninn is unlocked, and every 10 minutes.
+     */
+    private val quietRings = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private const val QUIET_FILE = "ring-quiet.json"
+
+    private fun watchQuietRings(a: Muninn) {
+        exec.execute {
+            try {
+                val o = JSONObject(File(a.filesDir, QUIET_FILE).takeIf { it.exists() }?.readText() ?: "{}")
+                for (k in o.keys()) quietRings[k] = o.optLong(k)
+            } catch (_: Exception) {}
+        }
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        scope.launch { a.chat.flags.all.collect { exec.execute { syncQuietRings(a) } } }
+        scope.launch { a.vault.locked.collect { locked -> if (!locked) exec.execute { syncQuietRings(a) } } }
+        exec.scheduleWithFixedDelay({ try { syncQuietRings(a) } catch (_: Exception) {} }, 10, 10, TimeUnit.MINUTES)
+    }
+
+    private fun syncQuietRings(a: Muninn) {
+        if (a.vault.locked.value) return
+        val tags = try { JSONObject(a.vault.read(File(a.filesDir, "ring-tags.json")) ?: "{}") } catch (_: Exception) { return }
+        val now = System.currentTimeMillis()
+        val muted = try { a.chat.flags.all.value.muted } catch (_: Exception) { return }
+        val next = HashMap<String, Long>()
+        for ((k, until) in muted) {
+            if (until <= now) continue
+            val tag = tags.optString(k).takeIf { io.github.ravenor907.muninn.net.RingWire.tagOk(it) } ?: continue
+            next[io.github.ravenor907.muninn.net.RingWire.tagHash(tag)] = until
+        }
+        if (next == HashMap(quietRings)) return
+        quietRings.clear(); quietRings.putAll(next)
+        try { File(a.filesDir, QUIET_FILE).writeText(JSONObject(next as Map<*, *>).toString()) } catch (_: Exception) {}
+    }
+
+    /** A locked ring from [who] (its tag's hash) is from a muted chat: it rings silently. */
+    private fun quietRing(who: String): Boolean = who.isNotEmpty() && (quietRings[who] ?: 0L) > System.currentTimeMillis()
 
     /** Answered while locked: the lock screen opens, and the call is answered once the offer is opened after unlocking. */
     private fun answerLocked(r: LockedRing) {
@@ -147,6 +192,7 @@ object CallManager {
     fun init(app: Muninn, signal: CallSignal) {
         this.app = app; this.signal = signal
         exec.execute { _history.value = load(app); loadTrust(app) }
+        watchQuietRings(app)
         work.execute { Vp8.available }   // looks the codecs up once, off the main thread
     }
 
@@ -184,7 +230,7 @@ object CallManager {
     private fun trustFile(c: Context) = File(c.filesDir, "calltrust.json")
 
     private fun loadTrust(a: Muninn) = try {
-        val o = JSONObject(a.vault.read(trustFile(a)) ?: "{}")
+        val o = SafeJson.obj(a.vault.read(trustFile(a)) ?: "{}")
         o.optJSONArray("on")?.let { arr -> for (i in 0 until arr.length()) trustOn += arr.getString(i) }
         o.optJSONArray("off")?.let { arr -> for (i in 0 until arr.length()) arr.getString(i).let { if (it !in trustOn) trustOff += it } }
         _trust.value = _trust.value + 1
@@ -324,17 +370,18 @@ object CallManager {
             // Cap b1: this call already rang while Muninn was locked, and the person answered or declined it then.
             // Still ringing on the locked screen (unlocked meanwhile): the offer rings now, with the name.
             if (lockedRing?.callId == s.call) lockedRing = null
-            val chose = synchronized(lockedChoice) {
-                lockedChoice.remove(s.call)?.takeIf { System.currentTimeMillis() - it.second <= CHOICE_MS }?.first
+            val choice = synchronized(lockedChoice) {
+                lockedChoice.remove(s.call)?.takeIf { System.currentTimeMillis() - it.second <= CHOICE_MS }
             }
+            val chose = choice?.first
             if (chose == false) {
                 val no = CallLogic.simple("decline", s.call)
                 send(fromKey, no); exec.schedule(Runnable { send(fromKey, no) }, 1, TimeUnit.SECONDS); exec.schedule(Runnable { send(fromKey, no) }, 2, TimeUnit.SECONDS)
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "declined"))
                 return@execute
             }
-            // Answered while locked: answered now only while the caller still rings (45 s); older, a missed call.
-            val answeredLocked = chose == true && CallLogic.lockedAnswerOk(s.ts, System.currentTimeMillis())
+            // Answered while locked: answered now only within 105 s of the ring coming here (this clock); older, a missed call.
+            val answeredLocked = chose == true && CallLogic.lockedAnswerHere(choice.second, System.currentTimeMillis())
             // Round 14: the clocks differ by more than a minute. A second copy of the offer a few seconds later shows the
             // caller is there now: it rings. Until then nothing; with none in 30 s, a missed call.
             val skew = if (answeredLocked || chose == true) "" else skewGate.judge(s.call, s.ts, System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())
@@ -422,13 +469,23 @@ object CallManager {
         app?.let { CallService.update(it) }
     }
 
+    /** This device's own internet goes through Wi-Fi or a wired network now (unknown counts as yes). */
+    private fun onLocalNetwork(): Boolean = try {
+        val cm = app?.getSystemService(android.net.ConnectivityManager::class.java)
+        val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+        caps == null || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)
+    } catch (e: Exception) { true }
+
     // ------------------------------------------------------------------ what a session gets from the app
 
     internal val host = object : CallSession.Host {
         override val chatPrivate get() = app!!.identity.keys.private
         override fun send(peerKey: String, json: JSONObject) = this@CallManager.send(peerKey, json)
         override fun lanAddressOf(peerKey: String): InetAddress? = try {
-            app?.net?.deviceFor(peerKey)?.ip?.let { CallLogic.literal(it) }
+            // 1.54: only while this phone is on Wi-Fi or a wired network itself: a phone that left home (on mobile data)
+            // still remembers the TV from its Wi-Fi, and would wait for a path that can't work before asking for the relay.
+            if (!onLocalNetwork()) null else app?.net?.deviceFor(peerKey)?.ip?.let { CallLogic.literal(it) }
         } catch (e: Exception) { null }
         override fun relayLogin(): TurnCreds.Login? {
             val a = app ?: return null
@@ -528,7 +585,7 @@ object CallManager {
     }
 
     private fun load(a: Muninn): List<Log> = try {
-        val arr = JSONArray(a.vault.read(file(a)) ?: "[]")
+        val arr = SafeJson.arr(a.vault.read(file(a)) ?: "[]")
         (0 until arr.length()).map { arr.getJSONObject(it) }.map {
             Log(it.getString("id"), it.getString("k"), it.optString("n", "Someone"), it.optBoolean("out"), it.optLong("at"), it.optLong("s"), it.optString("r"))
         }

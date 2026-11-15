@@ -346,6 +346,8 @@ object FileLink {
         /** 1.42: files never go through the relays; kept for older callers only, never used for a file. */
         fun relay(peer: String, file: File, name: String): String? = "Not ready."
         fun cacheDir(): File
+        /** Copies waiting to go ("out-*") and files still arriving ("incoming-*"): not the cache, which Android may empty. */
+        fun filesDir(): File = cacheDir()
         fun notice(text: String)
         /** Their name as this phone shows it. */
         fun nameOf(peer: String): String = "Someone"
@@ -436,6 +438,8 @@ object FileLink {
                      /** The sender's message id for it in the chat ("bm", BigVideo.FIELD), or "". */
                      val bm: String = "") {
         val torSeq = java.util.concurrent.atomic.AtomicLong(TorFiles.SEQ_BASE)
+        /** Accepted (by a tap or by itself): only these count against free space; an offer nobody answered reserves none. */
+        @Volatile var taken = false
         /** Cap f4: the sender's one-time onion service, once its `tor` message came. */
         @Volatile var onion: Pair<String, Int>? = null
     }
@@ -471,7 +475,7 @@ object FileLink {
      */
     fun loadKept() {
         val h = host ?: return
-        val saved = try { h.readKept()?.let { JSONObject(it) } } catch (_: Exception) { null } ?: return
+        val saved = try { h.readKept()?.let { SafeJson.obj(it) } } catch (_: Exception) { null } ?: return
         val a = saved.optJSONArray("parts") ?: JSONArray()
         val oldest = System.currentTimeMillis() - KEEP_MS
         var dropped = false
@@ -479,8 +483,9 @@ object FileLink {
             val o = a.optJSONObject(i) ?: continue
             val id = o.optString("id")
             val name = o.optString("file")
-            // Only a part file of ours, by its plain name in the cache: nothing in the list can point elsewhere.
-            val f = if (name.startsWith("incoming-") && !name.contains('/') && !name.contains("..")) File(h.cacheDir(), name) else null
+            // Only a part file of ours, by its plain name in its folder (or the cache, from before): nothing in the list can point elsewhere.
+            val f = if (name.startsWith("incoming-") && !name.contains('/') && !name.contains('\\') && !name.contains(".."))
+                File(h.filesDir(), name).takeIf { it.isFile } ?: File(h.cacheDir(), name) else null
             if (id.isEmpty() || partials.containsKey(id)) continue
             if (f == null || !f.isFile || o.optLong("time") < oldest) { f?.delete(); dropped = true; continue }
             val p = Partial(o.optString("peer"), o.optString("sha"), o.optLong("size"), o.optString("group"), f, o.optInt("below"),
@@ -503,7 +508,7 @@ object FileLink {
             val f = when {
                 !plainName -> null
                 o.optString("dir") == "videos-out" -> vids?.let { File(it, fileName) }
-                fileName.startsWith("out-") -> File(h.cacheDir(), fileName)
+                fileName.startsWith("out-") -> File(h.filesDir(), fileName).takeIf { it.isFile } ?: File(h.cacheDir(), fileName)
                 else -> null
             }
             if (id.isEmpty() || again.containsKey(id) || _all.value[id] != null) continue
@@ -523,12 +528,31 @@ object FileLink {
             _all.value = _all.value + (id to Progress(id, peer, name, f.length(), true, "failed",
                 note = o.optString("note").ifEmpty { "Stopped when Muninn closed. Retry sends it again." }, group = g, time = o.optLong("time")))
         }
+        // Offers that were waiting for Accept or Decline: their cards come back, quietly, until their time is up.
+        val waiting = saved.optJSONArray("asks") ?: JSONArray()
+        val now = System.currentTimeMillis()
+        for (i in 0 until waiting.length()) {
+            val o = waiting.optJSONObject(i) ?: continue
+            val until = o.optLong("until")
+            val p = try { JSONObject(o.optString("p")) } catch (_: Exception) { null }
+            if (p == null || until <= now || o.optString("from").isEmpty() || !ok(p) || p.optString("t") != "offer") { dropped = true; continue }
+            try { offer(o.optString("from"), p, until) } catch (_: Exception) {}
+        }
+        // Copies and parts nothing refers to any more (left by a crash): gone after a day.
+        try {
+            val known = (partials.values.map { it.file.name } + again.values.map { it.second.name }).toSet()
+            h.filesDir().listFiles()?.forEach { f ->
+                if ((f.name.startsWith("out-") || f.name.startsWith("incoming-")) && f.isFile && f.name !in known &&
+                    now - f.lastModified() > 24 * 3_600_000L) f.delete()
+            }
+        } catch (_: Exception) {}
         if (dropped) saveKept()
     }
 
     /** My own cards that can be sent again (Retry): their copy in the cache, who to and the group, for [saveKept]. */
     private fun againJson(h: Host): JSONArray {
         val dir = h.cacheDir().absolutePath
+        val dir2 = h.filesDir().absolutePath
         val vids = h.videosOutDir()?.absolutePath
         val a = JSONArray()
         noRetry.retainAll(again.keys)
@@ -536,7 +560,7 @@ object FileLink {
             val f = t.second
             val parent = f.parentFile?.absolutePath
             val inVids = vids != null && parent == vids
-            if (!f.isFile || !(inVids || (parent == dir && f.name.startsWith("out-")))) continue
+            if (!f.isFile || !(inVids || ((parent == dir || parent == dir2) && f.name.startsWith("out-")))) continue
             val p = _all.value[id]
             a.put(JSONObject().put("id", id).put("peer", t.first).put("file", f.name).put("name", t.third).put("group", againGroup[id].orEmpty())
                 .put("time", p?.time ?: f.lastModified()).put("note", if (p?.state == "failed") p.note else "")
@@ -554,10 +578,32 @@ object FileLink {
         val h = host ?: return
         val a = JSONArray()
         closedKept.retainAll(partials.keys)
-        for ((id, p) in partials) a.put(JSONObject().put("id", id).put("peer", p.peer).put("sha", p.sha).put("size", p.size).put("group", p.group)
+        // Files still arriving count as kept parts too: after Android closes Muninn they go on from there.
+        for ((id, p) in partials + live.filterKeys { !partials.containsKey(it) }) a.put(JSONObject().put("id", id).put("peer", p.peer).put("sha", p.sha).put("size", p.size).put("group", p.group)
             .put("file", p.file.name).put("below", p.below).put("name", p.name).put("time", p.time).apply { if (id in closedKept) put("closed", true) })
-        try { h.writeKept(JSONObject().put("parts", a).put("outs", againJson(h)).toString()) } catch (_: Exception) {}
+        val waiting = JSONArray()
+        for ((id, t) in asks) if (ins[id]?.taken == false) waiting.put(JSONObject().put("id", id).put("from", t.first).put("p", t.second).put("until", t.third))
+        try { h.writeKept(JSONObject().put("parts", a).put("outs", againJson(h)).put("asks", waiting).toString()) } catch (_: Exception) {}
     }
+
+    /** A new file for a copy of mine waiting to go, in [Host.filesDir] ([fallback] before the host is set). */
+    fun outCopy(fallback: File): File {
+        val dir = (try { host?.filesDir() } catch (_: Exception) { null } ?: fallback).also { it.mkdirs() }
+        return File(dir, "out-" + System.nanoTime())
+    }
+
+    /** Offers waiting for Accept or Decline: at most this many from one person, and in all (more are declined at once). */
+    const val MAX_ASKS_PER_PEER = 5
+    const val MAX_ASKS = 40
+    /** Offers waiting for an answer, kept across a restart: id to who, the offer, until when. */
+    private val asks = ConcurrentHashMap<String, Triple<String, String, Long>>()
+    /** One thread for every ask's time limit (never a sleeping thread per offer). */
+    private val timer = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "muninn-file-timer").apply { isDaemon = true } }
+    /** Files of theirs on their way in now: what came so far, kept every [LIVE_SAVE_MS] so Android closing Muninn loses nothing. */
+    private val live = ConcurrentHashMap<String, Partial>()
+    const val LIVE_SAVE_MS = 30_000L
+    /** The longest a sender waits for DONE once every piece is there (the other side checks and saves a big file). */
+    const val CHECK_MAX_MS = 30 * 60_000L
 
     /** A file of mine already hashed (path, size, last change): Retry doesn't read it all again. */
     private val hashed = ConcurrentHashMap<String, Triple<Long, Long, String>>()
@@ -620,6 +666,7 @@ object FileLink {
         stopped.add(id)
         pausedIds.remove(id)
         if (!p.mine) ins.remove(id)?.let { host?.signal(it.peer, JSONObject().put("t", "decline").put("id", id).toString()) }
+        if (asks.remove(id) != null) saveKept()
         // Stopped by hand stays stopped: nothing sends it again by itself, now or after a restart.
         if (p.mine) { again.remove(id)?.second?.delete(); againGroup.remove(id); saveKept() }
         put(p.copy(state = "failed", note = "Stopped"))
@@ -754,6 +801,7 @@ object FileLink {
     /** A file of theirs that would have to come straight over the internet, refused under Ultra privacy: they hear so. */
     private fun refuseForUltra(id: String, inc: In) {
         if (ins.remove(id) == null) return
+        asks.remove(id)
         decline(inc.peer, id)   // no "why": a small one then comes over the relays instead
         _all.value[id]?.let { put(it.copy(state = "failed", note = ULTRA_STOPPED_IN)) }
     }
@@ -975,84 +1023,7 @@ object FileLink {
         val h = host ?: return
         val id = p.getString("id")
         when (p.getString("t")) {
-            "offer" -> {
-                if (ins.containsKey(id) || id in answered) return
-                // Round 19 (interop 3, K19-4): a Kids' Device takes no full-size video. "rules" at once, so the sender's
-                // app sends the smaller relay copy now instead of waiting for an answer.
-                if (p.has("vid") && h.isKidDevice()) { decline(from, id, "rules"); return }
-                val name = p.getString("name")
-                val size = p.getLong("size")
-                // Sent again (their app retries by itself): the card of an earlier try that failed makes way, so one file
-                // is one card here, not one per try. A card with part of the file kept stays (it goes on from there).
-                _all.value.values.filter { !it.mine && it.state == "failed" && it.peer == from && it.name == name && it.size == size && !isKept(it.id) }
-                    .forEach { drop(it.id) }
-                val g = p.optString("g")
-                val c = p.getJSONArray("c")
-                val vid = p.optInt("vid", 0)
-                val here = h.routeFor(from, g0(p))
-                val trust = h.trusted(from) && MediaRoute.directMay(here, !UltraPrivacy.directAllowed)   // Ultra privacy: Nearby or Tor only
-                val lan = lanTarget(h.lanAddress(from), c)
-                // Cap f5: they want the call relay. Taken when they're Family or trusted here too, and this side allows it.
-                val wants = p.optInt("rl") == 1
-                val relay = wants && h.hasF5(from) && MediaRoute.relayMay(here, !UltraPrivacy.directAllowed, mayAlways(h.badge(from)), true)
-                // Cap f4: Tor can carry it (both say f4, and Tor may start here). A sender asking for the relay serves no Tor.
-                val tor = h.hasF4(from) && h.torAllowed() && !wants
-                // A group's file (27.2, 27.3): only for a group we're both in, within its file rules. Dropped, and said.
-                if (g.isNotEmpty()) {
-                    val why = h.groupRefusal(g, from, size)
-                    if (why.isNotEmpty()) {
-                        decline(from, id, "rules")
-                        refused(from, id, name, size, g, why)
-                        h.notice("A file from ${h.nameOf(from)} in ${h.groupName(g)} was dropped. $why")
-                        return
-                    }
-                }
-                // Addresses are only swapped with someone trusted; on the same Wi-Fi nothing new is learned; over Tor
-                // neither side learns the other's address.
-                if (!trust && lan == null && !tor && !relay) {
-                    // Cap f5: this side only takes Tor (Ultra privacy, or chosen): their card says what to do.
-                    if (wants) { decline(from, id, "tor"); return }
-                    // "why" stays empty: an older sender then says its own words.
-                    decline(from, id)
-                    if (h.trusted(from) && !UltraPrivacy.directAllowed && ultraToldNow(from))
-                        h.notice("${h.nameOf(from)} tried to send you $name (${FileText.size(size)}). With Ultra privacy on it can come on the same Wi-Fi. Ask them to update to send over Tor.")
-                    return
-                }
-                // What's already on its way here counts too, so many offers at once can't each pass alone.
-                if (h.freeBytes() < size + 64L * 1024 * 1024 + ins.values.sumOf { it.size }) {
-                    decline(from, id, "space")
-                    refused(from, id, name, size, g, "Not enough space for it on this phone (${FileText.size(h.freeBytes())} free).")
-                    h.notice("${h.nameOf(from)} tried to send you $name, but there isn't enough space.")
-                    return
-                }
-                val direct = if (trust) CallLogic.directOf(c) else emptyList()
-                val theirs = listOfNotNull(lan) + direct
-                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay), vid,
-                    (p.opt(BigVideo.FIELD) as? String)?.takeIf { BigVideo.idOk(it) }.orEmpty())
-                ins[id] = inc
-                val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
-                val badge = h.badge(from)
-                // Family's files always arrive by themselves (never an Accept, whatever was once chosen); trusted contacts'
-                // do too unless set to ask, and on a Kids' Device only when set to Always.
-                val always = badge == BADGE_FAMILY || (mayAlways(badge) && !h.asksFirst(from) && (!h.isKidDevice() || h.alwaysFrom(from)))
-                // Cap f3: the rest of a file already accepted (it stopped part way) doesn't ask again.
-                val resuming = partialFor(from, inc.sha, size, g) != null
-                val method = methodLabel(if (lan != null) "lan" else if (direct.isNotEmpty()) "direct" else if (relay) "relay" else "tor", size)
-                if (arrivesByItself(always, resuming, h.mayDownload())) {
-                    if (h.hasF4(from)) h.signal(from, JSONObject().put("t", "wait").put("id", id).toString())
-                    accept(id); return
-                }
-                // Cap f4: the sender hears the card is up ("Waiting for Ana to accept", not "Sends when...").
-                if (h.hasF4(from)) h.signal(from, JSONObject().put("t", "wait").put("id", id).toString())
-                val day = h.resumes(from)
-                put(Progress(id, from, inc.name, inc.size, false, "asking",
-                    note = if (day) "Wants to send you this. Waits a day for your answer" else "Wants to send you this. Accept or decline", group = g,
-                    folder = Received.shown(folder), route = method, badge = badge, method = method, vid = vid))
-                val text = "${h.nameOf(from)} wants to send you ${typeWord(inc.name)}: ${inc.name} (${FileText.size(inc.size)}). Accept or decline it in the chat or Transfers."
-                h.notice(text)
-                h.offered(if (g.isEmpty()) from else "g:$g", from, text)
-                expireAsk(id, if (day) LONG_ANSWER_MS else ASK_ANSWER_MS)
-            }
+            "offer" -> offer(from, p)
             // Cap f4: their card asks them now.
             "wait" -> outs[id]?.takeIf { it.peer == from }?.let { o ->
                 o.seen = true
@@ -1109,23 +1080,118 @@ object FileLink {
         }
     }
 
-    /** An ask nobody answered in time: its card says so (the sender gave up by then too). */
-    private fun expireAsk(id: String, ms: Long) {
-        work.execute {
-            val until = System.currentTimeMillis() + ms
-            while (System.currentTimeMillis() < until && _all.value[id]?.state == "asking") Thread.sleep(1000)
-            if (_all.value[id]?.state == "asking") {
-                ins.remove(id)
-                answered.add(id)
-                _all.value[id]?.let { put(it.copy(state = "failed", note = "Not taken in time. Ask them to send it again.")) }
+    /** An offer of theirs ([restoreUntil]: one kept from before a restart, asked again quietly until then). */
+    private fun offer(from: String, p: JSONObject, restoreUntil: Long = 0L) {
+        val h = host ?: return
+        val id = p.getString("id")
+        if (ins.containsKey(id) || id in answered) return
+        // Not more open asks than this from one person, or in all: a flood of offers is declined at once (no cards,
+        // no notifications, no threads).
+        val open = ins.values.filter { !it.taken }
+        if (restoreUntil == 0L && (open.count { it.peer == from } >= MAX_ASKS_PER_PEER || open.size >= MAX_ASKS)) { answered.add(id); decline(from, id); return }
+        // Round 19 (interop 3, K19-4): a Kids' Device takes no full-size video. "rules" at once, so the sender's
+        // app sends the smaller relay copy now instead of waiting for an answer.
+        if (p.has("vid") && h.isKidDevice()) { decline(from, id, "rules"); return }
+        val name = Sharing.cleanName(p.getString("name")).ifBlank { "file" }   // no hidden direction or control characters
+        val size = p.getLong("size")
+        // Sent again (their app retries by itself): the card of an earlier try that failed makes way, so one file
+        // is one card here, not one per try. A card with part of the file kept stays (it goes on from there).
+        _all.value.values.filter { !it.mine && it.state == "failed" && it.peer == from && it.name == name && it.size == size && !isKept(it.id) }
+            .forEach { drop(it.id) }
+        val g = p.optString("g")
+        val c = p.getJSONArray("c")
+        val vid = p.optInt("vid", 0)
+        val here = h.routeFor(from, g0(p))
+        val trust = h.trusted(from) && MediaRoute.directMay(here, !UltraPrivacy.directAllowed)   // Ultra privacy: Nearby or Tor only
+        val lan = lanTarget(h.lanAddress(from), c)
+        // Cap f5: they want the call relay. Taken when they're Family or trusted here too, and this side allows it.
+        val wants = p.optInt("rl") == 1
+        val relay = wants && h.hasF5(from) && MediaRoute.relayMay(here, !UltraPrivacy.directAllowed, mayAlways(h.badge(from)), true)
+        // Cap f4: Tor can carry it (both say f4, and Tor may start here). A sender asking for the relay serves no Tor.
+        val tor = h.hasF4(from) && h.torAllowed() && !wants
+        // A group's file (27.2, 27.3): only for a group we're both in, within its file rules. Dropped, and said.
+        if (g.isNotEmpty()) {
+            val why = h.groupRefusal(g, from, size)
+            if (why.isNotEmpty()) {
+                decline(from, id, "rules")
+                refused(from, id, name, size, g, why)
+                h.notice("A file from ${h.nameOf(from)} in ${h.groupName(g)} was dropped. $why")
+                return
             }
         }
+        // Addresses are only swapped with someone trusted; on the same Wi-Fi nothing new is learned; over Tor
+        // neither side learns the other's address.
+        if (!trust && lan == null && !tor && !relay) {
+            // Cap f5: this side only takes Tor (Ultra privacy, or chosen): their card says what to do.
+            if (wants) { decline(from, id, "tor"); return }
+            // "why" stays empty: an older sender then says its own words.
+            decline(from, id)
+            if (h.trusted(from) && !UltraPrivacy.directAllowed && ultraToldNow(from))
+                h.notice("${h.nameOf(from)} tried to send you $name (${FileText.size(size)}). With Ultra privacy on it can come on the same Wi-Fi. Ask them to update to send over Tor.")
+            return
+        }
+        // What's already on its way here counts too, so many files at once can't each pass alone. Offers nobody
+        // accepted yet reserve nothing (they're checked again when accepted).
+        if (h.freeBytes() < size + 64L * 1024 * 1024 + ins.values.filter { it.taken }.sumOf { it.size }) {
+            decline(from, id, "space")
+            refused(from, id, name, size, g, "Not enough space for it on this phone (${FileText.size(h.freeBytes())} free).")
+            h.notice("${h.nameOf(from)} tried to send you $name, but there isn't enough space.")
+            return
+        }
+        val direct = if (trust) CallLogic.directOf(c) else emptyList()
+        val theirs = listOfNotNull(lan) + direct
+        val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay), vid,
+            (p.opt(BigVideo.FIELD) as? String)?.takeIf { BigVideo.idOk(it) }.orEmpty())
+        ins[id] = inc
+        val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
+        val badge = h.badge(from)
+        // Family's files always arrive by themselves (never an Accept, whatever was once chosen); trusted contacts'
+        // do too unless set to ask, and on a Kids' Device only when set to Always.
+        val always = badge == BADGE_FAMILY || (mayAlways(badge) && !h.asksFirst(from) && (!h.isKidDevice() || h.alwaysFrom(from)))
+        // Cap f3: the rest of a file already accepted (it stopped part way) doesn't ask again.
+        val resuming = partialFor(from, inc.sha, size, g) != null
+        val method = methodLabel(if (lan != null) "lan" else if (direct.isNotEmpty()) "direct" else if (relay) "relay" else "tor", size)
+        if (arrivesByItself(always, resuming, h.mayDownload())) {
+            if (h.hasF4(from)) h.signal(from, JSONObject().put("t", "wait").put("id", id).toString())
+            accept(id); return
+        }
+        // Cap f4: the sender hears the card is up ("Waiting for Ana to accept", not "Sends when...").
+        if (h.hasF4(from)) h.signal(from, JSONObject().put("t", "wait").put("id", id).toString())
+        val day = h.resumes(from)
+        // Kept across a restart: Android closing Muninn doesn't lose the card (its time limit stays as it was).
+        val until = if (restoreUntil > 0L) restoreUntil else System.currentTimeMillis() + if (day) LONG_ANSWER_MS else ASK_ANSWER_MS
+        asks[id] = Triple(from, p.toString(), until)
+        saveKept()
+        put(Progress(id, from, inc.name, inc.size, false, "asking",
+            note = if (day) "Wants to send you this. Waits a day for your answer" else "Wants to send you this. Accept or decline", group = g,
+            folder = Received.shown(folder), route = method, badge = badge, method = method, vid = vid))
+        val text = "${h.nameOf(from)} wants to send you ${typeWord(inc.name)}: ${inc.name} (${FileText.size(inc.size)}). Accept or decline it in the chat or Transfers."
+        if (restoreUntil == 0L) {
+            h.notice(text)
+            h.offered(if (g.isEmpty()) from else "g:$g", from, text)
+        }
+        expireAsk(id, until - System.currentTimeMillis())
+    }
+
+    /** An ask nobody answered in time: its card says so (the sender gave up by then too). */
+    private fun expireAsk(id: String, ms: Long) {
+        timer.schedule({
+            try {
+                if (_all.value[id]?.state == "asking") {
+                    ins.remove(id)
+                    answered.add(id)
+                    _all.value[id]?.let { put(it.copy(state = "failed", note = "Not taken in time. Ask them to send it again.")) }
+                }
+                if (asks.remove(id) != null) saveKept()
+            } catch (_: Exception) {}
+        }, ms.coerceAtLeast(0L), java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     /** Decline: the sender's card says "Declined", and nothing is left behind here. */
     fun decline(id: String) {
         val inc = ins.remove(id) ?: return
         answered.add(id)
+        if (asks.remove(id) != null) saveKept()
         decline(inc.peer, id, "no")
         drop(id)
     }
@@ -1145,7 +1211,17 @@ object FileLink {
         val inc = ins[id] ?: return
         val h = host ?: return
         if (_all.value[id]?.state?.let { it == "connecting" || it == "sending" } == true) return   // tapped twice
+        // Unanswered offers reserve no space, so it's checked now, against what's already accepted.
+        if (!inc.taken && h.freeBytes() < inc.size + 64L * 1024 * 1024 + ins.entries.filter { it.key != id && it.value.taken }.sumOf { it.value.size }) {
+            ins.remove(id); answered.add(id)
+            if (asks.remove(id) != null) saveKept()
+            decline(inc.peer, id, "space")
+            _all.value[id]?.let { put(it.copy(state = "failed", note = "Not enough space for it on this phone (${FileText.size(h.freeBytes())} free).")) }
+            return
+        }
+        inc.taken = true
         answered.add(id)
+        if (asks.remove(id) != null) saveKept()
         // Ultra privacy, turned on since it was offered: only Nearby or Tor, never straight over the internet.
         val direct = !inc.lanOnly && UltraPrivacy.directAllowed
         if (!direct && !inc.lanOnly && inc.lan == null && h.lanAddress(inc.peer) == null && !inc.tor && !inc.relay) { refuseForUltra(id, inc); return }
@@ -1248,6 +1324,7 @@ object FileLink {
             var lastKeep = 0L
             var sent = 0L
             var firstAck = true
+            var gotDone = false
             var quiet = false
             val f3 = h?.resumes(o.peer) == true
             val who = h?.nameOf(o.peer) ?: "They"
@@ -1340,9 +1417,31 @@ object FileLink {
                                 put(Progress(id, o.peer, o.name, o.size, true, "sending", sent, note = if (quiet) "Waiting for $who to come back" else "", route = route, group = o.group))
                                 noteProgress(true, sent, o.size)
                             }
-                            if (t == DONE) { s.ack(n, 0); break }
+                            if (t == DONE) { s.ack(n, 0); gotDone = true; break }
                         }
                     } catch (_: java.net.SocketTimeoutException) {}
+                }
+                // Everything is there, but it counts as sent only once their DONE says it was checked and saved (an app
+                // from 1.54 sends it after both; older ones at once). Their acks a second keep the wait going; silence
+                // without DONE means it didn't take there, and this copy stays for Retry.
+                val to = peer
+                if (to != null && s.done && !gotDone && !toTor) {
+                    put(Progress(id, o.peer, o.name, o.size, true, "sending", o.size, note = "Being checked on their side", route = route, group = o.group))
+                    val waitFrom = System.currentTimeMillis()
+                    var heard = waitFrom
+                    val dp = DatagramPacket(buf, buf.size)
+                    while (!gotDone && id !in stopped) {
+                        val now = System.currentTimeMillis()
+                        if (now - heard > (if (f3) LONG_IDLE_MS else IDLE_MS) || now - waitFrom > CHECK_MAX_MS) break
+                        try {
+                            sock.receive(dp)
+                            val (t, _) = open(key, id, 1, dp.data, dp.length) ?: continue
+                            heard = System.currentTimeMillis()
+                            if (t == DONE) gotDone = true
+                        } catch (_: java.net.SocketTimeoutException) {}
+                    }
+                    if (id in stopped) return
+                    if (!gotDone) { fail(id, "$who didn't confirm it arrived (maybe no space to save it). Retry sends it again."); return }
                 }
                 if (toTor && !s.done && !serveTor(id, o, key, s, raf)) return
             }
@@ -1411,7 +1510,7 @@ object FileLink {
         val h = host ?: return
         // Cap f3: the same file from the same person stopped part way before. It goes on from there.
         val kept = partialFor(inc.peer, inc.sha, inc.size, inc.group)?.let { k -> partials.remove(k)?.also { drop(k); saveKept() } }
-        val tmp = kept?.file ?: File(h.cacheDir(), "incoming-$id")
+        val tmp = kept?.file ?: File(h.filesDir().also { it.mkdirs() }, "incoming-$id")
         val f3 = h.resumes(inc.peer)
         val who = h.nameOf(inc.peer)
         var keep = false
@@ -1451,13 +1550,29 @@ object FileLink {
             fun keepPart(why: (Partial) -> String) {
                 val part = Partial(inc.peer, inc.sha, inc.size, inc.group, tmp, r.ack().first, inc.name)
                 partials[id] = part
+                live.remove(id)
                 saveKept()
                 keep = true
                 fail(id, why(part))
             }
+            // Cap f3: kept as a part from the start, and how far it got every [LIVE_SAVE_MS]: Android closing Muninn
+            // part way loses nothing (it goes on from there when they send it again).
+            var liveAt = 0L
+            fun liveNow(force: Boolean = false) {
+                if (!f3) return
+                val t = System.currentTimeMillis()
+                if (!force && t - liveAt < LIVE_SAVE_MS) return
+                liveAt = t
+                live[id] = Partial(inc.peer, inc.sha, inc.size, inc.group, tmp, r.ack().first, inc.name)
+                saveKept()
+            }
+            liveNow(true)
+            var doneTo: InetSocketAddress? = null
+            var doneSock = sock
             RandomAccessFile(tmp, "rw").use { raf ->
                 raf.setLength(inc.size)
                 while (peer != null && !r.done) {
+                    liveNow()
                     if (id in stopped) return
                     // Cap f4: the sender went on over Tor (its `tor` message came, and nothing comes here any more).
                     if (inc.onion != null && System.currentTimeMillis() - lastHeard > QUIET_MS) { toTor = true; break }
@@ -1530,10 +1645,8 @@ object FileLink {
                         noteProgress(false, minOf(inc.size, below.toLong() * CHUNK), inc.size)
                     }
                 }
-                peer?.let { to -> if (r.done) repeat(3) { i ->
-                    val pk = seal(key, id, DONE, 1, seq++, ByteArray(0)); sock.send(DatagramPacket(pk, pk.size, to))
-                    if (leg != null && i < 2) Thread.sleep(150)   // the relay drops a burst more easily than a line
-                } }
+                // DONE goes only once it's checked and saved (below): until then the sender keeps its copy.
+                if (r.done) { doneTo = peer; doneSock = sock }
                 if (toTor && !r.done) {
                     route = methodLabel("tor", inc.size)
                     when (receiveTor(id, inc, key, r, raf, route)) {
@@ -1544,20 +1657,57 @@ object FileLink {
                 }
             }
             put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", inc.size, note = "Checking it", route = route, group = inc.group))
-            if (sha256(tmp) != inc.sha) { fail(id, "${inc.name} arrived damaged, so it was thrown away."); return }
-            // A video from Family or trusted, up to 3 minutes: in the chat like a photo, and its card goes.
-            if (BigVideo.inline(inc.vid, mayAlways(h.badge(inc.peer))) && !h.isKidDevice() && h.inlineVideo(inc.peer, inc.group, tmp, inc.vid, inc.bm)) {
-                drop(id)
-                return
+            // While it's checked and saved, an ack a second tells the sender this side is still here (it waits for DONE).
+            val checking = java.util.concurrent.atomic.AtomicBoolean(true)
+            val to0 = doneTo
+            val ackSock = doneSock
+            if (to0 != null) work.execute {
+                var aseq = 1L shl 30
+                while (checking.get()) {
+                    try {
+                        val (below, bits) = r.ack()
+                        val pk = seal(key, id, ACK, 1, seq + aseq++, ByteBuffer.allocate(12).putInt(below).putLong(bits).array())
+                        ackSock.send(DatagramPacket(pk, pk.size, to0))
+                    } catch (_: Exception) { break }
+                    try { Thread.sleep(1000) } catch (_: InterruptedException) { break }
+                }
             }
+            fun sayDone() {
+                checking.set(false)
+                val to = to0 ?: return
+                repeat(3) { i ->
+                    try { val pk = seal(key, id, DONE, 1, seq++, ByteArray(0)); ackSock.send(DatagramPacket(pk, pk.size, to)) } catch (_: Exception) {}
+                    if (leg != null && i < 2) Thread.sleep(150)   // the relay drops a burst more easily than a line
+                }
+            }
+            try {
+                if (sha256(tmp) != inc.sha) { checking.set(false); live.remove(id); fail(id, "${inc.name} arrived damaged, so it was thrown away. Ask them to send it again."); return }
+                // A video from Family or trusted, up to 3 minutes: in the chat like a photo, and its card goes.
+                if (BigVideo.inline(inc.vid, mayAlways(h.badge(inc.peer))) && !h.isKidDevice() && h.inlineVideo(inc.peer, inc.group, tmp, inc.vid, inc.bm)) {
+                    live.remove(id)
+                    sayDone()
+                    drop(id)
+                    return
+                }
+            } catch (e: Exception) { checking.set(false); throw e }
             // In Download/Muninn/<chat name>, never a hidden app folder.
             val chat = if (inc.group.isEmpty()) h.nameOf(inc.peer) else h.groupName(inc.group)
             val folder = Sharing.folderFor("Muninn", chat)
-            val saved = h.saveIn(inc.name, tmp, folder) ?: run { fail(id, "Not enough space to save ${inc.name}."); return }
+            val saved = h.saveIn(inc.name, tmp, folder) ?: run {
+                checking.set(false)
+                // Not saved: no DONE, so the sender keeps its copy (its card offers Retry). What came is kept whole here,
+                // so sending it again only checks and saves it.
+                if (f3) keepPart { "Not enough space to save ${inc.name}. Free some up, then ask them to send it again: it won't need to come again." }
+                else { live.remove(id); fail(id, "Not enough space to save ${inc.name}. Free some up, then ask them to send it again.") }
+                return
+            }
+            live.remove(id)
+            sayDone()
             put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri, route = route, group = inc.group, folder = Received.shown(folder)))
             h.logFile(if (inc.group.isEmpty()) inc.peer else "g:${inc.group}", saved.name, inc.size, saved.uri, false)
             h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved in ${Received.shown(folder)}" + if (risky(saved.name)) ". $RISKY_NOTE" else "")
         } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") } finally {
+            if (live.remove(id) != null) saveKept()
             ins.remove(id); sock0.close(); legs.remove(id)?.close(); relayTo.remove(id); if (!keep) tmp.delete(); ended(id); TorRunner.release(id); h.keepGoing(id, false)
         }
     }
@@ -1593,6 +1743,11 @@ object FileLink {
                         if (!gotFirst) { gotFirst = true; base[id] = done; started[id] = System.currentTimeMillis() }
                         put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", done, route = label, group = inc.group))
                         noteProgress(false, done, inc.size)
+                        // Cap f3: how far it got, kept now and then (Android may close Muninn part way).
+                        live[id]?.takeIf { System.currentTimeMillis() - it.time > LIVE_SAVE_MS }?.let {
+                            live[id] = Partial(inc.peer, inc.sha, inc.size, inc.group, it.file, r.ack().first, inc.name)
+                            saveKept()
+                        }
                     }
                 })
                 if (end == TorFiles.End.DONE) return true

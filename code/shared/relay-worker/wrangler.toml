@@ -1,5 +1,5 @@
 # The relay Worker: https://huginn-relay.ravenor907.workers.dev
-# Deployed after each release by the relay-deploy job in .github/workflows/build.yml (npm ci, then wrangler deploy, in this folder).
+# Deployed after each release by the relay-deploy job in .github/workflows/build.yml (npm ci --ignore-scripts, then wrangler deploy, in this folder).
 name = "huginn-relay"
 main = "worker.js"
 compatibility_date = "2025-10-01"
@@ -16,7 +16,8 @@ new_sqlite_classes = ["RelayLimits"]
 
 # Optional Worker variables (dashboard, Variables and Secrets, Type: Text), never needed for a working Worker:
 #   DAILY_MINUTES   the day's TURN budget for everyone, in minutes of login handed out (default 50000; see relay.md "Limits")
-#   LEGACY_UNTIL    a Unix time (seconds) after which logins without an install token are refused
+#   LEGACY_UNTIL    a Unix time (seconds) after which logins without an install token are refused; devices too old to
+#                   have a token then lose the call relay for good (README.md), so leave it unset until none are left
 #
 # Optional: the Workers rate limiting binding, a per-location counter in front of everything else (relay.md "Junk
 # requests"). The Worker uses it when it is bound and works the same without it. Uncomment to turn it on; if a deploy

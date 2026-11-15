@@ -68,8 +68,10 @@ QByteArray gcm(bool enc, const QByteArray &key, const QByteArray &nonce, const Q
     *ok = false;
     if (key.size() != 32 || (!enc && in.size() < 16))
         return {};
-    EVP_CIPHER_CTX *c = EVP_CIPHER_CTX_new();
-    if (!c)
+    // One context per thread, reset for each packet: a new one per 1100-byte piece cost more than the crypto itself.
+    thread_local std::unique_ptr<EVP_CIPHER_CTX, void (*)(EVP_CIPHER_CTX *)> ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+    EVP_CIPHER_CTX *c = ctx.get();
+    if (!c || EVP_CIPHER_CTX_reset(c) != 1)
         return {};
     QByteArray out(in.size() + 16, 0);
     int len = 0, total = 0;
@@ -98,7 +100,6 @@ QByteArray gcm(bool enc, const QByteArray &key, const QByteArray &nonce, const Q
         good = good && EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_GET_TAG, 16, o + total) == 1;
         total += 16;
     }
-    EVP_CIPHER_CTX_free(c);
     if (!good)
         return {};
     out.resize(total);
@@ -401,6 +402,25 @@ void FileLink::reportMeter() const
     });
 }
 
+qint64 FileLink::relayShared(qint64 shared, int dayOfMonth)
+{
+    return qBound<qint64>(0, shared, qint64(qBound(1, dayOfMonth, 31)) * kSharedPerDayBytes);
+}
+
+namespace
+{
+// This install's own count, and the shared total as far as it is believed (FileLink::relayShared).
+qint64 ownBytes()
+{
+    return qMax<qint64>(0, Settings::store().value(QStringLiteral("relay/bytes")).toLongLong());
+}
+
+qint64 sharedBytes()
+{
+    return FileLink::relayShared(Settings::store().value(QStringLiteral("relay/shared")).toLongLong(), QDateTime::currentDateTimeUtc().date().day());
+}
+}
+
 bool FileLink::relayOver() const
 {
     meterRoll();
@@ -409,23 +429,21 @@ bool FileLink::relayOver() const
         m_meterAsked = t;
         reportMeter();
     }
-    QSettings s = Settings::store();
-    return qMax(s.value(QStringLiteral("relay/bytes")).toLongLong(), s.value(QStringLiteral("relay/shared")).toLongLong()) >= kRelayLimitBytes;
+    return qMax(ownBytes(), sharedBytes()) >= kRelayLimitBytes;
 }
 
+// Only this install's own count stops relayed files: a shared total anyone can raise never does.
 bool FileLink::relayStopped() const
 {
     relayOver();
-    QSettings s = Settings::store();
-    return qMax(s.value(QStringLiteral("relay/bytes")).toLongLong(), s.value(QStringLiteral("relay/shared")).toLongLong()) >= kRelayStopBytes;
+    return ownBytes() >= kRelayStopBytes;
 }
 
 QString FileLink::relayNote() const
 {
     meterRoll();
-    QSettings s = Settings::store();
-    const qint64 used = qMax(s.value(QStringLiteral("relay/bytes")).toLongLong(), s.value(QStringLiteral("relay/shared")).toLongLong());
-    if (used >= kRelayStopBytes)
+    const qint64 used = qMax(ownBytes(), sharedBytes());
+    if (ownBytes() >= kRelayStopBytes)
         return QStringLiteral("The relay's free limit is used this month. Sends go direct until next month.");
     if (used >= kRelayLimitBytes)
         return QStringLiteral("The relay is near its free limit. Relayed videos go at 720p this month.");
@@ -798,6 +816,13 @@ FileLink::FileLink(Chat *chat, QObject *parent)
 
 FileLink::~FileLink()
 {
+    // The opening thread first: nothing it still has comes back once this goes.
+    if (m_opener) {
+        m_opener->quit();
+        m_opener->wait();   // a batch is only decryption: never long
+        delete m_openerCtx;
+        delete m_opener;
+    }
     // Kept parts stay for the next run once they're saved (keepForRestart); otherwise they go.
     if (!m_keptSaved)
         for (const Partial &p : std::as_const(m_partial))
@@ -2242,6 +2267,14 @@ void FileLink::dataTick(Xfer *x)
 
 void FileLink::onDatagram(Xfer *x)
 {
+    // Read here (cheap); decrypted on the opening thread, so a fast transfer (tens of thousands of packets a second)
+    // never holds up the window. What opened comes back in order and is taken by takeOpened.
+    struct Raw {
+        QByteArray bytes;
+        QHostAddress from;
+        quint16 port = 0;
+    };
+    QList<Raw> batch;
     while (x->sock && x->sock->hasPendingDatagrams()) {
         const QNetworkDatagram d = x->sock->receiveDatagram(2048);
         Busy::count("file link datagrams received");
@@ -2254,34 +2287,73 @@ void FileLink::onDatagram(Xfer *x)
             continue;
         if (x->key.isEmpty())
             continue;
-        quint8 type = 0;
-        QByteArray payload;
-        if (!open(x->key, x->id, 1 - x->dir, bytes, &type, &payload))
-            continue;
-        if (x->punching) {
-            QHostAddress h = from;
-            bool v4 = false;
-            const quint32 a4 = h.toIPv4Address(&v4);
-            if (v4)
-                h = QHostAddress(a4);   // ::ffff:a.b.c.d from a dual-stack socket
-            // Ultra privacy: only this Wi-Fi, so nothing goes back to an address that isn't theirs here.
-            if (x->lanOnly && !testLocal && !UltraPrivacy::directAllowed() && !(x->lan.valid() && CallNet::fromHost(h, port) == x->lan))
-                continue;
-            x->to = CallNet::fromHost(h, port);
-            x->found = true;
-            // Cap f2: their address on this Wi-Fi answered, so it goes Direct; anything else is over the internet.
-            x->route = x->lan.valid() && x->to == x->lan ? QStringLiteral("direct") : QStringLiteral("internet");
-            // Data or an ack already means the other side found this one too.
-            if ((type != Probe || ++x->heardBack >= 3) && !startData(x))
-                return;
-            if (!x->moving)
-                continue;
-        }
-        if (!x->moving)
-            continue;
-        if (!takePacket(x, type, payload))
-            return;
+        batch.append(Raw{bytes, from, port});
     }
+    if (batch.isEmpty())
+        return;
+    if (!m_opener) {
+        m_opener = new QThread;
+        m_opener->setObjectName(QStringLiteral("file link packets"));
+        m_openerCtx = new QObject;
+        m_openerCtx->moveToThread(m_opener);
+        m_opener->start();
+    }
+    const QString id = x->id;
+    const QByteArray key = x->key;
+    const quint32 dir = 1 - x->dir;
+    QMetaObject::invokeMethod(m_openerCtx, [this, id, key, dir, batch = std::move(batch)] {
+        struct Opened {
+            quint8 type;
+            QByteArray payload;
+            QHostAddress from;
+            quint16 port;
+        };
+        QList<Opened> out;
+        out.reserve(batch.size());
+        for (const Raw &r : batch) {
+            quint8 type = 0;
+            QByteArray payload;
+            if (open(key, id, dir, r.bytes, &type, &payload))
+                out.append(Opened{type, payload, r.from, r.port});
+        }
+        if (out.isEmpty())
+            return;
+        // ~FileLink waits for this thread before it goes, so it is still here to post to.
+        QMetaObject::invokeMethod(this, [this, id, out = std::move(out)] {
+            Busy::Scope busy("file transfers");
+            for (const Opened &o : out) {
+                Xfer *x = m_x.value(id);
+                if (!x || !takeOpened(x, o.type, o.payload, o.from, o.port))
+                    return;
+            }
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+bool FileLink::takeOpened(Xfer *x, quint8 type, const QByteArray &payload, const QHostAddress &from, quint16 port)
+{
+    if (x->punching) {
+        QHostAddress h = from;
+        bool v4 = false;
+        const quint32 a4 = h.toIPv4Address(&v4);
+        if (v4)
+            h = QHostAddress(a4);   // ::ffff:a.b.c.d from a dual-stack socket
+        // Ultra privacy: only this Wi-Fi, so nothing goes back to an address that isn't theirs here.
+        if (x->lanOnly && !testLocal && !UltraPrivacy::directAllowed() && !(x->lan.valid() && CallNet::fromHost(h, port) == x->lan))
+            return true;
+        x->to = CallNet::fromHost(h, port);
+        x->found = true;
+        // Cap f2: their address on this Wi-Fi answered, so it goes Direct; anything else is over the internet.
+        x->route = x->lan.valid() && x->to == x->lan ? QStringLiteral("direct") : QStringLiteral("internet");
+        // Data or an ack already means the other side found this one too.
+        if ((type != Probe || ++x->heardBack >= 3) && !startData(x))
+            return false;
+        if (!x->moving)
+            return true;
+    }
+    if (!x->moving)
+        return true;
+    return takePacket(x, type, payload);
 }
 
 bool FileLink::takePacket(Xfer *x, quint8 type, const QByteArray &payload)

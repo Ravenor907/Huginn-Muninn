@@ -49,7 +49,11 @@ int urlBytes(const QString &s)
 {
     if (!urlSafe(s) || s.size() % 4 == 1)
         return -1;
-    return int(QByteArray::fromBase64(s.toLatin1(), QByteArray::Base64UrlEncoding).size());
+    // Canonical only (spare bits zero), as Muninn and the reference check it: one id is never written two ways.
+    const QByteArray b = QByteArray::fromBase64(s.toLatin1(), QByteArray::Base64UrlEncoding);
+    if (b.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals) != s.toLatin1())
+        return -1;
+    return int(b.size());
 }
 
 bool goodText(const QString &s)
@@ -238,14 +242,42 @@ QJsonObject GroupWire::sign(const QByteArray &privateDer, const QString &domain,
     return out;
 }
 
+QByteArray GroupWire::strictB64(const QString &text, bool *ok)
+{
+    if (ok)
+        *ok = false;
+    qsizetype n = text.size();
+    qsizetype pad = 0;
+    while (n > 0 && text.at(n - 1) == QLatin1Char('=') && pad < 2) {
+        --n;
+        ++pad;
+    }
+    for (qsizetype i = 0; i < n; ++i) {
+        const char16_t c = text.at(i).unicode();
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/'))
+            return QByteArray();
+    }
+    // Without padding any length but one past a multiple of 4; with it, exactly to a multiple of 4.
+    if (n % 4 == 1 || (pad > 0 && (n + pad) % 4 != 0))
+        return QByteArray();
+    if (ok)
+        *ok = true;
+    return QByteArray::fromBase64(text.left(n).toLatin1());
+}
+
 bool GroupWire::verify(const QString &publicKeyB64, const QString &domain, const QJsonObject &obj)
 {
     const QJsonValue s = obj.value(QStringLiteral("sig"));
     if (!s.isString())
         return false;
-    const QByteArray sig = QByteArray::fromBase64(s.toString().toLatin1());
+    // Strict, as Muninn reads them: a signature or key written loosely (junk inside) counts on neither app.
+    bool sigOk = false, keyOk = false;
+    const QByteArray sig = strictB64(s.toString(), &sigOk);
+    const QByteArray keyDer = strictB64(publicKeyB64, &keyOk);
+    if (!sigOk || !keyOk)
+        return false;
     const QByteArray msg = signedBytes(domain, obj);
-    EVP_PKEY *key = readPublic(QByteArray::fromBase64(publicKeyB64.toLatin1()));
+    EVP_PKEY *key = readPublic(keyDer);
     if (msg.isEmpty() || sig.isEmpty() || !key) {
         EVP_PKEY_free(key);
         return false;
@@ -401,7 +433,8 @@ QString GroupWire::checkState(const QJsonObject &s)
         if (id != QLatin1String("main") && !isChannelId(id))
             return QStringLiteral("channel id");
         const QJsonValue n = c.value(QStringLiteral("n"));
-        if (!n.isString() || !goodText(n.toString()) || length(n.toString()) > kMaxChannelName || n.toString().isEmpty())
+        // An empty name is allowed, as Muninn and the reference allow it (refusing it left this app on an older state).
+        if (!n.isString() || !goodText(n.toString()) || length(n.toString()) > kMaxChannelName)
             return QStringLiteral("channel name");
     }
     bool cok = false;
@@ -762,6 +795,28 @@ bool GroupWire::selfTest(const QString &vectorsPath)
         check(checkState(s).isEmpty(), "well-formed " + name);
     }
     check(st.size() == 9, "nine states in the vectors");
+    // Signatures and keys are read strictly, as Muninn reads them: a space (or any junk) inside makes them fail.
+    {
+        QJsonObject s0;
+        for (auto it = st.cbegin(); it != st.cend(); ++it)
+            if (!it.key().startsWith(QLatin1String("tampered")))
+                s0 = it.value();
+        QJsonObject loose = s0;
+        QString sg = s0.value(QStringLiteral("sig")).toString();
+        sg.insert(4, QLatin1Char(' '));
+        loose.insert(QStringLiteral("sig"), sg);
+        QString by = s0.value(QStringLiteral("by")).toString();
+        by.insert(6, QLatin1Char('!'));
+        bool okA = false, okB = true, okC = true, okD = false;
+        strictB64(QStringLiteral("AAEC"), &okA);
+        strictB64(QStringLiteral("AA="), &okB);
+        strictB64(QStringLiteral("A B="), &okC);
+        strictB64(QStringLiteral("AAE"), &okD);
+        check(!s0.isEmpty() && verify(s0.value(QStringLiteral("by")).toString(), QLatin1String(kDomain), s0)
+                  && !verify(s0.value(QStringLiteral("by")).toString(), QLatin1String(kDomain), loose)
+                  && !verify(by, QLatin1String(kDomain), s0) && okA && !okB && !okC && okD,
+              "loosely written base64 in a signature or key is refused");
+    }
     const QJsonArray acc = group.value(QStringLiteral("accept")).toArray();
     for (int i = 0; i < int(acc.size()); ++i) {
         const QJsonObject a = acc.at(i).toObject();

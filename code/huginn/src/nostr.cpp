@@ -31,8 +31,10 @@
 
 namespace
 {
+std::atomic<qint64> g_clockRefusedAt{0};   // the last relay refusal blaming an event's time (ms)
 constexpr int kMaxSeen = 20000;
 constexpr int kMaxRejected = 5000;
+constexpr quint64 kMaxFrame = 512 * 1024;   // the largest relay message taken
 constexpr int kAuthKind = 22242;
 // A sending socket closes this long after the last thing given to it.
 constexpr int kSendMs = 180000;
@@ -190,6 +192,11 @@ QString Nostr::idOf(const QJsonObject &ev)
     return Schnorr::hex(QCryptographicHash::hash(s, QCryptographicHash::Sha256));
 }
 
+QByteArray Nostr::rejectKey(const QJsonObject &ev)
+{
+    return QCryptographicHash::hash(QJsonDocument(ev).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256);
+}
+
 QJsonObject Nostr::event(int kind, const QJsonArray &tags, const QString &content, const QByteArray &secret, qint64 createdAt, const QByteArray &aux)
 {
     if (createdAt < 0)
@@ -226,6 +233,8 @@ public:
         m_subId = QStringLiteral("huginn-") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
         m_ringSubId = QStringLiteral("huginn-r") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
         m_pageSubId = QStringLiteral("huginn-p") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
+        m_liveSubId = QStringLiteral("huginn-l") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
+        m_liveRingSubId = QStringLiteral("huginn-k") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
     }
     ~NostrWorker() override { abortAll(); }
 
@@ -265,6 +274,7 @@ public:
     {
         text.replace(QLatin1String("$SUB"), m_subId);
         text.replace(QLatin1String("$PAGE"), m_pageSubId);
+        text.replace(QLatin1String("$LIVE"), m_liveSubId);
         onMessage(url, nullptr, text);
     }
     void openUrl(const QString &url) { open(url); }
@@ -297,7 +307,6 @@ private:
     void subscribe(QWebSocket *ws);
     void signIn(const QString &url, QWebSocket *ws, const QString &challenge);
     void onMessage(const QString &url, QWebSocket *ws, const QString &text);
-    void handle(const QString &url, const QJsonObject &ev);
     void setLive(const QString &url, bool live);
     void send(const QString &url, const QStringList &msgs);
     void dropSender(const QString &url, QWebSocket *ws);
@@ -324,6 +333,11 @@ private:
     bool m_down = false;
     bool m_keepAlive = false;
     QString m_subId, m_ringSubId, m_pageSubId;
+    // Live requests (limit 0, no since): what is published from now on, whatever its created_at says, so a sender
+    // whose clock is slow by any amount still comes. Their EOSE starts them; anything before it is stored, not live.
+    QString m_liveSubId, m_liveRingSubId;
+    void handle(const QString &url, const QJsonObject &ev, bool live);
+    void closeCatchUp(const QString &url, QWebSocket *ws);
     QHash<QString, Link> m_links;      // exactly one socket per relay
     QSet<QString> m_live;              // relays whose socket is open
     QHash<QString, int> m_retries;
@@ -344,6 +358,7 @@ private:
     QHash<QString, qint64> m_cursorWait;   // EOSE came; the cursor moves once every event before it is answered
     QSet<QString> m_eosed;
     QSet<QString> m_ringEosed;         // relays whose ring mailbox request is live (its EOSE came): a ring there is live
+    QSet<QString> m_liveEosed, m_liveRingEosed;   // relays whose live requests (above) have started
     QHash<QString, qint64> m_newest;   // the newest created_at each relay handed over on the inbox (round 15: the cursor)
     bool m_refused = false;
     qint64 m_since = 0;                // "nostr/since" as it was at start, then the last event taken
@@ -443,6 +458,9 @@ void NostrWorker::open(const QString &url)
     if (m_down || m_links.contains(url))
         return;
     auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+    // A hostile relay can't make this computer hold a message of hundreds of MB (an event is at most about 66 KB).
+    ws->setMaxAllowedIncomingMessageSize(kMaxFrame);
+    ws->setMaxAllowedIncomingFrameSize(kMaxFrame);
     UltraPrivacy::prepare(ws);   // Ultra privacy: through Tor, the relay's name looked up by Tor
     Busy::nameSocket(ws, "nostr relay");
     Busy::count(QStringLiteral("relay connects: ") + hostOf(url));
@@ -452,6 +470,8 @@ void NostrWorker::open(const QString &url)
     m_askedAgain.remove(url);
     m_eosed.remove(url);
     m_ringEosed.remove(url);
+    m_liveEosed.remove(url);
+    m_liveRingEosed.remove(url);
     m_pages.remove(url);
     connect(ws, &QWebSocket::connected, this, [this, url, ws] {
         Busy::ThreadScope busy("relay thread: connections");
@@ -540,6 +560,8 @@ void NostrWorker::gone(const QString &url, QWebSocket *ws)
     drop(ws);
     m_eosed.remove(url);
     m_ringEosed.remove(url);
+    m_liveEosed.remove(url);
+    m_liveRingEosed.remove(url);
     m_pages.remove(url);
     m_cursorWait.remove(url);
     Busy::count(QStringLiteral("relay dropped: ") + hostOf(url));
@@ -664,8 +686,8 @@ void NostrWorker::signIn(const QString &url, QWebSocket *ws, const QString &chal
 
 qint64 NostrWorker::sinceFor(const QString &url) const
 {
-    // From 40 minutes before this relay last finished sending what it held (created_at is blurred up to kBlurS, and
-    // round 14: the sender's clock may be up to 30 minutes off too; whatever comes again is dropped as seen). A relay
+    // From 2 hours 10 minutes before this relay last finished sending what it held (created_at is blurred up to kBlurS,
+    // and the sender's clock may be up to 2 hours off too; whatever comes again is dropped as seen). A relay
     // with no cursor yet: from two days before the last event taken, as before. Never further back than the longest
     // message limit (nothing older is kept anywhere).
     const qint64 floor = qMax<qint64>(0, now() - (qint64(Nostr::kLongestDays) + 1) * 86400);
@@ -678,7 +700,7 @@ qint64 NostrWorker::sinceFor(const QString &url) const
 void NostrWorker::storedEvent(const QString &url, const QString &sub, qint64 createdAt)
 {
     // Round 15 (interop M4): the newest event time this relay handed over on the inbox (stored or live), for the cursor.
-    if ((sub == m_subId || sub == m_pageSubId) && createdAt > m_newest.value(url, 0))
+    if ((sub == m_subId || sub == m_pageSubId || sub == m_liveSubId) && createdAt > m_newest.value(url, 0))
         m_newest.insert(url, createdAt);
     // Only stored events count (before EOSE), on the inbox request or a page request still going.
     if (sub == m_subId ? m_eosed.contains(url) : (sub != m_pageSubId || m_pages.value(url).until == 0))
@@ -695,6 +717,13 @@ void NostrWorker::endOfStored(const QString &url, QWebSocket *ws, const QString 
     if (sub == m_ringSubId) {
         if (m_links.value(url).ws == ws)
             m_ringEosed.insert(url);
+        closeCatchUp(url, ws);
+        return;
+    }
+    if (sub == m_liveSubId || sub == m_liveRingSubId) {
+        if (m_links.value(url).ws == ws)
+            (sub == m_liveSubId ? m_liveEosed : m_liveRingEosed).insert(url);
+        closeCatchUp(url, ws);
         return;
     }
     if (sub != m_subId && sub != m_pageSubId)
@@ -705,12 +734,16 @@ void NostrWorker::endOfStored(const QString &url, QWebSocket *ws, const QString 
     // nothing about the inbox request: it must not move the cursor before the inbox's own EOSE.
     if (sub == m_pageSubId && m_pages.value(url).until == 0)
         return;
-    if (sub == m_subId)
+    if (sub == m_subId) {
         m_eosed.insert(url);   // from here on the inbox request is live on this relay
+        closeCatchUp(url, ws);
+    }
     Page &pg = m_pages[url];
-    const bool full = pg.count >= Nostr::kPageFull && pg.oldest > 0 && (pg.until == 0 || pg.oldest < pg.until);
+    // Paged until a page brings nothing older: a relay may cap a page below kPageFull (and none is asked for a
+    // limit), so a short page doesn't mean it had nothing more.
+    const bool full = pg.count > 0 && pg.oldest > 0 && (pg.until == 0 || pg.oldest < pg.until);
     if (full && ws) {
-        // A full page: there may be more before it. Asked for on a request of its own (the inbox request stays live).
+        // A page with something in it: there may be more before it. Asked for on a request of its own (the inbox request stays live).
         Busy::count("relay inbox pages asked for");
         pg.until = pg.oldest;
         pg.count = 0;
@@ -735,6 +768,19 @@ void NostrWorker::endOfStored(const QString &url, QWebSocket *ws, const QString 
         m_cursorWait.insert(url, qMin(now(), m_newest.value(url)));
         commitCursors();
     }
+}
+
+void NostrWorker::closeCatchUp(const QString &url, QWebSocket *ws)
+{
+    // A catch-up request has sent what the relay held and its live request has started: the live one carries on
+    // alone, so a live event comes once, not once per request. Without the live request's EOSE (a relay that doesn't
+    // take limit 0) the catch-up request stays live, as before.
+    if (!ws || m_links.value(url).ws != ws)
+        return;
+    if (m_eosed.contains(url) && m_liveEosed.contains(url))
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("CLOSE"), m_subId}));
+    if (m_ringEosed.contains(url) && m_liveRingEosed.contains(url))
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("CLOSE"), m_ringSubId}));
 }
 
 void NostrWorker::commitCursors()
@@ -765,6 +811,8 @@ void NostrWorker::subscribe(QWebSocket *ws)
     // Stored events are counted again from here (a full page asks for the ones before it).
     m_eosed.remove(url);
     m_ringEosed.remove(url);
+    m_liveEosed.remove(url);
+    m_liveRingEosed.remove(url);
     m_pages.remove(url);
     const QString pub = m_keys.pub;
     if (!pub.isEmpty()) {
@@ -772,6 +820,9 @@ void NostrWorker::subscribe(QWebSocket *ws)
                                  {QStringLiteral("#p"), QJsonArray{pub}},
                                  {QStringLiteral("since"), sinceFor(url)}};
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_subId, filter}));
+        const QJsonObject live{{QStringLiteral("kinds"), QJsonArray{Nostr::Kind}}, {QStringLiteral("#p"), QJsonArray{pub}},
+                               {QStringLiteral("limit"), 0}};
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_liveSubId, live}));
         Busy::count("relay inbox requests");
     }
     // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other).
@@ -781,6 +832,9 @@ void NostrWorker::subscribe(QWebSocket *ws)
                                  {QStringLiteral("#p"), QJsonArray::fromStringList(rings)},
                                  {QStringLiteral("since"), sinceFor(url)}};
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_ringSubId, filter}));
+        const QJsonObject live{{QStringLiteral("kinds"), QJsonArray{Nostr::Kind}}, {QStringLiteral("#p"), QJsonArray::fromStringList(rings)},
+                               {QStringLiteral("limit"), 0}};
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_liveRingSubId, live}));
     }
 }
 
@@ -791,10 +845,19 @@ void NostrWorker::onMessage(const QString &url, QWebSocket *ws, const QString &t
     Busy::ThreadScope busy("relay thread: messages");
     // The same event comes from every relay: a copy already handled (or refused, or left for later, or still with
     // Nostr) is skipped before the message is read in full.
+    // A live request's events before its EOSE are stored ones (a relay that reads limit 0 as "no limit"): the
+    // catch-up requests bring those, with their cursors.
+    if (text.startsWith(QLatin1String("[\"EVENT\""))) {
+        const QString qs = quickSub(text);
+        if ((qs == m_liveSubId && !m_liveEosed.contains(url)) || (qs == m_liveRingSubId && !m_liveRingEosed.contains(url)))
+            return;
+    }
     const QByteArray quick = quickId(text);
     if (!quick.isEmpty()) {
         Busy::count("relay EVENTs received");
-        if (m_seenSet.contains(quick) || m_rejectedSet.contains(quick) || m_later.contains(quick) || m_working.contains(quick)) {
+        // Never the refused ones: a refusal is keyed by the whole event, so a forged copy under a real id (a hostile
+        // relay) can't make the genuine copies from the other relays be skipped.
+        if (m_seenSet.contains(quick) || m_later.contains(quick) || m_working.contains(quick)) {
             Busy::count("relay EVENTs skipped as already handled");
             storedEvent(url, quickSub(text), quickCreatedAt(text));
             return;
@@ -810,8 +873,11 @@ void NostrWorker::onMessage(const QString &url, QWebSocket *ws, const QString &t
             Busy::count("relay EVENTs received");
         if (a.at(2).isObject()) {
             const QJsonObject ev = a.at(2).toObject();
-            storedEvent(url, a.at(1).toString(), ev.value(QStringLiteral("created_at")).toInteger());
-            handle(url, ev);
+            const QString sub = a.at(1).toString();
+            if ((sub == m_liveSubId && !m_liveEosed.contains(url)) || (sub == m_liveRingSubId && !m_liveRingEosed.contains(url)))
+                return;
+            storedEvent(url, sub, ev.value(QStringLiteral("created_at")).toInteger());
+            handle(url, ev, sub == m_liveSubId || sub == m_liveRingSubId);
         }
     } else if (type == QLatin1String("EOSE")) {
         endOfStored(url, ws, a.at(1).toString());
@@ -832,7 +898,8 @@ void NostrWorker::onMessage(const QString &url, QWebSocket *ws, const QString &t
         }
     } else if (type == QLatin1String("CLOSED")) {
         const QString sub = a.at(1).toString();
-        if ((sub != m_subId && sub != m_ringSubId) || !a.at(2).toString().startsWith(QLatin1String("auth-required")))
+        if ((sub != m_subId && sub != m_ringSubId && sub != m_liveSubId && sub != m_liveRingSubId)
+            || !a.at(2).toString().startsWith(QLatin1String("auth-required")))
             return;
         Busy::count("relay inbox requests closed until signed in");
         if (!m_signedIn.contains(url)) {
@@ -852,19 +919,22 @@ void NostrWorker::onMessage(const QString &url, QWebSocket *ws, const QString &t
     }
 }
 
-void NostrWorker::handle(const QString &url, const QJsonObject &ev)
+void NostrWorker::handle(const QString &url, const QJsonObject &ev, bool live)
 {
-    Q_UNUSED(url);
     const QString id = ev.value(QStringLiteral("id")).toString();
     const QByteArray raw = QByteArray::fromHex(id.toLatin1());
     // The same event comes from every relay at once: only one copy is handled at a time.
-    if (id.isEmpty() || raw.size() != 32 || m_seenSet.contains(raw) || m_rejectedSet.contains(raw) || m_later.contains(raw)
-        || m_working.contains(raw))
+    if (id.isEmpty() || raw.size() != 32 || m_seenSet.contains(raw) || m_later.contains(raw) || m_working.contains(raw))
         return;
-    const auto reject = [this, &raw] {
+    // Refusals are remembered by a hash of the whole event, never by the id it claims: only an id recomputed from
+    // the content and signed for counts (below), so a bad copy never stands in the way of a good one.
+    const QByteArray badKey = Nostr::rejectKey(ev);
+    if (m_rejectedSet.contains(badKey))
+        return;
+    const auto reject = [this, &badKey] {
         Busy::count("relay EVENTs refused (id or signature)");
-        m_rejected << raw;
-        m_rejectedSet.insert(raw);
+        m_rejected << badKey;
+        m_rejectedSet.insert(badKey);
         while (m_rejected.size() > kMaxRejected)
             m_rejectedSet.remove(m_rejected.takeFirst());
     };
@@ -894,11 +964,16 @@ void NostrWorker::handle(const QString &url, const QJsonObject &ev)
             in.id = raw;
             in.content = ev.value(QStringLiteral("content")).toString();
             in.ring = true;
-            in.live = m_ringEosed.contains(url);
+            in.live = live || m_ringEosed.contains(url);
             m_batch.events << in;
             deliverSoon();
             return;
         }
+    }
+    // Only trust what the event's own signature covers. Checked before anything is remembered under its id.
+    if (!valid()) {
+        reject();
+        return;
     }
     // While locked, say "New message" once per event, not once per relay.
     if (m_keys.secret.isEmpty()) {
@@ -907,11 +982,6 @@ void NostrWorker::handle(const QString &url, const QJsonObject &ev)
         if (m_announced.size() > 5000)
             m_announced.clear();
         m_announced.insert(id);
-    }
-    // Only trust what the event's own signature covers.
-    if (!valid()) {
-        reject();
-        return;
     }
     Nostr::Incoming in;
     in.id = raw;
@@ -966,6 +1036,9 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
     auto it = m_senders.find(url);
     if (it == m_senders.end() || !it->ws) {
         auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+        // A hostile relay can't make this computer hold a message of hundreds of MB (an event is at most about 66 KB).
+        ws->setMaxAllowedIncomingMessageSize(kMaxFrame);
+        ws->setMaxAllowedIncomingFrameSize(kMaxFrame);
         UltraPrivacy::prepare(ws);   // Ultra privacy: through Tor
         Busy::nameSocket(ws, "nostr send");
         Busy::count(QStringLiteral("relay sending sockets opened: ") + hostOf(url));
@@ -1191,6 +1264,10 @@ void NostrWorker::refusedAt(const QString &id, const QString &url, const QString
         takeOk(id, url);
         return;
     }
+    if (Nostr::clockRefusal(reason)) {
+        Busy::count("relay refusals for the event's time");
+        g_clockRefusedAt.store(QDateTime::currentMSecsSinceEpoch());
+    }
     if (!Nostr::refusedForGood(reason))
         return;   // rate-limited, or a reason that may pass: still owed
     bool done = false;
@@ -1202,6 +1279,15 @@ void NostrWorker::refusedAt(const QString &id, const QString &url, const QString
     if (done)
         m_outbox.removeIf([&id](const Out &o) { return o.id == id; });
 }
+
+bool Nostr::clockRefusal(const QString &reason)
+{
+    const QString r = reason.toLower();
+    return r.contains(QLatin1String("created_at")) || r.contains(QLatin1String("future")) || r.contains(QLatin1String("too old"))
+        || r.contains(QLatin1String("expired")) || r.contains(QLatin1String("timestamp"));
+}
+
+qint64 Nostr::clockRefusedAt() { return g_clockRefusedAt.load(); }
 
 bool Nostr::delayed(qint64 oldestWaitingMs, qint64 limitedAgoMs)
 {
@@ -1772,8 +1858,8 @@ bool Nostr::threadSelfTest()
               bodies == QList<QByteArray>{"one", "two"} && onGui && openedOn.load() && openedOn.load() != gui);
         check("a relay's cursor waits while an event is left for later", !n.m_eoseAt.contains(url));
         // Round 14: a sender 11 minutes slow, with the full blur, is still inside what is asked for (40 minutes back).
-        check("the since window covers the blur and 30 minutes of clock difference",
-              Nostr::kSinceSlackS == 2400 && 11 * 60 + Nostr::kBlurS - 1 <= Nostr::kSinceSlackS);
+        check("the since window covers the blur and 2 hours of clock difference",
+              Nostr::kSinceSlackS == 7800 && 2 * 3600 + Nostr::kBlurS - 1 <= Nostr::kSinceSlackS);
 
         // Asked again once unlocked: the cursor moves once everything before the EOSE is answered.
         n.resubscribe();
@@ -1796,6 +1882,26 @@ bool Nostr::threadSelfTest()
         waitFor([&] { return bodies.size() >= 203; }, 10000);
         const int batches = n.m_batches - before;
         check("a burst of 200 events is handed over in batches", bodies.size() == 203 && batches >= 1 && batches <= 20);
+        // A hostile relay sends a forged copy under a genuine event's id first: the genuine copies from the other
+        // relays still come (a refusal is never remembered by the id it claims), and the forgery again stays out.
+        {
+            const QJsonObject good = event(Kind, QJsonArray{QJsonValue(QJsonArray{QStringLiteral("p"), pub})},
+                                           QString::fromLatin1(QByteArray("genuine").toBase64()), Schnorr::newSecret());
+            QJsonObject bad = good;
+            bad.insert(QStringLiteral("content"), QString::fromLatin1(QByteArray("evil").toBase64()));
+            const QString badText = compact(QJsonArray{QStringLiteral("EVENT"), QStringLiteral("$SUB"), bad});
+            const QString goodText = compact(QJsonArray{QStringLiteral("EVENT"), QStringLiteral("$SUB"), good});
+            n.post([url, badText, goodText](NostrWorker *w) {
+                w->feed(QStringLiteral("wss://selftest-hostile.invalid"), badText);
+                w->feed(QStringLiteral("wss://selftest-hostile.invalid"), badText);
+                w->feed(url, goodText);
+                w->feed(url, goodText);
+            });
+            waitFor([&] { return bodies.size() >= 204; }, 3000);
+            waitFor([] { return false; }, 300);
+            check("a forged copy under a real id never blocks the genuine one", bodies.size() == 204 && bodies.last() == "genuine"
+                  && rejectKey(bad) != rejectKey(good) && rejectKey(bad).size() == 32);
+        }
         // Round 15 (interop M4): the cursor is never ahead of the newest event the relay handed over, so a fast clock
         // here can't skip what comes later; a relay that handed over nothing keeps no cursor.
         {

@@ -248,6 +248,10 @@ class ModTest {
             .put("sv", b.groups.group(g)!!.state.v).put("text", "from an old app").put("ts", clock))
         assertFalse("from an old app" in texts(b, g))
         assertFalse(b.groups.receivedBlob(c.key, "Bear", g, Proto06.MAIN, Proto06.newLogicalId(), "blob", 0))
+        // Files and long videos too (26.3): refused by every member, and C's own app doesn't send them.
+        assertTrue(b.groups.fileRefusal(g, c.key, 1000).isNotEmpty())
+        assertTrue(c.groups.fileRefusal(g, c.key, 1000).isNotEmpty())
+        assertFalse(b.groups.addBigVideo(g, c.key, "Bear", Proto06.newLogicalId(), 5000))
         // Shown in A's settings with the time left.
         assertEquals(listOf(c.key), a.groups.timeoutList(g).map { it.key })
         // It ends by itself: a millisecond before, still timed out; at the end, free to post.

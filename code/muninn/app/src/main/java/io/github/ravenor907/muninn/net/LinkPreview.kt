@@ -16,7 +16,22 @@ object LinkPreview {
     private const val PAGE_MAX = 512 * 1024
     private const val IMAGE_MAX = 4 * 1024 * 1024
     private const val THUMB_SIDE = 240
-    private const val THUMB_BYTES = 16 * 1024
+    /**
+     * 1.54: 10 KB at most (was 16 KB): with a long text and link a bigger one padded the relay envelope into the 64 KB
+     * bucket, which many relays refuse. [fit] drops it when even this would.
+     */
+    const val THUMB_BYTES = 10 * 1024
+
+    /**
+     * 1.54: [lp] as it may go with [text] (and the quoted id [re]): without its picture when the whole message would pad
+     * past [EnvelopePad.RELAY_MAX] (title, description and link still go).
+     */
+    fun fit(text: String, re: String, lp: More.Preview): More.Preview {
+        val thumb = lp.thumb ?: return lp
+        val size = text.toByteArray().size + re.length + lp.url.toByteArray().size + lp.title.toByteArray().size +
+            lp.description.toByteArray().size + (thumb.size + 2) / 3 * 4
+        return if (size > EnvelopePad.PAYLOAD_MAX) lp.copy(thumb = null) else lp
+    }
 
     // Only https, never into this phone's own network: names that point at a private or LAN address are refused,
     // and every hop (redirects too) is checked again on the address actually connected to.
@@ -153,7 +168,7 @@ object LinkPreview {
         var b = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
         val long = maxOf(b.width, b.height)
         if (long > THUMB_SIDE) { val f = THUMB_SIDE.toFloat() / long; b = Bitmap.createScaledBitmap(b, (b.width * f).toInt().coerceAtLeast(1), (b.height * f).toInt().coerceAtLeast(1), true) }
-        for (q in intArrayOf(70, 55, 40)) {
+        for (q in intArrayOf(70, 55, 40, 30)) {
             val out = ByteArrayOutputStream()
             b.compress(Bitmap.CompressFormat.JPEG, q, out)
             if (out.size() <= THUMB_BYTES) return out.toByteArray()

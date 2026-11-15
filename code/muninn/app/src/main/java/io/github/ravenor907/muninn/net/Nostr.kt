@@ -31,8 +31,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val client = Net.client.newBuilder().connectTimeout(10, TimeUnit.SECONDS).build()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
     private val live = ConcurrentHashMap<String, Boolean>()
-    private val seen = LinkedHashSet<String>()
-    private val working = HashSet<String>()
+    /** Ids of events checked and taken (never one an event only claims), as many as Huginn keeps. */
+    private val seen = SeenIds()
     private val outbox = mutableListOf<String>()        // events waiting for a relay
     /** A linked device's frames (section 15) waiting for a relay, with the relays each may go to: apart from [outbox], so they never push a real message out. */
     private val lowOutbox = mutableListOf<Pair<List<String>, String>>()
@@ -88,8 +88,23 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val stateFile = java.io.File(context.filesDir, "nostr-state.json")
     private val saving = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** Every envelope that arrives for this phone (content of the event). Return false to see it again later. */
-    var onEnvelope: ((String) -> Boolean)? = null
+    /** What [onEnvelope] did with an envelope. */
+    enum class Took {
+        /** Taken (or dropped for good): never looked at again. */
+        TAKEN,
+        /** Not now (a day key not here yet, or still locked): it stays on the relays, and this relay's cursor waits. */
+        LATER,
+        /** Too many from one sender at once (429): asked for again shortly, a few times at most. */
+        BUSY
+    }
+
+    /**
+     * Every envelope that arrives for this phone (content of the event), and whether a relay held it (catch-up, or kept
+     * while locked) rather than sending it live: then a sender's burst is expected and taken at a higher rate.
+     */
+    var onEnvelope: ((String, Boolean) -> Took)? = null
+    /** This device's clock looks wrong: a relay refused an event's time, or the relays' clocks disagree with it. */
+    var onClockOff: (() -> Unit)? = null
     /** Something arrived while Muninn is locked (kept to open after unlocking, or left on the relays when the store is full). */
     var onLocked: (() -> Unit)? = null
     /**
@@ -107,6 +122,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** Every event for the nudge mailbox (its content): never kept, never handed to [onEnvelope] or [onRing]. */
     var onNudge: ((String) -> Unit)? = null
     private val ringSubId = "muninn-r" + UUID.randomUUID().toString().take(8)
+    /** Live events only (limit 0, no "since"), and events asked for again by id ([refetch]). */
+    private val liveSubId = "muninn-l" + UUID.randomUUID().toString().take(8)
+    private val againSubId = "muninn-a" + UUID.randomUUID().toString().take(8)
     /** The inbox in pages (`until`), as Huginn asks: a relay that hands over a full answer is asked for the ones before it. */
     private val pageSubId = "muninn-p" + UUID.randomUUID().toString().take(8)
     private val paging = InboxPaging()
@@ -142,7 +160,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     @Volatile private var heldBroken = false
 
     private fun readHeld(): MutableList<String> =
-        when (val r = SafeFile.read(heldFile) { b -> JSONArray(String(b)).let { a -> MutableList(a.length()) { a.getString(it) } } }) {
+        when (val r = SafeFile.read(heldFile) { b -> SafeJson.arr(String(b)).let { a -> MutableList(a.length()) { a.getString(it) } } }) {
             is SafeFile.Read.Ok -> { heldBroken = false; r.value }
             is SafeFile.Read.Missing -> { heldBroken = false; mutableListOf() }
             is SafeFile.Read.Bad -> { heldBroken = true; android.util.Log.w("Muninn", "nostr-held.json can't be read; it isn't saved over"); mutableListOf() }
@@ -157,17 +175,27 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
      * Unlocked: everything kept while locked goes to [onEnvelope] now, oldest first. Only the ones it took (true)
      * are deleted; one it wants to see again later stays for the next unlock. Run off the main thread.
      */
-    fun openHeld() {
+    fun openHeld(round: Int = 0) {
         val list = synchronized(heldLock) { readHeld() }
         if (list.isEmpty()) { if (!heldBroken) SafeFile.delete(heldFile); return }
         val handled = HashSet<String>()
-        for (content in list) try { if (onEnvelope?.invoke(content) == true) handled.add(content) } catch (_: Exception) {}
+        var busy = false
+        for (content in list) try {
+            when (onEnvelope?.invoke(content, true)) {
+                Took.TAKEN -> handled.add(content)
+                Took.BUSY -> busy = true
+                else -> {}
+            }
+        } catch (_: Exception) {}
         synchronized(heldLock) {
             // Anything kept meanwhile (locked again already), or not taken yet, stays for the next unlock.
             val rest = readHeld().filter { it !in handled }
             if (heldBroken) return
             if (rest.isEmpty()) SafeFile.delete(heldFile) else writeHeld(rest)
         }
+        // Too many from one sender at once: the rest is opened a little later (never a loop: a few rounds at most).
+        if (busy && round < BUSY_ROUNDS && secretHex() != null)
+            timer.schedule(Runnable { try { openHeld(round + 1) } catch (_: Exception) {} }, BUSY_WAIT_S, TimeUnit.SECONDS)
     }
 
     /** Erase everything and Move: what was kept while locked goes, unopened. */
@@ -181,9 +209,41 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** This phone's Nostr secret (in the vault); null while Muninn is locked. */
     private val secret: ByteArray? get() = secretHex()?.let { Schnorr.unhex(it) }
-    /** The mailbox: readable even while locked, so the inbox can be checked. */
-    val publicKey: String get() = prefs.getString("nostrPub", null) ?: secret!!.let { Schnorr.hex(Schnorr.publicKey(it)) }.also {
-        prefs.edit().putString("nostrPub", it).apply()
+    /** The secret the mailbox below was worked out from, and that mailbox (so it's worked out once per secret). */
+    @Volatile private var pubFor: Pair<String, String>? = null
+    /**
+     * The mailbox: always worked out from the secret while unlocked, and the copy in the plain settings ("nostrPub",
+     * readable while locked, so the inbox can be checked) is put right when it doesn't match (a restore or a move that
+     * brought another identity). Read positions kept for another mailbox are dropped then: they don't belong to this one.
+     */
+    val publicKey: String get() {
+        val cached = prefs.getString("nostrPub", null)
+        val hex = try { secretHex() } catch (_: Exception) { null }
+            ?: return cached ?: throw IllegalStateException("Muninn is locked")
+        pubFor?.let { if (it.first == hex) return it.second }
+        val pub = Schnorr.hex(Schnorr.publicKey(Schnorr.unhex(hex)))
+        pubFor = hex to pub
+        if (cached != pub) {
+            prefs.edit().putString("nostrPub", pub).apply()
+            if (cached != null) { eoseAt.clear(); saveSoon() }
+        }
+        return pub
+    }
+
+    /** Set once a restore or a move replaced the identity: nothing of this mailbox's state is written again before the restart. */
+    @Volatile private var stateDropped = false
+
+    /**
+     * A restore or a move replaces the identity (Muninn restarts next): the read positions and the seen list belong to the
+     * mailbox that was here, so they go (the restored mailbox asks the relays for everything they still hold), and so do
+     * envelopes kept while locked for the old mailbox.
+     */
+    fun forgetState() {
+        stateDropped = true
+        eoseAt.clear()
+        seen.clear()
+        try { SafeFile.delete(stateFile) } catch (_: Exception) {}
+        forgetHeld()
     }
 
     init {
@@ -192,27 +252,32 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         UltraPrivacy.onReadyAgain { try { reconnectNow() } catch (_: Exception) {} }
         try {
             if (stateFile.exists()) {
-                val o = (SafeFile.read(stateFile) { b -> JSONObject(String(b)) } as? SafeFile.Read.Ok)?.value ?: JSONObject()
-                o.optJSONArray("seen")?.let { a -> for (i in 0 until a.length()) seen.add(a.getString(i)) }
-                o.optJSONObject("eose")?.let { e -> e.keys().forEach { eoseAt[it] = e.optLong(it) } }
+                val o = (SafeFile.read(stateFile) { b -> SafeJson.obj(String(b)) } as? SafeFile.Read.Ok)?.value ?: JSONObject()
+                o.optJSONArray("seen")?.let { a -> for (i in 0 until a.length()) seen.add(a.getString(i)) }   // full ids (before 1.54) or 16 characters
+                // The read positions are for one mailbox ("pub"): kept for another one (a restore came after), they're left out.
+                val box = o.optString("pub")
+                if (box.isEmpty() || box == prefs.getString("nostrPub", null))
+                    o.optJSONObject("eose")?.let { e -> e.keys().forEach { eoseAt[it] = e.optLong(it) } }
             } else {
                 // No state file: take the seen list from the settings ("nostrSeen") and clear it there.
                 prefs.getString("nostrSeen", "")!!.split(',').filter { it.isNotEmpty() }.forEach { seen.add(it) }
                 prefs.edit().remove("nostrSeen").remove("nostrSince").apply()
-                if (seen.isNotEmpty()) saveSoon()
+                if (seen.size() > 0) saveSoon()
             }
         } catch (_: Exception) {}
     }
 
     /** Writes the seen list and the cursors within [SAVE_EVERY_S] seconds (one write for many changes). */
     private fun saveSoon() {
-        if (!saving.compareAndSet(false, true)) return
+        if (stateDropped || !saving.compareAndSet(false, true)) return
         timer.schedule(Runnable {
             saving.set(false)
+            if (stateDropped) return@Runnable
             try {
                 val o = JSONObject()
-                synchronized(seen) { o.put("seen", JSONArray(seen.toList())) }
+                o.put("seen", JSONArray(seen.toList()))
                 o.put("eose", JSONObject(HashMap<String, Long>(eoseAt) as Map<*, *>))
+                prefs.getString("nostrPub", null)?.let { o.put("pub", it) }
                 SafeFile.write(stateFile, o.toString().toByteArray())
             } catch (_: Exception) {}
         }, SAVE_EVERY_S, TimeUnit.SECONDS)
@@ -288,8 +353,16 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         else burst.getOrPut(url) { java.util.Collections.synchronizedList(mutableListOf()) }.addAll(msgs)   // sent once it opens
         burstUntil[url] = android.os.SystemClock.elapsedRealtime() + BURST_SECONDS * 1000 - 500
         if (ws == null) open(url)
+        closeBurstLater(url, android.os.SystemClock.elapsedRealtime())
+    }
+
+    /** Closes a short socket once its time is up, but not while older pages are still coming (up to [BURST_MAX_S]). */
+    private fun closeBurstLater(url: String, started: Long) {
         timer.schedule(Runnable {
-            if (android.os.SystemClock.elapsedRealtime() < (burstUntil[url] ?: 0L)) return@Runnable   // used again meanwhile
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now < (burstUntil[url] ?: 0L)) return@Runnable   // used again meanwhile
+            // Catching up a long backlog: the cursor only moves once the last page came, so the socket stays for it.
+            if (paging.paging(url) && now - started < BURST_MAX_S * 1000) { closeBurstLater(url, started); return@Runnable }
             burst.remove(url); burstUntil.remove(url)
             if (keepAlive && url in targets()) return@Runnable   // one of the relays kept open anyway
             synchronized(sockets) { sockets.remove(url)?.let { ended(url, it); it.close(1000, null) }; live.remove(url); _connected.value = live.size }
@@ -470,7 +543,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** Asks every open relay for the inbox again: after unlocking, so what came while locked is read now. */
     fun resubscribe() {
         refused.clear()
-        synchronized(seen) { announced.clear() }
+        synchronized(announced) { announced.clear() }
         // A relay that asked for a sign-in while locked gets one now, as the mailbox the vault holds the key of.
         for ((url, ws) in sockets) if (live[url] == true) { challenges[url]?.let { signIn(url, ws, it) }; subscribe(url, ws) }
     }
@@ -493,8 +566,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** The inbox before [until] (a full answer came): same mailbox and since as the inbox request, on its own request. */
     private fun askPage(url: String, ws: WebSocket, until: Long) {
+        val me = publicKey   // first: a mailbox put right drops the old read positions
         val since = NetLogic.since(eoseAt[url] ?: 0L, System.currentTimeMillis() / 1000)
-        val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", since).put("until", until)
+        val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(me)).put("since", since).put("until", until)
         ws.send(JSONArray().put("REQ").put(pageSubId).put(filter).toString())
     }
 
@@ -525,20 +599,29 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private fun subscribe(url: String, ws: WebSocket) {
         // Stored events are counted again from here (a full answer asks for the ones before it).
         paging.reset(url)
+        // A new round: whatever was left untaken on this relay comes again on it (the cursor didn't move past it) and
+        // marks the relay again if it still isn't taken.
+        refused.remove(url)
         // Only what came since this relay last finished sending, less a margin for backdated events (see publish).
+        val me = publicKey   // first: a mailbox put right drops the old read positions
         val since = NetLogic.since(eoseAt[url] ?: 0L, System.currentTimeMillis() / 1000)
-        val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", since)
+        val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(me)).put("since", since)
         ws.send(JSONArray().put("REQ").put(subId).put(filter).toString())
         // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other). Cap n2: the
         // nudge mailbox on the same request.
+        var boxes = emptyList<String>()
         try {
-            val boxes = (ring?.mailboxes().orEmpty() + (try { nudgeKey?.mailboxes() } catch (_: Exception) { null }).orEmpty()).distinct()
+            boxes = (ring?.mailboxes().orEmpty() + (try { nudgeKey?.mailboxes() } catch (_: Exception) { null }).orEmpty()).distinct()
             if (boxes.isNotEmpty()) {
                 // A ring or nudge mailbox replaced after a block is still asked for, for 2 days.
                 val rf = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray(boxes)).put("since", since)
                 ws.send(JSONArray().put("REQ").put(ringSubId).put(rf).toString())
             }
         } catch (_: Exception) {}
+        // 1.54: what's sent from now on, whatever time it says (relays match live events against "since" too, so a sender
+        // whose clock is slow would never reach the requests above). limit 0: nothing stored, only live events.
+        val lf = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray(listOf(publicKey) + boxes)).put("limit", 0)
+        ws.send(JSONArray().put("REQ").put(liveSubId).put(lf).toString())
     }
 
     private inner class Listener(val url: String) : WebSocketListener() {
@@ -553,6 +636,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 io.github.ravenor907.muninn.tv.KidTv.heardTime(d.time, "relay:$url")
                 // Round 14: this relay's clock against ours, so its EOSE cursor is kept in its own time.
                 relayOffsetS[url] = d.time / 1000 - System.currentTimeMillis() / 1000
+                // 1.54: this device's clock is far from what the relays agree on: say so (sending is corrected meanwhile).
+                if (kotlin.math.abs(NetLogic.clockOffset(relayOffsetS.values)) >= NetLogic.CLOCK_WARN_S && relayOffsetS.size >= 2) clockOff()
             } } catch (_: Exception) {}
             connectMs[url] = now - (openedAt[url] ?: now)
             heardAt[url] = now
@@ -580,13 +665,18 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (sockets[url] === webSocket) heardAt[url] = android.os.SystemClock.elapsedRealtime()
-            val a = try { JSONArray(text) } catch (e: Exception) { return }
+            // A hostile relay can send anything: a frame far bigger than any event (about 64 KB) is dropped unread.
+            if (text.length > SafeJson.MAX_RELAY_FRAME) return
+            val a = try { SafeJson.arr(text) } catch (e: Exception) { return }
             when (a.optString(0)) {
                 "EOSE" -> {
                     val sub = a.optString(1)
                     // A page EOSE when no page was asked for (a late answer to one a new request replaced): ignored, so
                     // it never moves the cursor before the inbox request's own EOSE.
                     if (sub == pageSubId && !paging.asked(url, page = true)) return
+                    // The live request (nothing stored) and an ask by id never move the cursor.
+                    if (sub == liveSubId) return
+                    if (sub == againSubId) { webSocket.send(JSONArray().put("CLOSE").put(againSubId).toString()); return }
                     if (sub == PROBE) webSocket.send(JSONArray().put("CLOSE").put(PROBE).toString())
                     else if ((sub == subId || sub == pageSubId) && sockets[url] === webSocket) {
                         if (sub == subId) subscribed[url] = true
@@ -616,8 +706,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 }
                 "EVENT" -> a.optJSONObject(2)?.let { ev ->
                     val sub = a.optString(1)
-                    if ((sub == subId || sub == pageSubId) && sockets[url] === webSocket) paging.stored(url, sub == pageSubId, ev.optLong("created_at"))
-                    awake { handle(ev, url) }
+                    var held = sub == againSubId
+                    if ((sub == subId || sub == pageSubId) && sockets[url] === webSocket) {
+                        held = paging.backlog(url, sub == pageSubId)
+                        paging.stored(url, sub == pageSubId, ev.optLong("created_at"))
+                    }
+                    awake { handle(ev, url, held) }
                 }
                 // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
                 "AUTH" -> {
@@ -707,54 +801,98 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** Events left on the relays while locked (the store was full): handled once, not once per relay. */
     private val announced = HashSet<String>()
 
-    /** [url]: the relay it came from (marked [refused] when it isn't taken). */
-    private fun handle(ev: JSONObject, url: String) {
+    /** Events refused as too many at once (429), per id: how often, and the relays to ask again. */
+    private val busy = LinkedHashMap<String, Int>()
+    private val busyOn = ConcurrentHashMap<String, MutableSet<String>>()
+    private val refetchDue: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** A valid event: its id is the hash of what it says, and its signature is good. Nothing about it is trusted before. */
+    private fun valid(ev: JSONObject, id: String): Boolean =
+        try { idOf(ev) == id } catch (e: Exception) { false } &&
+            try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false }
+
+    /**
+     * [url]: the relay it came from (marked [refused] when it isn't taken). [held]: the relay held it (catch-up), as
+     * opposed to sending it live.
+     *
+     * 1.54: an event is checked first (id recomputed from what it says, and the signature); only a valid one is marked
+     * seen, just before it's handled (so one that crashes the app isn't tried again forever). An invalid copy from a
+     * hostile relay is dropped and marks nothing, so the good copy from another relay is still taken.
+     */
+    private fun handle(ev: JSONObject, url: String, held: Boolean = false) {
         val id = ev.optString("id")
-        // The same event comes from every relay at once: only one copy is handled at a time.
-        synchronized(seen) { if (id.isEmpty() || seen.contains(id) || !working.add(id)) return }
+        // Already taken: a copy from another relay. (Only valid ids are ever in the list, so a claimed one can't block it.)
+        if (!HEX64.matches(id) || seen.contains(id)) return
+        val locked = secretHex() == null
+        // Already said once that it's waiting on the relays (the store was full): not again for every relay.
+        if (locked && synchronized(announced) { id in announced }) { refused.add(url); return }
+        if (!valid(ev, id)) return
+        // The same event comes from every relay at once: the first valid copy claims it.
+        if (!seen.add(id)) return
+        saveSoon()
+        val p = pTag(ev)
         // Cap b1: an event for the ring mailbox is only ever a ring envelope. Tried with the ring key, then dropped.
         val r = ring
-        if (r != null && pTag(ev).let { p -> p != null && (try { p in r.mailboxes() } catch (e: Exception) { false }) }) {
-            try {
-                val own = try { idOf(ev) == id } catch (e: Exception) { false }
-                if (own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false })
-                    try { onRing?.invoke(ev.optString("content")) } catch (_: Exception) {}
-            } finally { synchronized(seen) { working.remove(id); seen.add(id); while (seen.size > 2000) seen.remove(seen.first()) } }
-            saveSoon()
+        if (r != null && p != null && (try { p in r.mailboxes() } catch (e: Exception) { false })) {
+            try { onRing?.invoke(ev.optString("content")) } catch (_: Exception) {}
             return
         }
         // Cap n2: an event for the nudge mailbox is only ever a nudge. Tried with the nudge key, then dropped.
         val n = nudgeKey
-        if (n != null && pTag(ev).let { p -> p != null && (try { p in n.mailboxes() } catch (e: Exception) { false }) }) {
-            try {
-                val own = try { idOf(ev) == id } catch (e: Exception) { false }
-                if (own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false })
-                    try { onNudge?.invoke(ev.optString("content")) } catch (_: Exception) {}
-            } finally { synchronized(seen) { working.remove(id); seen.add(id); while (seen.size > 2000) seen.remove(seen.first()) } }
-            saveSoon()
+        if (n != null && p != null && (try { p in n.mailboxes() } catch (e: Exception) { false })) {
+            try { onNudge?.invoke(ev.optString("content")) } catch (_: Exception) {}
             return
         }
-        val locked = secretHex() == null
-        // Already said once that it's waiting on the relays (the store was full): not again for every relay.
-        if (locked && synchronized(seen) { id in announced }) { refused.add(url); synchronized(seen) { working.remove(id) }; return }
-        try {
-            // Only trust what the event's own signature covers. A broken event (keys or signature that aren't hex) is
-            // dropped, never thrown up into the socket, and one whose id is its own is never looked at again.
-            val own = try { idOf(ev) == id } catch (e: Exception) { false }
-            val good = own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false }
-            if (!good) { if (own) synchronized(seen) { seen.add(id) }; return }
-            if (locked) {
-                // Kept sealed until unlocking, and counted as read here, so the relays don't send it again.
-                val kept = hold(ev.optString("content"))
-                try { onLocked?.invoke() } catch (_: Exception) {}
-                if (!kept) { synchronized(seen) { announced.add(id) }; refused.add(url); return }
-            } else if ((try { onEnvelope?.invoke(ev.optString("content")) } catch (e: Exception) { true }) != true) { refused.add(url); return }
-        } finally { synchronized(seen) { working.remove(id) } }
-        synchronized(seen) {
-            seen.add(id)
-            while (seen.size > 2000) seen.remove(seen.first())
+        if (locked) {
+            // Kept sealed until unlocking, and counted as read here, so the relays don't send it again.
+            val kept = hold(ev.optString("content"))
+            try { onLocked?.invoke() } catch (_: Exception) {}
+            if (!kept) { seen.remove(id); synchronized(announced) { announced.add(id) }; refused.add(url) }
+            return
         }
-        saveSoon()
+        when (try { onEnvelope?.invoke(ev.optString("content"), held) } catch (e: Exception) { Took.TAKEN }) {
+            Took.TAKEN, null -> synchronized(busy) { busy.remove(id) }.also { busyOn.remove(id) }
+            Took.LATER -> { seen.remove(id); refused.add(url) }
+            Took.BUSY -> {
+                // Too many from this sender at once: left unseen and asked for again shortly, as a held event (a higher
+                // rate). After [BUSY_TRIES] tries it's dropped, so a sender who never slows down can't loop us forever.
+                val tries = synchronized(busy) {
+                    val t = (busy[id] ?: 0) + 1
+                    busy[id] = t
+                    while (busy.size > BUSY_MAX) busy.remove(busy.keys.first())
+                    t
+                }
+                if (tries >= BUSY_TRIES) { synchronized(busy) { busy.remove(id) }; busyOn.remove(id); return }
+                seen.remove(id)
+                refused.add(url)
+                busyOn.getOrPut(id) { ConcurrentHashMap.newKeySet() }.add(url)
+                refetch(url)
+            }
+        }
+    }
+
+    /** Asks [url] again, a little later, for the events it handed over that were too many at once (by id, at most once per wait). */
+    private fun refetch(url: String) {
+        if (!refetchDue.add(url)) return
+        timer.schedule(Runnable {
+            refetchDue.remove(url)
+            val ids = busyOn.entries.filter { url in it.value }.map { it.key }.take(BUSY_IDS)
+            if (ids.isEmpty()) return@Runnable
+            busyOn.values.forEach { it.remove(url) }
+            busyOn.entries.removeIf { it.value.isEmpty() }
+            val ws = sockets[url] ?: return@Runnable
+            if (live[url] != true) return@Runnable
+            ws.send(JSONArray().put("REQ").put(againSubId).put(JSONObject().put("ids", JSONArray(ids))).toString())
+        }, BUSY_WAIT_S, TimeUnit.SECONDS)
+    }
+
+    /** The clock looks off: said at most once an hour. */
+    @Volatile private var clockSaidAt = 0L
+    private fun clockOff() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (clockSaidAt != 0L && now - clockSaidAt < 3_600_000L) return
+        clockSaidAt = now
+        try { onClockOff?.invoke() } catch (_: Exception) {}
     }
 
     /** The mailbox an event is for (its first "p" tag), or null. */
@@ -771,10 +909,11 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** A relay said it stored event [id]. */
     private fun storedAt(url: String, id: String) {
-        if (id.isEmpty()) return
+        // Only a real event id, compared whole: a relay's OK with "" or a few characters must never empty the queues.
+        if (!HEX64.matches(id)) return
         // The outbox keeps it while other relays still owe an OK (each gets it again, see [spreadOn]).
-        if (spread.stored(id, url)) { synchronized(outbox) { outbox.removeAll { it.contains(id) } }; spreadMsg.remove(id) }
-        synchronized(lowOutbox) { lowOutbox.removeAll { it.second.contains(id) } }
+        if (spread.stored(id, url)) { synchronized(outbox) { outbox.removeAll { idOfMsg(it) == id } }; spreadMsg.remove(id) }
+        synchronized(lowOutbox) { lowOutbox.removeAll { idOfMsg(it.second) == id } }
         stored[id]?.let { w ->
             // The first relay to store it: "sent". The second: it waits there safely (see NetLogic).
             val n = synchronized(w) { if (w.relays.add(url)) w.relays.size else 0 }
@@ -806,7 +945,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            val a = try { JSONArray(text) } catch (e: Exception) { return }
+            // A hostile relay can send anything: a frame far bigger than any event (about 64 KB) is dropped unread.
+            if (text.length > SafeJson.MAX_RELAY_FRAME) return
+            val a = try { SafeJson.arr(text) } catch (e: Exception) { return }
             // "AUTH" is never answered here: signing in would name my mailbox.
             if (a.optString(0) == "OK" && a.optBoolean(2)) storedAt(url, a.optString(1))
             // Cap v3 (29.4): a relay asking us to slow down pauses paced video pieces for a minute.
@@ -858,7 +999,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 maxRelays: Int = 0, low: Boolean = false, again: Boolean = true): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
-        val createdAt = System.currentTimeMillis() / 1000 - Random.nextLong(0, BLUR_S)
+        // 1.54: in the relays' time when this device's clock is off, so relays take it and receivers' requests find it.
+        val createdAt = System.currentTimeMillis() / 1000 + NetLogic.clockOffset(relayOffsetS.values) - Random.nextLong(0, BLUR_S)
         // NIP-40: relays may drop it once the longest message limit has passed (it's gone from both phones by then). Taken
         // from the blurred time and rounded up to a whole day, so it shows neither the sending time nor the chat's limit.
         if (days > 0) tags.put(JSONArray().put("expiration").put(expiration(createdAt).toString()))
@@ -927,7 +1069,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** [url] answered "OK false" for [id] with [reason] (see [RelaySpread.refused]). */
     private fun refusedAt(url: String, id: String, reason: String) {
-        if (id.isEmpty()) return
+        if (!HEX64.matches(id)) return
+        // 1.54: the relay refused the event's time: this device's clock is off. Said, not swallowed.
+        if (NetLogic.timeRefused(reason) && spread.tracked(id)) clockOff()
         // A duplicate is stored already: the same as its OK.
         if (reason.startsWith("duplicate")) { storedAt(url, id); return }
         if (spread.tracked(id) && spread.refused(id, url, reason)) {
@@ -937,7 +1081,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     }
 
     /** The id of an outbox entry (["EVENT", {...}]), or "" when it can't be read. */
-    private fun idOfMsg(msg: String): String = try { JSONArray(msg).getJSONObject(1).optString("id") } catch (_: Exception) { "" }
+    private fun idOfMsg(msg: String): String = try { SafeJson.arr(msg).getJSONObject(1).optString("id") } catch (_: Exception) { "" }
 
     /** Events sent in the last [RECENT_MS]: a relay that connects meanwhile gets them too, even once another said OK. */
     private val recent = ArrayDeque<Pair<Long, String>>()
@@ -967,6 +1111,16 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         const val HELD_MAX = 500
         const val HELD_BYTES = 4_000_000L
         private const val BURST_SECONDS = 20L
+        /** A short socket still catching up older pages stays open this long at most. */
+        private const val BURST_MAX_S = 120L
+        /** An event refused as too many at once: asked for again after this wait, at most this many times. */
+        private const val BUSY_WAIT_S = 15L
+        private const val BUSY_TRIES = 8
+        private const val BUSY_MAX = 2_000
+        private const val BUSY_IDS = 200
+        /** Rounds of opening what was kept while locked, when some were too many at once. */
+        private const val BUSY_ROUNDS = 8
+        private val HEX64 = Regex("^[0-9a-f]{64}$")
         /** How long a sending socket stays open after the last thing given to it. */
         private const val SEND_SECONDS = 20L
         /** How long a sent event is also given to relays that connect afterwards (the conversation window opening). */

@@ -199,6 +199,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         @Volatile var received = 0L
         @Volatile var done = false
         @Volatile var failed = false
+        /** An upload is being written now: a second one for the same file is refused. */
+        val busy = java.util.concurrent.atomic.AtomicBoolean(false)
         @Volatile var savedAs: Received.Target? = null
     }
     /** [kids]: an app a parent sent to this Kids' TV (TvApps). */
@@ -389,7 +391,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     /** The contacts' last addresses as Chat kept them (JSON from [keepPeers]). */
     fun loadPeers(json: String?) {
-        val o = try { JSONObject(json ?: return) } catch (_: Exception) { return }
+        val o = try { SafeJson.obj(json ?: return) } catch (_: Exception) { return }
         for (k in o.keys()) {
             val p = o.optJSONObject(k) ?: continue
             val ip = p.optString("ip")
@@ -464,7 +466,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 udp?.receive(p) ?: return
                 // Only devices on this very network (not routed in from somewhere farther away).
                 if (!isNeighbour(p.address)) continue
-                val o = JSONObject(String(p.data, 0, p.length))
+                val o = SafeJson.obj(String(p.data, 0, p.length))
                 val fp = o.optString("fingerprint")
                 if (mine(fp)) continue   // our own announcement
                 val ip = p.address.hostAddress ?: continue
@@ -481,7 +483,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                         try { udp?.send(DatagramPacket(reply, reply.size, InetAddress.getByName(GROUP), PORT)) } catch (_: Exception) {}
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (!running) return
             }
         }
@@ -507,7 +509,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
         val ok = c.responseCode == 200
         if (ok) {
-            val o = JSONObject(c.inputStream.bufferedReader().readText())
+            val o = SafeJson.obj(readAtMost(c.inputStream, MAX_ANSWER))
             if (!o.has("port")) o.put("port", port)
             // Over HTTPS the certificate is the device's identity, whatever the answer claims.
             val proven = (c as? HttpsURLConnection)?.let { h ->
@@ -585,23 +587,40 @@ class LocalSend(private val context: Context, val identity: Identity) {
     /** At most this many connections at once: anything past it is closed straight away (nobody can pile them up). */
     private val slots = java.util.concurrent.Semaphore(MAX_CONNECTIONS)
 
+    /** Connections open now per address: one device can't take every slot ([MAX_PER_ADDRESS]). */
+    private val perAddress = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+
     private fun acceptLoop() {
         while (running) {
             val s: Socket = (try { server?.accept() } catch (e: Exception) { null }) ?: if (running) continue else return
             // Only devices on this very network: not over mobile data, a VPN or anything routed in from farther away.
             if (!isNeighbour(s.inetAddress) || !slots.tryAcquire()) { try { s.close() } catch (_: Exception) {}; continue }
-            pool.execute { try { handle(s) } catch (_: Exception) {} finally { try { s.close() } catch (_: Exception) {}; slots.release() } }
+            val from = s.inetAddress?.hostAddress ?: ""
+            val mine = perAddress.computeIfAbsent(from) { java.util.concurrent.atomic.AtomicInteger() }
+            if (mine.incrementAndGet() > MAX_PER_ADDRESS) {
+                mine.decrementAndGet(); slots.release(); try { s.close() } catch (_: Exception) {}; continue
+            }
+            // Throwable: nothing a sender sends may take the whole app down with it.
+            pool.execute {
+                try { handle(s) } catch (_: Throwable) {} finally {
+                    try { s.close() } catch (_: Exception) {}
+                    if (mine.decrementAndGet() <= 0) perAddress.remove(from, mine)
+                    slots.release()
+                }
+            }
         }
     }
 
     private class Req(val method: String, val path: String, val query: Map<String, String>, val headers: Map<String, String>, val body: InputStream)
 
-    private fun readRequest(input: InputStream): Req? {
+    private fun readRequest(input: InputStream, deadline: Long): Req? {
         val head = StringBuilder()
         var last4 = 0
         while (true) {
             val b = input.read()
             if (b < 0) return null
+            // One byte now and then must not hold a connection for hours: the whole head comes within [HEAD_MS].
+            if (System.currentTimeMillis() > deadline) return null
             head.append(b.toChar())
             last4 = (last4 shl 8) or b
             if (last4 == 0x0d0a0d0a) break
@@ -629,6 +648,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
     }
 
     private fun handle(s: Socket) {
+        val started = System.currentTimeMillis()
         s.soTimeout = 15_000   // the request itself must come quickly; a transfer gets longer below
         // The certificate the sender showed, if any (LocalSend apps and Huginn and Muninn with a certificate do).
         val peerFp: String? = if (s is SSLSocket) {
@@ -641,6 +661,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
         // A sender that showed a certificate must claim that certificate's fingerprint, or it is
         // pretending to be another device: answer, but don't list it (LocalSend does the same).
         // One that showed none proves nothing: it's asked for its certificate instead (register), never just believed.
+        // Nearby off: only a contact whose chat key proved the certificate it showed here is answered.
+        val friendOf = { o: JSONObject? ->
+            peerFp != null && o != null && contactIn(o)?.let { k ->
+                Tls.same(o.optString("fingerprint"), peerFp) && Proof.routeOk(k, peerFp, o.optString("chatProof"))
+            } == true
+        }
         val learn = { o: JSONObject, ip: String ->
             when {
                 // Nearby off: nobody is asked back on their word alone.
@@ -654,12 +680,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
         val input = BufferedInputStream(s.getInputStream(), 1 shl 16)
         val out = s.getOutputStream()
-        val r = readRequest(input) ?: return
+        val r = readRequest(input, started + HEAD_MS) ?: return
         val ip = (s.inetAddress as? Inet4Address)?.hostAddress ?: s.inetAddress.hostAddress ?: ""
         val length = r.headers["content-length"]?.toLongOrNull() ?: 0L
         s.soTimeout = 60_000
 
         if (r.method == "POST" && r.path == "$API/upload") {
+            // Nearby off: no session is open for a stranger (prepare-upload refused them), so nothing here says a phone is.
+            if (off() && session.let { it == null || it.ip != ip }) { reply(out, 404); return }
             upload(r, length, ip, out)
             return
         }
@@ -667,10 +695,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
         // A linked device's photo and file pieces are bigger: Chat refuses anything that big in another room.
         val most = if (r.path == "/api/huginn/v1/message") MAX_LINK_BODY else MAX_BODY
         if (length < 0 || length > most) { reply(out, 413); return }
+        val bodyBy = System.currentTimeMillis() + BODY_MS
         val body = java.io.ByteArrayOutputStream(minOf(length, 64L * 1024).toInt()).also { b ->
             val buf = ByteArray(16 * 1024)
             var left = length
-            while (left > 0) { val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt()); if (n < 0) break; b.write(buf, 0, n); left -= n }
+            while (left > 0) {
+                val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt()); if (n < 0) break; b.write(buf, 0, n); left -= n
+                if (System.currentTimeMillis() > bodyBy) return   // a trickle never holds a slot for long
+            }
         }.toByteArray()
         val text = String(body)
 
@@ -678,21 +710,25 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
         when (r.path) {
             "$API/register", "/api/localsend/v1/register" -> {
-                val o = try { JSONObject(text) } catch (_: Exception) { null }
+                val o = try { SafeJson.obj(text) } catch (_: Exception) { null }
                 // Nearby off: answered only for a contact whose chat key proved the certificate it showed here.
-                val friend = off() && peerFp != null && o != null && contactIn(o)?.let { k ->
-                    Tls.same(o.optString("fingerprint"), peerFp) && Proof.routeOk(k, peerFp, o.optString("chatProof"))
-                } == true
+                val friend = off() && friendOf(o)
                 if (o != null && (!off() || friend)) learn(o, ip)
                 // Hidden: no answer that says anything about this phone.
                 if (silent() && !friend) reply(out, 404) else reply(out, 200, info().toString())
             }
             "$API/info", "/api/localsend/v1/info" -> if (silent()) reply(out, 404) else reply(out, 200, info().toString())
-            "$API/prepare-upload" -> prepare(text, ip, out, learn)
+            "$API/prepare-upload" -> {
+                // Nearby off: a stranger gets no "wants to send" box and no answer that says a phone is here; a contact
+                // who proved who they are still can (the same test as register).
+                if (off() && !friendOf(try { SafeJson.obj(text).optJSONObject("info") } catch (_: Exception) { null })) reply(out, 404)
+                else prepare(text, ip, out, learn)
+            }
             "$API/cancel" -> {
                 val sess = session
-                if (sess != null && r.query["sessionId"] == sess.id) endSession(false, "${sess.from} cancelled sending.")
-                reply(out, 200)
+                val mine = sess != null && r.query["sessionId"] == sess.id
+                if (mine) endSession(false, "${sess!!.from} cancelled sending.")
+                reply(out, if (off() && !mine) 404 else 200)
             }
             else -> reply(out, 404)
         }
@@ -714,16 +750,21 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     private fun prepare(text: String, ip: String, out: OutputStream, learn: (JSONObject, String) -> Unit) {
         if (session != null || pendingFiles != null) { reply(out, 409); return }
-        val o = try { JSONObject(text) } catch (e: Exception) { reply(out, 400); return }
+        val o = try { SafeJson.obj(text) } catch (e: Exception) { reply(out, 400); return }
         val from = o.optJSONObject("info") ?: JSONObject()
         learn(from, ip)
         val files = o.optJSONObject("files") ?: run { reply(out, 400); return }
         val map = LinkedHashMap<String, InFile>()
         var total = 0L
+        if (files.length() > MAX_FILES) { reply(out, 400); return }
         for (k in files.keys()) {
-            val f = files.getJSONObject(k)
-            val inf = InFile(f.optString("fileName", "file"), f.optLong("size"), f.optString("sha256").ifEmpty { null }.takeUnless { it == "null" })
-            total += inf.size
+            val f = files.optJSONObject(k) ?: run { reply(out, 400); return }
+            // A size below 0 or past any real file is refused: it would get past the space check below.
+            val size = f.optLong("size", -1)
+            if (size !in 0..MAX_FILE) { reply(out, 400); return }
+            val inf = InFile(Sharing.cleanName(f.optString("fileName", "file")).ifBlank { "file" }, size,
+                f.optString("sha256").ifEmpty { null }.takeUnless { it == "null" })
+            total += inf.size   // can't overflow: at most MAX_FILES of MAX_FILE each
             map[k] = inf
         }
         val alias = deviceName(from)
@@ -786,8 +827,16 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val f = sess.files[r.query["fileId"]]
         if (r.query["sessionId"] != sess.id) { reply(out, 409); return }
         if (f == null || f.token != r.query["token"] || ip != sess.ip) { reply(out, 403); return }
-        // Never more than the size it was accepted at: a sender can't fill the storage past what the person agreed to.
+        // Exactly the size it was accepted at: a sender can't fill the storage past what the person agreed to.
         if (length > f.size) { reply(out, 413); return }
+        if (length != f.size) { reply(out, 400); return }
+        // Once per file: a file already here (or coming in now) isn't written again.
+        if (f.done) { reply(out, 409); return }
+        if (!f.busy.compareAndSet(false, true)) { reply(out, 409); return }
+        try { uploadFile(r, length, sess, f, out) } finally { f.busy.set(false) }
+    }
+
+    private fun uploadFile(r: Req, length: Long, sess: Session, f: InFile, out: OutputStream) {
         // Saved into Downloads (MediaStore, where any Files app sees it), keeping folders the sender included
         // ("Photos/a.jpg"). Every file, an app too, on a phone or a TV: nothing received is opened or installed by itself.
         // Cap f2: in Download/Muninn/<the device's name>, like a chat's files (a Kids' TV keeps its own place for apps).
@@ -955,7 +1004,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 c.outputStream.use { it.write(JSONObject().put("info", info()).put("files", meta).toString().toByteArray()) }
                 when (val code = c.responseCode) {
                     200 -> {
-                        val o = JSONObject(c.inputStream.bufferedReader().readText())
+                        val o = SafeJson.obj(readAtMost(c.inputStream, MAX_BODY.toInt()))
                         val sid = o.getString("sessionId")
                         val tokens = o.getJSONObject("files")
                         val accepted = list.indices.filter { tokens.has("f$it") }
@@ -1102,6 +1151,30 @@ class LocalSend(private val context: Context, val identity: Identity) {
         const val MAX_LINK_BODY = 512 * 1024L
         const val MAX_BODY = 2 * 1024 * 1024L
         const val MAX_CONNECTIONS = 32
+        /** Connections at once from one address. */
+        const val MAX_PER_ADDRESS = 8
+        /** The request head (and a TLS handshake before it) must come within this. */
+        const val HEAD_MS = 20_000L
+        /** A request's body (not an upload) must come within this. */
+        const val BODY_MS = 60_000L
+        /** An answer from another device (its info, a move step). */
+        const val MAX_ANSWER = 1024 * 1024
+        /** Files in one offer, and the largest size one may say it has (1 TB). */
+        const val MAX_FILES = 10_000
+        const val MAX_FILE = 1L shl 40
+
+        /** At most [max] bytes of [input] as text; more than that is an error (a device can't fill memory). */
+        fun readAtMost(input: InputStream, max: Int): String {
+            val b = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(16 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                if (b.size() + n > max) throw java.io.IOException("answer too big")
+                b.write(buf, 0, n)
+            }
+            return String(b.toByteArray())
+        }
         const val PROMPTS = 3
 
         /** On this very home network: a private address inside the subnet of one of this phone's own private addresses (Huginn's Lan::isNeighbour). */
@@ -1133,7 +1206,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 c.setRequestProperty("Content-Type", "application/json")
                 c.outputStream.use { it.write(json.toByteArray()) }
                 val code = c.responseCode
-                val text = (if (code < 400) c.inputStream else c.errorStream)?.use { String(it.readBytes()) } ?: ""
+                val text = (if (code < 400) c.inputStream else c.errorStream)?.use { readAtMost(it, MAX_ANSWER) } ?: ""
                 c.disconnect()
                 return code to text
             } catch (e: Exception) {}

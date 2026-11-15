@@ -1056,6 +1056,13 @@ The TV accepts `new` if: well-formed, `new.tv` is its own key, `new.by` is one o
 the signature (domain `huginn-muninn tvconfig v1`) verifies, and either it has no config yet, `new.v > cur.v`,
 or `new.v == cur.v` with `hash(new) < hash(cur)` (two parents at once). Vectors: `tv.accept`.
 
+Version floor (1.54, no new field): a TV also keeps the highest `v` it ever took, through a disconnect and a new
+pairing. Outside pairing it takes a config only if `v` is above that floor (or equals its current `v` when that is
+the floor, for the same-version rule), so a config signed in an earlier pairing can never be taken again. Its
+`applied` with `cfg` says `v` = max(config's `v`, floor); a parent's app counts its next version on from there (apps
+from 1.54 send the config again at once when `applied` says more than the config's own `v`). A TV with no readable
+config answers a refused parent with `{"t":"applied","v":<floor>}`.
+
 Applying it: parent keys become `parents`; the TV's contacts become exactly `contacts` (people removed are
 dropped with their chats); the screen shows the quick messages in order; the dictate button shows only when
 `dictation` is true (speech to text on the TV, sent as a normal private message). The TV answers every parent
@@ -1686,7 +1693,7 @@ and sent when it ends ("Will send at 7:00 AM", with Don't send). Something for s
 
 | what | limit |
 |---|---|
-| envelope on any route | 64 KB (the Bluetooth limit; stays under Nostr relays' usual 64 to 128 KB after wrapping) |
+| envelope on any route | 64 KB (the Bluetooth limit). Over the relays the padded content must stay at 48 KB (the 49152 bucket), since the 65536 bucket makes an event of about 66 KB, over the 64 KiB many relays allow: link preview pictures are at most 10 KB, and Muninn leaves the picture out when the message with it would still be bigger (1.54) |
 | text in `private` / `gmsg` | 2000 characters |
 | photo piece | 16 KB |
 | animated GIF (25) | 8 MB (512 pieces, on every route), 400 frames, 2048 px a side, 160 M pixels of frames in all |
@@ -1705,7 +1712,8 @@ and sent when it ends ("Will send at 7:00 AM", with Don't send). Something for s
 | TV contacts | 50 |
 | TV config, canonical | 16 KB |
 | TV microphone level (`mic`) | 0 to 100 |
-| group code / invite token | 1 hour |
+| group code | 1 hour |
+| invite token (`invite` to a contact) | 7 days (1.54; 1 hour before) |
 | a reaction | 1 to 16 characters (or empty, to take it back) |
 | a 1:1 message id in `re`, `msg` | 1 to 64 of `A-Z a-z 0-9 - _` |
 | typing and active status clock difference | 60 s |
@@ -1982,13 +1990,17 @@ is v1. Receivers take both (23.1).
 - Pieces are 1100 bytes (the last one shorter). Both sides probe every candidate of the other until an authentic probe
   comes back (20 s at most); the address it came from is used. The sender keeps at most 96 pieces unconfirmed and sends a
   piece again 500 ms after it last went. The receiver acks at least every 40 ms or 16 new pieces, checks the SHA-256 at
-  the end, says done, and saves the file in Downloads. 30 s with nothing heard ends it (120 s between two `f3` apps,
-  27.7).
+  the end, saves the file in Downloads, and only then says done (1.54; before, done came before the check). While it
+  checks and saves it acks once a second. A sender with every piece confirmed waits for done (up to 30 minutes, while
+  those acks keep coming); silence without done means the file didn't take there, and the sender keeps its copy for
+  Retry. 30 s with nothing heard ends it (120 s between two `f3` apps, 27.7).
 
 ### 14.2 Small files over the relays
 
-1.42: no longer sent. A file never goes through the relays; between two `f4` apps it goes as section 30 says. An app
-still takes one that comes this way from an older app. As before: a file of at most 2 MB that can't go straight (no trust, or no direct path) goes as `photo` pieces with
+1.42: no longer sent. A file never goes through the relays; between two `f4` apps it goes as section 30 says. One that
+comes this way from an older app isn't taken: a card says why and a contact gets one short message saying why. 1.54
+(Muninn): it also answers one `delivered` for its id, once its first piece opened, so the older app stops sending it
+again for a day. As before: a file of at most 2 MB that can't go straight (no trust, or no direct path) goes as `photo` pieces with
 `"kind": "file"` and `"fn"` (its name, as above), never in an album. Only to `f1`. The receiver keeps it encrypted like
 a photo and also saves it to Downloads as soon as it is whole (Save when that couldn't be done). A received file is
 never opened or installed by itself.
@@ -2472,8 +2484,11 @@ that matters is sealed with K or checked with it). `mac(t)` is base64 HMAC-SHA25
 | `link` | old, after the move | `d`: a linked-device code (15) sealed with additional data `"move\|link"` | 200 when linked |
 
 `state` is `need` (parts missing; `h` is empty before the first part arrived), `confirm` (all here, its person hasn't
-tapped "They match"), `taking`, or `done`. Parts are 512 KB of the payload; the last is shorter. The old device only
-believes a status whose `m` checks out, so nobody else on the Wi-Fi can tell it to erase itself.
+tapped "They match"), `taking` (being taken in, or taken in and restarting: from then on it never answers `need` again,
+so nothing is taken in twice), `failed` (it couldn't take everything in, for example too little room, and nothing changed
+there), or `done`. Parts are 512 KB of the payload; the last is shorter. The old device only believes a status whose `m`
+checks out, so nobody else on the Wi-Fi can tell it to erase itself. On `failed` Muninn's old device stops moving and is
+yours again; a state an old device doesn't know (an older version) makes it wait, as for `taking`.
 
 ### 18.3 The steps
 
@@ -2587,6 +2602,26 @@ ahead (`NetLogic.cursor`); Huginn (Qt's web socket doesn't show the `Date`) keep
 the newest `created_at` that relay handed over on the inbox request (senders' times, blurred back), so a fast clock here
 never moves it past what is still to come; a relay that handed over nothing keeps its cursor as it was. Never further back than the
 longest message limit and a day, as before. Nothing on the wire changes.
+Huginn also asks each relay for live events on requests of their own with `"limit":0` and no `since` (inbox and ring
+mailbox), so a sender whose clock is slow by any amount still arrives while it is connected; what comes on them before
+their EOSE is ignored (a relay that reads `limit` 0 as no limit), and once they have started the catch-up requests are
+closed so a live event comes once. Its catch-up looks back 2 hours 10 minutes (the blur plus 2 hours) and pages back
+until a page brings nothing older, whatever size the relay caps a page at. A relay refusal that blames the event's time
+shows "check this computer's date and time" in the status line.
+
+**1.54 (Muninn): clocks that are off by more.** The look-back is **3 hours** past the cursor, not 40 minutes. Next to
+the inbox request, each connection asks for live events only (`limit` 0, no `since`) for the inbox, ring and nudge
+mailboxes, so a sender whose clock is hours slow still arrives while connected. Sent events are stamped in the relays'
+time (`created_at` = this device's clock plus the middle of the relays' `Date` offsets, when that is a minute or more),
+and the person is told when the clock looks wrong: a relay refused an event's time (`invalid:` about `created_at`), or
+the relays' clocks are 10 minutes or more away. Catch-up pages go on until a page brings nothing older than the last
+(whatever the relay's own page size), and a short check socket stays open (up to 2 minutes) while pages still come.
+
+**1.54 (Muninn): taking events.** An event is checked first (its id recomputed from what it says, and its signature);
+only a valid one is marked seen (just before it is handled), never one an event only claims, so a broken copy from one
+relay can't hide the good copy from the others. The 20000 newest ids are kept. One turned away as too many from one
+sender at once (429) stays unseen and is asked for again by id 15 seconds later (8 times at most); what relays held
+(catch-up, or kept while locked) is taken at 12 times the live per-sender rate.
 
 ## 21. Proven routes and bound envelopes (cap `s1`)
 
@@ -2873,8 +2908,9 @@ can open every saved relay event and read who sent it, their name and the room. 
 
 - Each device makes a new P-256 day key when its newest is a day old, keeps the private halves in the vault, and
   deletes each 40 days after it was made (7 days of use, 31 on a relay, a margin). A day key stamped more than a day
-  ahead of the clock (made while the clock ran fast) is deleted too and never counts as the newest, so a clock put
-  back makes one new day key, not one on every receipt.
+  ahead of the clock (made while the clock ran fast) never counts as the newest, so a clock put back makes one new day
+  key, not one on every receipt. 1.54: it is no longer deleted for being ahead (it is the key contacts wrap to, and
+  deleting it lost their messages); it goes 40 days after its own stamp, and at most 64 day keys are kept.
   Its id is the first 16 lowercase hex characters of SHA-256 of its SubjectPublicKeyInfo.
 - It announces the newest in every receipt (room `receipt`, also caps probes and their answers) to someone whose caps
   include `e1`: `"wk"` (the public key, base64 SPKI) and `"wt"` (when it was made, unix seconds, an integer). The

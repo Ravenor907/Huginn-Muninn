@@ -8,6 +8,9 @@ class QSoundEffect;
 
 namespace Platform
 {
+// A WAV file (PCM, 8, 16, 24 or 32 bits) with its samples scaled to volume (0 to 1); anything else comes back as it was.
+// Windows' PlaySound has no volume of its own, so Huginn's sounds are scaled in memory there (and checked by the self-test).
+QByteArray scaledWav(const QByteArray &wav, double volume);
 // The path of a bundled file (raven_message.wav, raven-gold.png) in the app's resources: the usual
 // :/qt/qml/Huginn/assets/<name>, or wherever the build put it. Empty if it isn't there.
 QString resource(const QString &name);
@@ -25,8 +28,13 @@ public:
     void play();
     void stop();   // stops this sound if it is still playing (not another Chime's)
     bool ready() const;   // the sound loaded (for the self-test)
+    // Settings › Notifications › Volume: every Huginn sound, 0 to 100 percent (100 until moved).
+    static void setVolume(int percent);
+    static int volume();
 
 private:
     QByteArray m_wav;                 // Windows: the file itself, kept while it may be playing; Linux: its header
+    QByteArray m_scaled;              // Windows: the copy at the volume in use (empty at 100%), kept while it may be playing
+    int m_scaledAt = 100;
     QSoundEffect *m_effect = nullptr; // Linux
 };

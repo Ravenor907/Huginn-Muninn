@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -45,7 +46,7 @@ object BetaTests {
 
     /** The file, read; null when it can't be. */
     fun parse(json: String): Tests? = try {
-        val o = JSONObject(json)
+        val o = SafeJson.obj(json)
         val gs = o.getJSONArray("groups")
         Tests(o.optString("beta"), o.optString("about"), (0 until gs.length()).map { i ->
             val g = gs.getJSONObject(i)

@@ -255,6 +255,8 @@ QVariantMap Chat::groupInfo(const QString &g) const
             {QStringLiteral("left"), it->left},
             {QStringLiteral("count"), int(members.size())},
             {QStringLiteral("type"), Limits::groupType(s)},   // "folk" or "family" (16.2)
+            // A Family group this computer said yes to (familyAsks): only then Family treatment here.
+            {QStringLiteral("familyOk"), familyTrusted(*it)},
             // Cap g3 (28.1): paragraphs travel as U+2029; the screens get line breaks.
             {QStringLiteral("about"), s.value(QStringLiteral("about")).toString().replace(QChar(0x2029), QLatin1Char('\n'))},
             {QStringLiteral("reports"), admins.contains(me) ? int(it->reports.size()) : 0},
@@ -335,6 +337,7 @@ QString Chat::createGroup(const QString &name, const QString &kind)
     gr.state = s;
     gr.history << s;
     gr.since = now();
+    gr.familyOk = true;   // made here: my own choice
     m_groups.insert(g, gr);
     if (!saveGroups()) {
         // Not kept: not shown either ("Couldn't save. Try again." on screen).
@@ -797,9 +800,11 @@ QString Chat::leaveGroup(const QString &g)
     Group &gr = m_groups[g];
     gr.left = true;
     gr.removed = false;
+    gr.familyOk = gr.familyNo = false;   // leaving undoes Family trust (familySync below)
     dropGroupRoute(g);
     groupNote(g, QStringLiteral("You left %1.").arg(groupName(g)));
     saveGroups();
+    familySync();
     Q_EMIT changed();
     return QString();
 }
@@ -816,6 +821,7 @@ void Chat::forgetGroup(const QString &g)
         m_gidx.remove(str(m, "id"));
     }
     m_groups.remove(g);
+    familySync();   // its Family trust goes with it
     dropGroupRoute(g);
     if (m_mod)
         m_mod->forgetGroup(g);
@@ -1053,10 +1059,19 @@ void Chat::groupAttempt(const QString &envId)
     // Cap a1: a GIF may use all its pieces over the internet (8 MB); other media 2 MB. Cap v3 (29): a video up to
     // GroupVideo::kRelayPieces, its pieces paced.
     const bool video = media && groupVideoMs(o.g, o.logical) > 0;
+    // Once a relay holds it, only again at 1 and 6 hours (relaysDue), not every few minutes for a day.
     if ((!media || !any || o.count >= 2)
         && (bodies.size() <= Photos::kInternetPieces || (media && groupGif(o.g, o.logical) && bodies.size() <= Photos::kGifPieces)
-            || (video && bodies.size() <= GroupVideo::kRelayPieces)))
-        sendInternet(o.to, bodies, mailboxOf(o.to), sent, groupDays(o.g), nullptr, video ? o.to + QLatin1Char('|') + envId : QString());
+            || (video && bodies.size() <= GroupVideo::kRelayPieces))
+        && relaysDue(o.heldAt, m_gout[envId].publishedAt, now())) {
+        const auto held = [this, envId, sent] {
+            const auto h = m_gout.find(envId);
+            if (h != m_gout.end() && h->heldAt == 0)
+                h->heldAt = now();
+            sent();
+        };
+        sendInternet(o.to, bodies, mailboxOf(o.to), held, groupDays(o.g), nullptr, video ? o.to + QLatin1Char('|') + envId : QString());
+    }
 }
 
 void Chat::groupRetry()
@@ -1247,8 +1262,9 @@ void Chat::takeGroupChange(const QString &g, const QString &from, const QJsonObj
             m.insert(QStringLiteral("edited"), ts);
         }
     });
+    // Shown, without a sound (a reaction isn't a new message).
     if (!note.isEmpty())
-        Q_EMIT arrived(QStringLiteral("%1 in %2").arg(memberName(g, from), groupName(g)), note, QStringLiteral("g:%1:%2").arg(g, ch));
+        arrive(QStringLiteral("%1 in %2").arg(memberName(g, from), groupName(g)), note, QStringLiteral("g:%1:%2").arg(g, ch), true);
 }
 
 bool Chat::sendGroupPhoto(const QString &g, const QString &ch, const QString &path, bool hd)
@@ -1261,12 +1277,14 @@ bool Chat::sendGroupPhoto(const QString &g, const QString &ch, const QString &pa
             return !sendGroupBlob(g, ch, gif, 0, QVariantMap{{QStringLiteral("gif"), true}}).isEmpty();
         Q_EMIT notice(Photos::gifWhy(why) + QStringLiteral(", so it goes as a still picture."));
     }
-    const QByteArray jpeg = Photos::prepare(path, hd);
-    if (jpeg.isEmpty()) {
-        Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
-        return false;
-    }
-    return !sendGroupBlob(g, ch, jpeg, 0).isEmpty();
+    // Decoded and shrunk on the picture thread (Chat::preparePictures), then sent.
+    preparePictures({path}, hd, [this, g, ch](const QList<QByteArray> &jpegs) {
+        if (jpegs.value(0).isEmpty())
+            Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
+        else
+            sendGroupBlob(g, ch, jpegs.at(0), 0);
+    });
+    return true;
 }
 
 QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra, const QStringList &only)
@@ -1322,6 +1340,8 @@ QList<QByteArray> Chat::groupPieces(const QString &g, const QString &ch, const Q
     const QList<QByteArray> parts = Photos::split(extra.value(QStringLiteral("gif")).toBool() && !gif ? Photos::stillOfGif(bytes) : bytes);
     const QString envId = GroupWire::envelopeId(gid, to);
     QList<QByteArray> out;
+    // The member's ratchet state is saved once, after the last piece and before any of them goes (not once per piece).
+    RatchetBatch batch(this);
     for (int i = 0; i < parts.size(); ++i) {
         QJsonObject o{{QStringLiteral("room"), QStringLiteral("gphoto")}, {QStringLiteral("fromKey"), myKey()}, {QStringLiteral("fromName"), username()},
                       {QStringLiteral("mailbox"), mailbox()}, {QStringLiteral("id"), envId}, {QStringLiteral("i"), i}, {QStringLiteral("n"), int(parts.size())},
@@ -1677,7 +1697,9 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     } else if (t == QLatin1String("invite")) {
         const QJsonObject st = p.value(QStringLiteral("state")).toObject();
         const bool already = have && GroupWire::isMember(git->state, me) && !git->removed && !git->left;
-        if (isContact(fromKey) && !already && GroupWire::accept(nullptr, st).ok && st.value(QStringLiteral("by")).toString() == fromKey
+        // Any admin may invite, as on Muninn (3.4, 3.5): the state they send is the current one, which another admin
+        // (the owner, say) may have signed.
+        if (isContact(fromKey) && !already && GroupWire::accept(nullptr, st).ok && GroupWire::isAdmin(st, fromKey)
             && st.value(QStringLiteral("g")).toString() == g) {
             const QString gname = st.value(QStringLiteral("name")).toString();
             const bool fresh = !m_ginvites.contains(g);
@@ -2061,10 +2083,20 @@ void Chat::stateAccepted(const QString &g, const QJsonObject &old, bool first)
     if (!Limits::linksAllowed(s))
         familyLinksOff(g);
     Group &gr = m_groups[g];
+    // Family trust here needs this computer's own yes (owner decision): my own change (making it, turning it Family)
+    // is that yes; anyone else's asks first ("Add <group> as Family?", familyAsks). Until then it's an ordinary group.
+    if (Limits::groupType(s) != QLatin1String(Limits::kFamily)) {
+        gr.familyOk = gr.familyNo = false;   // turned Folk: asked again if it turns Family again
+    } else if (!gr.familyOk && s.value(QStringLiteral("by")).toString() == me && (old.isEmpty() || Limits::groupType(old) != QLatin1String(Limits::kFamily))) {
+        gr.familyOk = true;
+    } else if (!gr.familyOk && !gr.familyNo && inIt && (first || Limits::groupType(old) != QLatin1String(Limits::kFamily))) {
+        Q_EMIT notice(QStringLiteral("%1 is a Family group. Open Chats to choose whether to add it as Family on this computer.").arg(name));
+    }
     if (inIt) {
         gr.removed = false;
         gr.left = false;
     } else if (before.contains(me) && !gr.left && !gr.removed && s.value(QStringLiteral("by")).toString() != me) {
+        gr.familyOk = gr.familyNo = false;
         gr.removed = true;
         groupNote(g, QStringLiteral("You were removed from %1.").arg(name));
         Q_EMIT notice(QStringLiteral("You were removed from %1.").arg(name));
@@ -2217,6 +2249,7 @@ bool Chat::saveGroups()
         gs.insert(it.key(), QJsonObject{{QStringLiteral("state"), it->state}, {QStringLiteral("history"), history}, {QStringLiteral("held"), held},
                                         {QStringLiteral("unread"), unread}, {QStringLiteral("lastOp"), it->lastOp}, {QStringLiteral("removed"), it->removed},
                                         {QStringLiteral("left"), it->left}, {QStringLiteral("since"), it->since},
+                                        {QStringLiteral("familyOk"), it->familyOk}, {QStringLiteral("familyNo"), it->familyNo},
                                         {QStringLiteral("reports"), QJsonArray::fromVariantList(it->reports)}, {QStringLiteral("reportsUnread"), it->reportsUnread}});
     }
     auto maps = [](const QHash<QString, QVariantMap> &h) {
@@ -2293,6 +2326,10 @@ void Chat::loadGroups()
         gr.removed = e.value(QStringLiteral("removed")).toBool();
         gr.left = e.value(QStringLiteral("left")).toBool();
         gr.since = e.value(QStringLiteral("since")).toInteger();
+        // Saved before Family needed this computer's own yes: a Family group already here keeps its trust.
+        gr.familyOk = e.contains(QStringLiteral("familyOk")) ? e.value(QStringLiteral("familyOk")).toBool()
+                                                             : Limits::groupType(gr.state) == QLatin1String(Limits::kFamily);
+        gr.familyNo = e.value(QStringLiteral("familyNo")).toBool();
         gr.reports = e.value(QStringLiteral("reports")).toArray().toVariantList();
         gr.reportsUnread = qBound(0, e.value(QStringLiteral("reportsUnread")).toInt(), int(gr.reports.size()));
         gr.messages = chats.value(it.key()).toArray().toVariantList();

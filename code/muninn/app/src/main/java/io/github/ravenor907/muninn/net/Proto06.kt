@@ -169,7 +169,7 @@ object Proto06 {
         fun canonSigned() = canon(tree(true))
         val hash: String get() = sha256Hex(canonSigned())
         fun signedText() = D_GROUP + "\n" + canonUnsigned()
-        fun json(): JSONObject = JSONObject(canonSigned())
+        fun json(): JSONObject = SafeJson.obj(canonSigned())
         fun member(k: String) = members.firstOrNull { it.k == k }
         fun has(k: String) = members.any { it.k == k }
         fun isAdmin(k: String) = k in admins
@@ -341,7 +341,7 @@ object Proto06 {
         if (at < 0) return null
         val body = text.substring(at + CODE_PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
         return try {
-            val o = JSONObject(String(b64urlD(body), Charsets.UTF_8))
+            val o = SafeJson.obj(String(b64urlD(body), Charsets.UTF_8))
             val c = Code(o.getString("g"), o.optString("gn").take(MAX_NAME), o.getString("a"), o.optString("an").take(MAX_NAME),
                 o.optString("p"), o.getString("i"), o.optLong("x"))
             ChatCrypto.publicFrom(c.a)

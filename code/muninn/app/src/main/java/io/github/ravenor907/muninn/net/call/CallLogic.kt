@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.net.call
 
+import io.github.ravenor907.muninn.net.SafeJson
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
@@ -86,7 +87,7 @@ object CallLogic {
      * offer/answer signature fails (5.2: refuse it). Voice room messages (call "-") come back with voiceRoom set.
      */
     fun parse(fromKey: String, text: String): Signal {
-        val o = try { JSONObject(text) } catch (e: Exception) { throw Bad("not JSON") }
+        val o = try { SafeJson.obj(text) } catch (e: Exception) { throw Bad("not JSON") }
         val t = o.opt("t") as? String ?: throw Bad("t")
         val call = o.opt("call") as? String ?: throw Bad("call")
         if (call == "-" || o.has("g")) return Signal(t, call, voiceRoom = true)
@@ -223,6 +224,12 @@ object CallLogic {
      * still ringing ([RING_MS] from its time). Older, it's a missed call.
      */
     fun lockedAnswerOk(tsMs: Long, nowMs: Long) = nowMs - tsMs <= RING_MS && tsMs <= nowMs + 120_000
+
+    /**
+     * 1.54: the same, timed by this device's own clock from when the locked ring came ([ringAtMs]), never by the
+     * caller's: the ring's time plus a minute to unlock (as Huginn and spec 23.2: 105 s).
+     */
+    fun lockedAnswerHere(ringAtMs: Long, nowMs: Long) = nowMs - ringAtMs in 0..(RING_MS + 60_000)
 
     // The jitter buffer (5.5) is Jitter.kt.
 
@@ -400,6 +407,45 @@ object CallLogic {
             if (ok) { errors = 0; return false }
             if (++errors < after || now - lastRestart < gapMs) return false
             errors = 0; lastRestart = now
+            return true
+        }
+    }
+
+    /**
+     * 1.54, a Kids' TV's microphone that hands over exact digital zeros (Android does that when another app, such as the
+     * assistant or voice search, holds the microphone). A TV microphone may also gate to zeros in a quiet room, so only
+     * a long run counts: [runMs] of nothing but zeros, then the microphone is opened again (the next source first). Each
+     * later run must be twice as long, and at most [max] reopens per call, so a quiet room never restarts it in a loop.
+     * [frame] gets each frame (true: all zeros); true when the microphone should be opened again now.
+     */
+    class ZeroRun(private val runMs: Long = 4_000L, private val max: Int = 4) {
+        private var since = -1L
+        private var reopens = 0
+        /** A run of zeros at least [runMs] long was seen (for the sound check), reopened or not. */
+        var seen = false; private set
+        fun frame(zero: Boolean, now: Long): Boolean {
+            if (!zero) { since = -1; return false }
+            if (since < 0) since = now
+            val need = runMs shl minOf(reopens, 4)
+            if (now - since < runMs) return false
+            seen = true
+            if (now - since < need || reopens >= max) return false
+            reopens++; since = -1
+            return true
+        }
+    }
+
+    /**
+     * 1.54: speaker writes that fail (a dead AudioTrack after an input switch, a soundbar change or HDMI-CEC). True when
+     * the speaker should be made again now: after [after] failed writes in a row, at most once every [gapMs].
+     */
+    class WriteErrors(private val after: Int = 10, private val gapMs: Long = 1_000L) {
+        private var errors = 0
+        private var last = Long.MIN_VALUE / 2
+        fun write(ok: Boolean, now: Long): Boolean {
+            if (ok) { errors = 0; return false }
+            if (++errors < after || now - last < gapMs) return false
+            errors = 0; last = now
             return true
         }
     }

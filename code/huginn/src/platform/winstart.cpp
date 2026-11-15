@@ -35,6 +35,7 @@ QProcessEnvironment childEnvironment() { return QProcessEnvironment::systemEnvir
 #include <QProcessEnvironment>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <QSslSocket>
 #include <QTimer>
 #include <rhi/qrhi.h>
 
@@ -67,6 +68,12 @@ bool s_shown = false;
 // update, a restore) start normally.
 bool s_softwareRetry = false;
 bool s_resetRestarted = false;
+// PATH and OPENSSL_CONF as Huginn was started with them (s_hadConf: OPENSSL_CONF was set at all): lib\ is put first on
+// PATH only until OpenSSL is loaded, and programs Huginn starts get the original.
+std::wstring s_path;
+bool s_hadPath = false;
+std::wstring s_conf;
+bool s_hadConf = false;
 
 QString exeDir()
 {
@@ -183,7 +190,10 @@ LONG WINAPI crashed(EXCEPTION_POINTERS *e)
             RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, c.Rip, fn, &c, &handlerData, &frame, nullptr);
         }
     }
-    return EXCEPTION_CONTINUE_SEARCH;
+    // Logged: the process ends here, with the exception's code. Handing it on (EXCEPTION_CONTINUE_SEARCH) would start
+    // Windows Error Reporting, which keeps a report and a memory dump (it may hold message text or keys) outside the
+    // data folder and may upload them.
+    return EXCEPTION_EXECUTE_HANDLER;
 }
 
 void closeLog(bool remove)
@@ -235,6 +245,8 @@ void beginStart()
     const QString dir = exeDir();
     s_next = qInstallMessageHandler(messages);
     SetUnhandledExceptionFilter(crashed);
+    // abort() (a failed check, qFatal) ends quietly after crashlog.cpp's note, never through Windows Error Reporting.
+    _set_abort_behavior(0, _CALL_REPORTFAULT);
     logLine(QStringLiteral("Huginn %1 starting in %2").arg(QStringLiteral(HUGINN_VERSION), QDir::toNativeSeparators(dir)));
 
     // Qt's own reading of the Windows version (the real one, whatever the manifest says).
@@ -248,8 +260,20 @@ void beginStart()
     const QString lib = dir + QStringLiteral("/lib");
     if (!dir.isEmpty() && QFileInfo::exists(lib + QStringLiteral("/lib.manifest"))) {
         const wchar_t *was = _wgetenv(L"PATH");
-        const std::wstring path = QDir::toNativeSeparators(lib).toStdWString() + L";" + (was ? std::wstring(was) : std::wstring());
+        s_hadPath = was != nullptr;
+        s_path = was ? std::wstring(was) : std::wstring();
+        const wchar_t *conf = _wgetenv(L"OPENSSL_CONF");
+        s_hadConf = conf != nullptr;
+        s_conf = conf ? std::wstring(conf) : std::wstring();
+        const std::wstring path = QDir::toNativeSeparators(lib).toStdWString() + L";" + s_path;
         _wputenv_s(L"PATH", path.c_str());
+        // OpenSSL reads a config file (which can load any DLL as a "provider") from the folder it was built for, which
+        // on a build machine can be a path any account may create (C:\vcpkg\...). Pinned to Huginn's own lib\ (there
+        // is no such file there, so none is read), and its modules and engines too.
+        const std::wstring libW = QDir::toNativeSeparators(lib).toStdWString();
+        _wputenv_s(L"OPENSSL_CONF", (libW + L"\\openssl.cnf").c_str());
+        _wputenv_s(L"OPENSSL_MODULES", (libW + L"\\ossl-modules").c_str());
+        _wputenv_s(L"OPENSSL_ENGINES", (libW + L"\\engines-3").c_str());
         // And OpenSSL's TLS library loaded now by its full path, so Qt finds it already there whatever PATH holds.
         const QString ssl = lib + QStringLiteral("/libssl-3-x64.dll");
         if (QFileInfo::exists(ssl) && !LoadLibraryW(QDir::toNativeSeparators(ssl).toStdWString().c_str()))
@@ -263,6 +287,21 @@ void startClaimed(bool tidy)
         QMutexLocker lock(&s_logLock);
         if (s_state == LogState::Waiting)
             openLog(L"w");
+    }
+    // Qt finds OpenSSL by searching PATH, so lib\ stays first on it until Qt has loaded it. Then PATH (and OPENSSL_CONF,
+    // read once at OpenSSL's start) are put back as Huginn was started with them: a program Huginn opens (a received
+    // PDF, File Explorer) must never find Huginn's Qt, OpenSSL or FFmpeg before its own. Kept as they were when OpenSSL
+    // didn't load, so a later try can still find it.
+    if (s_hadPath || !s_path.empty()) {
+        if (QSslSocket::supportsSsl()) {
+            _wputenv_s(L"PATH", s_path.c_str());   // an empty value takes it out of the environment
+            _wputenv_s(L"OPENSSL_CONF", s_hadConf ? s_conf.c_str() : L"");
+            logLine(QStringLiteral("OpenSSL loaded; PATH put back"));
+            s_hadPath = false;
+            s_path.clear();
+        } else {
+            logLine(QStringLiteral("OpenSSL didn't load; PATH left with lib first"));
+        }
     }
     if (!tidy)
         return;
@@ -402,6 +441,11 @@ void noStartLog()
 QProcessEnvironment childEnvironment()
 {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    // Never what only this copy set for itself (lib\ on PATH, the pinned OpenSSL places): a new Huginn sets its own.
+    env.remove(QStringLiteral("OPENSSL_MODULES"));
+    env.remove(QStringLiteral("OPENSSL_ENGINES"));
+    if (s_hadPath || !s_path.empty())
+        env.insert(QStringLiteral("PATH"), QString::fromStdWString(s_path));
     env.remove(QStringLiteral("HUGINN_GRAPHICS_RETRY"));
     env.remove(QStringLiteral("HUGINN_GRAPHICS_RESET"));
     // The software renderer was only for this copy (a graphics retry), not every copy after it.

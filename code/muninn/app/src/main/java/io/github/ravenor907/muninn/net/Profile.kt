@@ -206,7 +206,7 @@ object ProfileWire {
     fun ackMsg(v: Long): String = JSONObject().put("t", ACK).put("v", v).toString()
 
     /** "profile?" or "profile-ok" (the small ones in room "profile"), from the plaintext; false for anything else. */
-    fun isCtl(plain: String): Boolean = try { JSONObject(plain).opt("t").let { it == ASK || it == ACK } } catch (e: Exception) { false }
+    fun isCtl(plain: String): Boolean = try { SafeJson.obj(plain).opt("t").let { it == ASK || it == ACK } } catch (e: Exception) { false }
 
     /** Well-formed "profile?" (other fields ignored) or "profile-ok" with a usable "v". */
     fun ctlOk(p: JSONObject): Boolean = when (p.opt("t")) {
@@ -644,7 +644,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     private fun load() {
         // One that can't be used is never saved over (see Vault.loadFailed), and the rest still load.
         try {
-            vault.read(meFile)?.let { JSONObject(it) }?.let { o ->
+            vault.read(meFile)?.let { SafeJson.obj(it) }?.let { o ->
                 fromJson(o)?.let { me = it }
                 _myStatus.value = o.optString("st").takeIf { it in ProfileWire.MY_STATUSES } ?: "online"
                 _myCustomStatus.value = ProfileWire.cleanCustom(o.optString("cs"))
@@ -652,10 +652,10 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
             }
         } catch (e: Exception) { vault.loadFailed(meFile, e) }
         try {
-            vault.read(sentFile)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { sent[it] = o.optLong(it) } }
+            vault.read(sentFile)?.let { SafeJson.obj(it) }?.let { o -> o.keys().forEach { sent[it] = o.optLong(it) } }
         } catch (e: Exception) { vault.loadFailed(sentFile, e) }
         try {
-            vault.read(p2File)?.let { JSONObject(it) }?.let { o ->
+            vault.read(p2File)?.let { SafeJson.obj(it) }?.let { o ->
                 budget.day = o.optLong("day"); budget.n = o.optInt("n")
                 o.optJSONObject("try")?.let { t -> t.keys().forEach { k ->
                     t.optJSONArray(k)?.let { x -> tries[k] = Try(x.optLong(0), x.optInt(1), x.optLong(2), old = true) } } }
@@ -666,7 +666,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         try {
             dir.listFiles()?.forEach { f ->
                 if (f == meFile || f == sentFile || f == p2File || !f.name.endsWith(".json")) return@forEach
-                val o = try { vault.read(f)?.let { JSONObject(it) } } catch (e: Exception) { null } ?: return@forEach
+                val o = try { vault.read(f)?.let { SafeJson.obj(it) } } catch (e: Exception) { null } ?: return@forEach
                 val k = o.optString("k")
                 if (k.isNotEmpty()) fromJson(o)?.let { peers[k] = it }
             }

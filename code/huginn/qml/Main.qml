@@ -128,7 +128,7 @@ Window {
                                        { id: "tour-folk", name: "Folk", unread: 3 }]
     readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
     readonly property var railItems: [
-        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Linked.unread + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
+        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Linked.unread + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length + (Chat.familyAsks || []).length }
     // A group: its @mentions of me as a number, and a dot for anything else unread (like Discord).
     ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?",
                                    badge: g.mentions || 0, unread: g.unread || 0 })))
@@ -393,6 +393,13 @@ Window {
     onClosing: close => {
         if (app.quitting || app.touring || Updater.installing) return
         close.accepted = false
+        // Closed from the taskbar while minimized: the window comes up first when a question will be asked, so it is seen.
+        const busy = LocalSend.busy || FileLink.closeWarning !== "" || app.inVoice
+        const asks = Settings.closeAction !== "minimize" && !(Settings.closeAction === "quit" && !busy)
+        if (asks && (app.visibility === Window.Minimized || app.visibility === Window.Hidden)) {
+            app.visibility = app.fullNow ? Window.FullScreen : app.normalVisibility()
+            app.raise(); app.requestActivate()
+        }
         app.requestExit(true)
     }
 
@@ -645,7 +652,8 @@ Window {
     }
 
     // ------------------------------------------------------------- overlays
-    ListPicker { id: picker; z: 25 }
+    // Over first setup while it is open (its picture is chosen with Huginn's own list in game mode).
+    ListPicker { id: picker; z: setup.visible ? 28.35 : 25 }
     // The right-click menu (Ui.menuAt), over everything a right click can reach.
     RightClickMenu { id: ctxMenu }
     // Ctrl+K (desktop): jump to any chat or channel by typing part of its name.
@@ -1617,6 +1625,7 @@ Window {
         if (moveCover.visible) return moveCover
         if (linkPhone.visible) return linkPhone
         if (backupPanel.visible) return backupPanel
+        if (setup.visible && picker.visible) return picker   // a list opened from first setup (its picture)
         if (setup.visible) return setup
         if (picker.visible) return picker
         if (switcher.visible) return switcher

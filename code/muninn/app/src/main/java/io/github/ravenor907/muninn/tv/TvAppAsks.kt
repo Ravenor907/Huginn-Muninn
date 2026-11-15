@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.app.PendingIntent
 import android.content.Intent
 import androidx.core.app.NotificationCompat
@@ -35,7 +36,7 @@ object TvAppAsks {
         if (loaded) return
         loaded = true
         _items.value = try {
-            val a = JSONArray(app.vault.read(file(app)) ?: "[]")
+            val a = SafeJson.arr(app.vault.read(file(app)) ?: "[]")
             (0 until a.length()).mapNotNull { i ->
                 val o = a.optJSONObject(i) ?: return@mapNotNull null
                 val ao = o.optJSONObject("ask") ?: return@mapNotNull null
@@ -50,7 +51,7 @@ object TvAppAsks {
         try {
             app.vault.write(file(app), JSONArray().apply {
                 l.forEach { put(JSONObject().put("tv", it.tv).put("answered", it.answered).put("result", it.result).put("why", it.why)
-                    .put("ask", JSONObject(TvInstalls.askMessage(it.ask)).put("at", it.ask.at))) }
+                    .put("ask", SafeJson.obj(TvInstalls.askMessage(it.ask)).put("at", it.ask.at))) }
             }.toString())
         } catch (_: Exception) {}
     }

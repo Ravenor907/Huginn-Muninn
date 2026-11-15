@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.app.UiModeManager
 import android.content.Context
 import android.content.pm.PackageManager
@@ -151,7 +152,7 @@ object KidTv {
     private fun file(app: Muninn) = File(app.filesDir, FILE)
 
     fun load(app: Muninn) = synchronized(lock) {
-        val o = try { app.vault.read(file(app))?.let { JSONObject(it) } } catch (e: Exception) { null }
+        val o = try { app.vault.read(file(app))?.let { SafeJson.obj(it) } } catch (e: Exception) { null }
         if (o == null) { _state.value = KidState(); return@synchronized }
         val ps = o.optJSONArray("parents")
         val parents = if (ps == null) emptyList() else (0 until ps.length()).map { ps.getString(it) }
@@ -175,6 +176,9 @@ object KidTv {
         // k11: the trusted time kept from before Muninn restarted (while the device hasn't).
         loadAnchor(app)
         if (KidMode.on(app)) tune(_state.value)
+        // 1.54: a device that took its configs before the floor was kept starts it from the one it runs.
+        _state.value.cfg?.let { raiseFloor(app, it.v) }
+        try { pinZone(app, _state.value.cfg) } catch (_: Exception) {}
         setupAsk.value = parents.isNotEmpty() && prefs(app).getBoolean(SETUP_ASK, false)
     }
 
@@ -197,6 +201,29 @@ object KidTv {
      */
     val setupAsk = MutableStateFlow(false)
     private const val SETUP_ASK = "setupAsk"
+    /**
+     * 1.54: the highest config version this device ever took, kept through a disconnect and a new pairing (never in the
+     * erased file). A config at or under it is never taken again, so one signed in an earlier pairing (kept by a parent
+     * taken off since) can't come back; a parent's phone learns it from "applied" and counts on above it.
+     */
+    private const val CFG_FLOOR = "cfgFloor"
+    /**
+     * 1.54: quiet times follow the parent's time zone. When this device doesn't know that zone (old time-zone data, or
+     * none sent), they follow the device's zone as it was when that zone first came, kept here: changing the device's
+     * zone afterwards moves nothing. A new zone from a parent pins again.
+     */
+    private const val TZ_PIN = "tzPin"
+    private const val TZ_PIN_FOR = "tzPinFor"
+    @Volatile private var pinned: java.util.TimeZone? = null
+    private fun pinZone(app: Muninn, cfg: TvConfig?) {
+        if (cfg == null || cfg.quiet.isEmpty() && cfg.tz.isEmpty() || KidRules.zoneOf(cfg.tz) != null) { pinned = null; return }
+        val p = prefs(app)
+        val id = if (p.getString(TZ_PIN_FOR, null) == cfg.tz) p.getString(TZ_PIN, null) else null
+        pinned = id?.let { x -> java.util.TimeZone.getTimeZone(x).takeIf { it.id == x } }
+            ?: java.util.TimeZone.getDefault().also { p.edit().putString(TZ_PIN, it.id).putString(TZ_PIN_FOR, cfg.tz).apply() }
+    }
+    private fun floorOf(app: Muninn): Long = maxOf(prefs(app).getLong(CFG_FLOOR, 0L), _state.value.cfg?.v ?: 0L)
+    private fun raiseFloor(app: Muninn, v: Long) { if (v > prefs(app).getLong(CFG_FLOOR, 0L)) prefs(app).edit().putLong(CFG_FLOOR, v).apply() }
 
     /** The setup prompts came up: not asked again. */
     fun setupAsked(context: Context) {
@@ -261,7 +288,7 @@ object KidTv {
         }
         val code = app.chat.myCode(once = false)
         val body = code.removePrefix(Contacts.PREFIX)
-        val o = JSONObject(String(Base64.getUrlDecoder().decode(body), Charsets.UTF_8)).put("tv", 1)
+        val o = SafeJson.obj(String(Base64.getUrlDecoder().decode(body), Charsets.UTF_8)).put("tv", 1)
         return Contacts.PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(o.toString().toByteArray(Charsets.UTF_8))
     }
 
@@ -421,7 +448,7 @@ object KidTv {
         val c = _state.value.cfg ?: return null
         if (c.quiet.isEmpty()) return null
         settle()
-        return KidRules.quietOnDevice(c.quiet, c.tz, anchor, elapsed(), System.currentTimeMillis(), java.util.TimeZone.getDefault())
+        return KidRules.quietOnDevice(c.quiet, c.tz, anchor, elapsed(), System.currentTimeMillis(), pinned ?: java.util.TimeZone.getDefault())
     }
 
     // ---- k11 (7.18): the parent settings on the device, opened by the parent PIN or a parent's phone
@@ -619,7 +646,7 @@ object KidTv {
     /** Room "tvconfig" on the TV: config and disconnect. */
     fun handle(app: Muninn, fromKey: String, mailbox: String?, plain: String, inviteOk: Boolean): Boolean = synchronized(lock) {
         if (wiping.value) return false
-        val o = try { JSONObject(plain) } catch (e: Exception) { return false }
+        val o = try { SafeJson.obj(plain) } catch (e: Exception) { return false }
         val me = app.identity.publicKey
         val s = _state.value
         when (o.optString("t")) {
@@ -639,13 +666,17 @@ object KidTv {
                     if (!inviteOk || new.opt("by") != fromKey) return false
                     listOf(fromKey)
                 } else s.parents
-                val (ok, _) = TvRules.accept(me, parents, s.cfg?.raw, new)
+                val floor = floorOf(app)
+                val ok = TvRules.accept(me, parents, s.cfg?.raw, new).first &&
+                    (pairing || TvRules.overFloor(new.optLong("v", -1), s.cfg?.v, floor))
                 if (!ok) {
                     // Older or the same from a parent (it opened with their key): say where the TV is, so their app stops resending.
                     // The TV's own config goes along, so a parent whose phone is behind (another parent's change,
                     // or a restored backup) catches up instead of thinking theirs went through.
                     val cur = s.cfg
                     if (cur != null && fromKey in s.parents) { answer(app, listOf(fromKey), cur.v, cur.raw); return true }
+                    // 1.54: no readable config, and the parent's is under the floor: they hear the floor, and count on above it.
+                    if (cur == null && fromKey in s.parents && floor > 0) { answer(app, listOf(fromKey), floor); return true }
                     return false
                 }
                 // k11 (7.18): a config from an older parent app (no k11 field) keeps this device's chatting level,
@@ -672,6 +703,7 @@ object KidTv {
                 // Parents this config takes off: their phones stop looking after the TV (sent while they're still contacts).
                 if (!pairing) for (k in TvRules.dropped(s.parents, cfg.parents)) send(app, k, TvRules.removedMessage(cfg.raw))
                 apply(app, cfg, fromKey, mailbox)
+                raiseFloor(app, cfg.v)
                 // Just paired: the microphone and notifications are asked for now, while the parent is at the TV.
                 if (pairing) { prefs(app).edit().putBoolean(SETUP_ASK, true).apply(); setupAsk.value = true }
                 // k15 (7.18): the read-aloud voice a parent picked (a config without one leaves it as it was).
@@ -695,6 +727,7 @@ object KidTv {
                 save(app, next)
                 _state.value = next
                 tune(next)
+                try { pinZone(app, cfg) } catch (_: Exception) {}
                 // Someone taken off the list (or calls turned off) mid-call: the call ends.
                 io.github.ravenor907.muninn.net.call.CallManager.call.value?.let { c ->
                     if (!cfg.calls || !approved(c.peerKey)) io.github.ravenor907.muninn.net.call.CallManager.hangup()
@@ -900,7 +933,10 @@ object KidTv {
         val dev = try { KidMode.device(app) } catch (_: Exception) { null }
         // k12: which parent's translation it holds, so that parent's phone sends it again if it isn't the one in use.
         val havh = HavDevice.held()
-        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(v, version, cfg, dev, havh)) } catch (_: Exception) {} }
+        // 1.54: with its config, the version said is never under the floor (just paired again: the parent's next
+        // config goes above every one this device ever took).
+        val said = if (cfg != null) maxOf(v, try { floorOf(app) } catch (_: Exception) { v }) else v
+        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(said, version, cfg, dev, havh)) } catch (_: Exception) {} }
     }
 
     /**
@@ -917,6 +953,7 @@ object KidTv {
      * Disconnect: erase the chats, caches, contacts, config and parent keys, then back to the pairing screen.
      */
     private fun wipe(app: Muninn) = synchronized(lock) {
+        _state.value.cfg?.let { raiseFloor(app, it.v) }   // 1.54: the floor outlives the disconnect
         TvStorage.clear(app)   // every message and the caches (a downloaded update stays)
         app.identity.preRelease = false   // Updates was the parents' choice; a device on its own follows stable
         setupAsked(app)
@@ -928,7 +965,8 @@ object KidTv {
         KidHoldStore.clear(app)
         // Wrong PIN tries count only against the PIN they were typed for, never the next family's.
         prefs(app).edit().remove(HELD_ASKED).remove(PIN_FAILS).remove(PIN_AT).remove(PIN_BOOT)
-            .remove(ASK_N).remove(ASK_AT).remove(ASK_BOOT).remove(DROP_LATER).apply()
+            .remove(ASK_N).remove(ASK_AT).remove(ASK_BOOT).remove(DROP_LATER).remove(TZ_PIN).remove(TZ_PIN_FOR).apply()
+        pinned = null
         // Round 17: nothing of kids' mode stays running (read aloud); k15: the parent's voice pick goes too.
         KidSpeak.shutdown(app)
         // Everything else kids' mode changed (sizes, look, how long messages stay, drafts, waiting asks): put back.

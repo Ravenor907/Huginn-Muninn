@@ -94,7 +94,10 @@ bool previewOk(const QJsonValue &lv)
         if (!iv.isString())
             return false;
         const QByteArray i = iv.toString().toLatin1();
-        if (i.size() < 4 || i.size() > MoreWire::kThumbMax)
+        // Whole groups of four with correct padding, as Muninn and the reference read it.
+        bool strict = false;
+        GroupWire::strictB64(iv.toString(), &strict);
+        if (i.size() < 4 || i.size() > MoreWire::kThumbMax || i.size() % 4 != 0 || !strict)
             return false;
         const auto r = QByteArray::fromBase64Encoding(i, QByteArray::AbortOnBase64DecodingErrors);
         if (!r || r.decoded.size() < 3 || uchar(r.decoded[0]) != 0xFF || uchar(r.decoded[1]) != 0xD8 || uchar(r.decoded[2]) != 0xFF)
@@ -146,7 +149,7 @@ QHash<QByteArray, QPair<qsizetype, qsizetype>> boxes(const QByteArray &b, qsizet
         } else if (size == 0) {
             size = quint64(to - i);
         }
-        if (size < quint64(head) || quint64(i) + size > quint64(to))
+        if (size < quint64(head) || size > quint64(to - i))
             break;
         const QByteArray type = b.mid(i + 4, 4);
         if (!out.contains(type))
@@ -430,6 +433,12 @@ bool MoreWire::selfTest(const QString &vectorsPath)
     QByteArray mvhd = QByteArray::fromHex("0000006c6d76686400000000") + QByteArray(8, 0) + QByteArray::fromHex("000003e800002710") + QByteArray(80, 0);
     QByteArray moov = QByteArray::fromHex("00000074") + "moov" + mvhd;
     check(mp4Ms(mp4 + moov) == 10000 && mp4Ms(mp4) == 0, "mp4 length");
+    // A 64-bit box size that wraps around to the start of the file: refused, never read in a loop forever.
+    {
+        const QByteArray wrap = QByteArray::fromHex("00000001") + "free" + QByteArray::fromHex("ffffffffffffffe8");
+        const QByteArray wrap2 = QByteArray::fromHex("00000001") + "moov" + QByteArray::fromHex("ffffffffffffffd8") + mvhd;
+        check(mp4Ms(mp4 + wrap + moov) == 0 && mp4Ms(mp4 + wrap2) == 0, "mp4 box sizes that wrap around");
+    }
     check(pass > 60, "the vectors have cases");
     std::printf("m2 self-test: %d passed, %d failed\n", pass, fail);
     // Cap a1: animated GIFs, from the vectors next to these.

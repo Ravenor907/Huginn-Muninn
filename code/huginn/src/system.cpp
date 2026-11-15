@@ -38,6 +38,9 @@
 #include <QVariantMap>
 
 #ifdef Q_OS_WIN
+#include <QAbstractNativeEventFilter>
+#include <QPointer>
+#include <functional>
 #include <rhi/qrhi.h>
 #include <windows.h>
 #include <objbase.h>
@@ -61,7 +64,7 @@ namespace
 {
 // Known handhelds for Settings › Look › Handheld mode (Automatic). Checked in order and the first match wins, so
 // the more specific names come first. part: a case-insensitive piece of the product name, product family or board
-// name (Linux: /sys/class/dmi/id; Windows: the firmware's SMBIOS table, read only on a 6 to 9 inch screen). maker: a
+// name (Linux: /sys/class/dmi/id; Windows: never looked up, see firmwareNames). maker: a
 // piece of the system vendor that must match too (empty: any maker). An entry without a part matches on the maker alone.
 struct KnownHandheld
 {
@@ -93,75 +96,37 @@ const KnownHandheld kHandhelds[] = {
     {"OneXPlayer", "", "ONE-NETBOOK"},
 };
 
-#ifdef Q_OS_WIN
-// String number n (1-based) of the SMBIOS structure at s, whose formatted part is len bytes; empty when absent.
-QString smbiosString(const BYTE *s, BYTE len, BYTE n, const BYTE *end)
-{
-    if (n == 0)
-        return {};
-    const char *p = reinterpret_cast<const char *>(s + len);
-    const char *stop = reinterpret_cast<const char *>(end);
-    for (BYTE i = 1; p < stop && *p; ++i) {
-        const char *e = p;
-        while (e < stop && *e)
-            ++e;
-        if (i == n)
-            return QString::fromLatin1(p, int(qMin<qsizetype>(e - p, 256))).trimmed();
-        p = e + 1;
-    }
-    return {};
-}
-#endif
-
 // The firmware's product name, family, board name and maker. Linux: read from /sys even in the Flatpak (these four
-// are readable by anyone; the serial numbers next to them are not read). Windows: the same four from the SMBIOS
-// table Windows documents for this (GetSystemFirmwareTable), nothing else from it. Empty when they can't be read.
+// are readable by anyone; the serial numbers next to them are not read). Windows: never asked. Reading the firmware's
+// tables (or the registry's copy of them) is what sandbox-detecting malware does, and Windows Defender's heuristics
+// react to it; a 6 to 9 inch screen with a built-in controller already counts as a handheld (handheldRule).
+#ifndef Q_OS_WIN
 QStringList firmwareNames()
 {
-#ifdef Q_OS_WIN
-    QStringList out{QString(), QString(), QString(), QString()};
-    const DWORD sig = 'R' << 24 | 'S' << 16 | 'M' << 8 | 'B';
-    const UINT size = GetSystemFirmwareTable(sig, 0, nullptr, 0);
-    if (size < 8 || size > 1024 * 1024)
-        return out;
-    QByteArray buf(int(size), Qt::Uninitialized);
-    if (GetSystemFirmwareTable(sig, 0, buf.data(), size) != size)
-        return out;
-    // RawSMBIOSData: 4 bytes of version, a 32-bit length, then the structures.
-    const BYTE *raw = reinterpret_cast<const BYTE *>(buf.constData());
-    const DWORD length = *reinterpret_cast<const DWORD *>(raw + 4);
-    const BYTE *p = raw + 8;
-    const BYTE *end = raw + qMin<qsizetype>(qsizetype(size), 8 + qsizetype(length));
-    while (p + 4 <= end) {
-        const BYTE type = p[0], len = p[1];
-        if (len < 4 || p + len > end)
-            break;
-        if (type == 1 && len >= 8) {   // System: maker, product name, and (SMBIOS 2.4 and newer) family
-            out[3] = smbiosString(p, len, p[4], end);
-            out[0] = smbiosString(p, len, p[5], end);
-            if (len > 0x1A)
-                out[1] = smbiosString(p, len, p[0x1A], end);
-        } else if (type == 2 && len >= 6 && out[2].isEmpty()) {   // Baseboard: product
-            out[2] = smbiosString(p, len, p[5], end);
-        } else if (type == 127) {
-            break;
-        }
-        // The strings after the formatted part end with two zero bytes.
-        const BYTE *q = p + len;
-        while (q + 1 < end && (q[0] || q[1]))
-            ++q;
-        p = q + 2;
-    }
-    return out;
-#else
     QStringList out;
     for (const char *f : {"product_name", "product_family", "board_name", "sys_vendor"}) {
         QFile file(QStringLiteral("/sys/class/dmi/id/") + QLatin1String(f));
         out << (file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.read(256)).trimmed() : QString());
     }
     return out;
-#endif
 }
+#endif
+
+#ifdef Q_OS_WIN
+// Windows sends "TaskbarButtonCreated" when the window's taskbar button is made (at the first show, and again when
+// Explorer restarts). A badge set before that is lost, so it is set again then.
+struct BadgeAgain : QAbstractNativeEventFilter
+{
+    std::function<void()> again;
+    const UINT created = RegisterWindowMessageW(L"TaskbarButtonCreated");
+    bool nativeEventFilter(const QByteArray &type, void *message, qintptr *) override
+    {
+        if (created && again && type == "windows_generic_MSG" && static_cast<const MSG *>(message)->message == created)
+            QTimer::singleShot(0, qApp, again);   // after Windows has finished making it
+        return false;
+    }
+};
+#endif
 
 // Steam is there to show its keyboard: game mode, or Huginn was started from Steam.
 bool steamAround(bool gameMode)
@@ -374,15 +339,11 @@ void System::detectHandheld()
     const QScreen *s = QGuiApplication::primaryScreen();
     const double inches = s ? trustedInches(s->size(), s->physicalSize(), m_gameMode) : 0;
     m_smallScreen = inches >= 6.0 && inches <= 9.0;
-#ifdef Q_OS_WIN
-    // Windows: the firmware is only asked on a handheld-sized screen (a PC on a monitor never needs the model).
-    if (!m_smallScreen) {
-        updateHandheld();
-        return;
-    }
-#endif
+#ifndef Q_OS_WIN
+    // Windows: no model is looked up (firmwareNames); the screen, a controller and game mode decide.
     const QStringList fw = firmwareNames();
     m_model = handheldModelFor(fw.value(0), fw.value(1), fw.value(2), fw.value(3));
+#endif
     updateHandheld();
 }
 
@@ -536,6 +497,12 @@ bool System::handheldSelfTest()
             std::printf("a 7 inch screen read as %.1f inches\n", hand);
             ok = false;
         }
+        // A TV that gives only its shape (16 by 9 cm) has no known size.
+        if (trustedInches(QSize(3840, 2160), QSizeF(160, 90), false) != 0 || trustedInches(QSize(1920, 1080), QSizeF(1600, 900), false) != 0
+            || trustedInches(QSize(1920, 1200), QSizeF(160, 100), false) != 0) {
+            std::printf("a TV giving only its shape (16 by 9 cm) read as a real size\n");
+            ok = false;
+        }
     }
     std::printf("handheld detection: known models, two of three, laptop with a pad: %s\n", ok ? "ok" : "FAILED");
     return ok;
@@ -553,6 +520,13 @@ double System::trustedInches(const QSize &px, const QSizeF &mm, bool gameMode)
 {
     if (px.width() <= 0 || px.height() <= 0 || mm.width() <= 0 || mm.height() <= 0)
         return 0;
+    // Some TVs and monitors put only their shape in the size fields (16 by 9 or 16 by 10 cm, or the same in mm times
+    // ten): never a real size, and read as one a TV would count as a 7 inch handheld.
+    {
+        const int w = qRound(qMax(mm.width(), mm.height())), h = qRound(qMin(mm.width(), mm.height()));
+        if ((w == 160 || w == 1600) && (h == w * 9 / 16 || h == w * 10 / 16))
+            return 0;
+    }
     // From its physical size when that can be believed: the same shape as the picture (either way round: a
     // handheld's panel is often mounted turned) and a size a screen can be.
     const double pxDiag = std::hypot(double(px.width()), double(px.height()));
@@ -742,6 +716,21 @@ void System::setUnreadState(QQuickWindow *window, int unread, bool muted)
     // The taskbar button's badge: Windows 11 shows no window titles there, so "(3) Huginn" alone isn't seen.
     if (!window)
         return;
+    static QPointer<QQuickWindow> lastWindow;
+    static int lastUnread = 0;
+    static bool lastMuted = false;
+    lastWindow = window;
+    lastUnread = unread;
+    lastMuted = muted;
+    static BadgeAgain *watch = nullptr;
+    if (!watch) {
+        watch = new BadgeAgain;   // for the life of Huginn
+        watch->again = [this] {
+            if (lastWindow)
+                setUnreadState(lastWindow, lastUnread, lastMuted);
+        };
+        qApp->installNativeEventFilter(watch);
+    }
     static ITaskbarList3 *bar = nullptr;
     static bool tried = false;
     if (!bar && !tried) {
@@ -908,15 +897,17 @@ void System::setSteamRunning(bool on)
 }
 
 // Steam's client running beside Huginn (Handheld mode on the desktop): its keyboard can come up there too. Looked for
-// at start and every 10 seconds while the controller or touch is in use, without waiting: in the Flatpak on the host
-// (the sandbox sees only its own processes), elsewhere in /proc. keyboardChanged says when the answer changes.
+// at start and while the controller or touch is in use, without waiting: in the Flatpak on the host, only as they come
+// into use (the sandbox sees only its own processes); elsewhere in /proc. keyboardChanged says when the answer changes.
 void System::checkSteam()
 {
 #ifdef Q_OS_LINUX
     if (!gameLike() || m_steamChecking || !m_tourDir.isEmpty())
         return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (m_steamCheckedAt != 0 && now - m_steamCheckedAt < 9000)
+    // In the Flatpak the look is a host command: only when the controller or touch comes into use, and at most every
+    // 5 minutes (never polled). Outside it, /proc is read every 10 seconds while they are in use.
+    if (m_steamCheckedAt != 0 && now - m_steamCheckedAt < (inFlatpak() ? 300000 : 9000))
         return;
     m_steamCheckedAt = now;
     if (!inFlatpak()) {
@@ -965,7 +956,8 @@ void System::setControllerInUse(bool on)
 #ifdef Q_OS_LINUX
     if (padOrTouch()) {
         checkSteam();
-        m_steamPoll.start();
+        if (!inFlatpak())
+            m_steamPoll.start();
     } else {
         m_steamPoll.stop();
     }
@@ -984,7 +976,8 @@ void System::setTouchInUse(bool on)
 #ifdef Q_OS_LINUX
     if (padOrTouch()) {
         checkSteam();
-        m_steamPoll.start();
+        if (!inFlatpak())
+            m_steamPoll.start();
     } else {
         m_steamPoll.stop();
     }

@@ -87,13 +87,13 @@ Rectangle {
     // Look › Amount and Size: where the slider sits (0 to 100) and what a position sets.
     // Gradient: 0 (flat) to 200%, the slider's 0 to 100.
     // Calls › Input sensitivity: -60 to -20 dBFS on the slider's 0 to 100.
-    function fallPos(key) { return key === "gateThreshold" ? (Rooms.gateThreshold + 60) * 2.5 : key === "seasonGradient" ? Settings.seasonGradient / 2 : key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
+    function fallPos(key) { return key === "soundVolume" ? Sounds.volume : key === "gateThreshold" ? (Rooms.gateThreshold + 60) * 2.5 : key === "seasonGradient" ? Settings.seasonGradient / 2 : key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
     // What a slider position (0 to 100, any fraction: no notches) sets, and what is set now.
     function fallValue(key, v) {
-        return key === "gateThreshold" ? Math.round(v / 2.5) - 60 : key === "seasonGradient" ? Math.round(v * 2)
+        return key === "soundVolume" ? Math.round(v) : key === "gateThreshold" ? Math.round(v / 2.5) - 60 : key === "seasonGradient" ? Math.round(v * 2)
              : key === "fallCount" ? Theme.fallCountAt(v) : Theme.fallSizeAt(v)
     }
-    function fallNow(key) { return key === "gateThreshold" ? Rooms.gateThreshold : key === "seasonGradient" ? Settings.seasonGradient : key === "fallCount" ? fallShown : Settings.fallSize }
+    function fallNow(key) { return key === "soundVolume" ? Sounds.volume : key === "gateThreshold" ? Rooms.gateThreshold : key === "seasonGradient" ? Settings.seasonGradient : key === "fallCount" ? fallShown : Settings.fallSize }
     // Where each slider was left: its knob stays there (no snapping to the saved whole number) while that number holds.
     property var heldPos: ({})
     function sliderPos(key) {
@@ -109,11 +109,19 @@ Rectangle {
         heldPos = h
         const n = fallValue(key, p)
         if (key === "gateThreshold") { if (n !== fallNow(key)) Rooms.gateThreshold = n; return }
+        // Notifications › Volume: saved as it moves; heard once it's let go, or a moment after the last step.
+        if (key === "soundVolume") {
+            if (n !== fallNow(key)) Sounds.volume = n
+            if (how === "done") { volumeHear.stop(); Sounds.test() }
+            else if (how !== "drag") volumeHear.restart()
+            return
+        }
         if (n !== fallNow(key)) Settings.previewLook(key, n)
         if (how === "done") { lookSave.stop(); Settings.commitLook() }
         else if (how !== "drag") lookSave.restart()
     }
     Timer { id: lookSave; interval: 400; onTriggered: Settings.commitLook() }
+    Timer { id: volumeHear; interval: 400; onTriggered: Sounds.test() }
     // Keys, the D-pad and the controller: 1% a press, about 5% a repeat once held for half a second. A step that
     // gives the same number (near the ends of Amount and Size) goes on to the next one that differs. A puts it back:
     // Amount and Size go back to their defaults (121, 57%), Gradient to 80%.
@@ -128,6 +136,8 @@ Rectangle {
     }
     function stepFall(key, dir, step) {
         // A on Input sensitivity never turns Automatic off: from Manual it goes back to Automatic, else it does nothing.
+        // A on Volume plays the test sound.
+        if (dir === 0 && key === "soundVolume") { Sounds.test(); return }
         if (dir === 0) {
             const h = Object.assign({}, heldPos)
             delete h[key]
@@ -186,6 +196,16 @@ Rectangle {
             { kind: "segmented", key: "previewMode", chat: true, title: "What notifications show",
               options: [{ value: "2", label: "Name and message" }, { value: "1", label: "Name only" }, { value: "0", label: "Nothing" }] },
             { kind: "toggle", key: "reduceNotifications", chat: true, title: "Reduce notifications", note: "One per chat until you open it" },
+            // Huginn's own sounds: each kind on or off, how loud, a test, and the last ones played (to see why one did).
+            { group: "Sounds", kind: "toggle", key: "messageSound", sounds: true, title: "Message sound", note: "New messages" },
+            { group: "Sounds", kind: "toggle", key: "fileSound", sounds: true, title: "File waiting sound", note: "A file that asks for Accept" },
+            { group: "Sounds", kind: "toggle", key: "ringSound", sounds: true, title: "Call ringtone", note: Sounds.ringSound ? "" : "Calls still show, without a sound" },
+            { group: "Sounds", kind: "slider", key: "soundVolume", title: "Volume: " + Sounds.volume + "%", low: "Off", high: "Full" },
+            { group: "Sounds", kind: "button", key: "soundTest", title: "Test sound", label: "Play" },
+            { group: "Sounds", kind: "button", key: "recentSounds", title: "Recent sounds", label: "See",
+              note: page.recentSounds.length ? "Last: " + page.soundLine(page.recentSounds[0]) : "None since Huginn started" },
+            { group: "Sounds", kind: "info", hide: Qt.platform.os !== "windows", title: "Windows may add its own sound",
+              note: "Turn it off in Windows Settings › System › Notifications › Huginn" },
             { group: "Quiet hours", kind: "toggle", key: "quietHours", title: "Quiet hours",
               note: Settings.quietHours ? page.hourName(Settings.quietFrom) + " to " + page.hourName(Settings.quietTo) + ", no sounds" : "No sounds overnight" },
             { group: "Quiet hours", kind: "button", key: "quietFrom", hide: !Settings.quietHours, title: "From: " + page.hourName(Settings.quietFrom), label: "Change" },
@@ -193,9 +213,7 @@ Rectangle {
             // The people set to Always right away, to see and remove. Adding is in each chat's Notifications.
             { group: "Always right away", kind: "button", key: "rightAway", title: "Always right away" + (page.rightAwayKeys.length ? " (" + page.rightAwayKeys.length + ")" : ""),
               note: page.rightAwayNote, label: "See", enabled: page.rightAwayKeys.length > 0 }
-        ], [
-            { kind: "toggle", key: "messageSound", title: "Message sound" }
-        ], "Message sound")
+        ], [], "")
         case "privacy": return page.withMore([
             { group: "Lock", kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
               note: "Pattern or password", label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
@@ -1142,7 +1160,7 @@ Rectangle {
         })
     }
     // Where a toggle's value lives.
-    function source(r) { return r.ultra ? UltraPrivacy : r.aloud ? ReadAloud : r.dictation ? Dictation : r.verse ? DailyVerse : r.vault ? Vault : r.chat ? Chat : Settings }
+    function source(r) { return r.sounds ? Sounds : r.ultra ? UltraPrivacy : r.aloud ? ReadAloud : r.dictation ? Dictation : r.verse ? DailyVerse : r.vault ? Vault : r.chat ? Chat : Settings }
     // A switch as it shows (invert: it reads the other way round from the setting).
     function switchOn(r) { return !!source(r)[r.key] !== !!r.invert }
     // A switch flipped.
@@ -1254,6 +1272,19 @@ Rectangle {
         })
     }
 
+    // Notifications › Recent sounds: the last 20 Huginn played since it started, newest first, with why. Kept only in
+    // memory (a lock clears it), never what a message said, a name only as What notifications show allows.
+    readonly property var recentSounds: Sounds.recent
+    function soundLine(e) { return e.time + " · " + e.kind + (e.chat ? ", " + e.chat : "") }
+    function seeRecentSounds() {
+        const list = recentSounds
+        if (!list.length) { Ui.say("No sounds since Huginn started."); return }
+        Ui.pickFrom("Recent sounds", [{ header: "Newest first. Kept until Huginn closes or locks", items: list.map((e, i) => ({ name: soundLine(e), detail: e.why, url: "s" + i })) },
+                                      { header: "", items: [{ name: "Clear the list", url: "clear" }] }], v => {
+            if (v === "clear") { Sounds.clearRecent(); Ui.say("Recent sounds cleared.") }
+        })
+    }
+
     // Look › Daily Hávamál › Your translation: a plain-text file, kept in this computer's vault only.
     function importVerses() {
         if (!Vault.exists || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
@@ -1296,6 +1327,8 @@ Rectangle {
         else if (key === "more") moreOpen = !moreOpen
         else if (key === "status") { if (Ui.main) Ui.main.openStatusCard() }
         else if (key === "rightAway") seeRightAway()
+        else if (key === "soundTest") { Sounds.test(); if (Sounds.volume === 0) Ui.say("Volume is at 0%. Move it up to hear Huginn's sounds.") }
+        else if (key === "recentSounds") seeRecentSounds()
         else if (key === "ultraWait") UltraPrivacy.waitLonger()
         else if (key === "ultraTryAgain") UltraPrivacy.tryAgain()
         else if (key === "ultraFallBack") { UltraPrivacy.turnOff(); Ui.say("Ultra privacy is off.") }
@@ -1331,7 +1364,7 @@ Rectangle {
         else if (key === "dataFolder") { if (!System.openDataFolder()) Ui.say("Couldn't open the folder.", true) }
         else if (key === "goStable") {
             if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
-            Ui.sure("Go back to stable?", "Installs the latest stable Huginn, then restarts. Labs mode turns off." + (job ? " " + job : ""),
+            Ui.sure("Go back to stable?", "Downloads the latest stable Huginn. It goes in when you press Restart now. Labs mode turns off." + (job ? " " + job : ""),
                     "Go back", () => Updater.goBackToStable(), false, true)
         }
         else if (key === "check") {

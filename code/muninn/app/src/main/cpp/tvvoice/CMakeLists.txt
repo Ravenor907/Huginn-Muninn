@@ -1,5 +1,5 @@
 # Kids' TV voice processing: libmuninn_tvvoice.so, loaded only on a Kids' TV (tv/TvVoice.kt). Huginn builds the
-# same code (tvvoice_core) for echo cancellation in calls on Linux, SteamOS and Windows (src/call/audioio.cpp).
+# same code (tvvoice_core) for echo cancellation in calls on Linux and Windows (src/call/audioio.cpp).
 #  - WebRTC Audio Processing 1.3 (BSD-3-Clause): AEC3 echo canceller, high-pass filter, AGC2, noise suppressor.
 #  - RNNoise 0.2 (BSD-3-Clause): voice-focused noise suppression.
 #  - Abseil (Apache-2.0), headers only, which WebRTC's code includes.

@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.net.call
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
@@ -211,7 +212,8 @@ object RoomManager {
         val a = app ?: return false
         val c = try { a.chat.contacts.get(k) } catch (e: Exception) { null } ?: return false
         if (try { a.chat.blocked.value.contains(k) } catch (e: Exception) { false }) return false
-        return c.caps.isEmpty() || "v1" in c.caps
+        // 1.54: only the assumed group-peer caps (nothing came from them yet) is unknown, and unknown is tried (6.3).
+        return io.github.ravenor907.muninn.net.Contacts.unknownCaps(c.caps) || "v1" in c.caps
     }
 
     /** Cap g2: [k] is timed out or banned in [group]. */
@@ -246,7 +248,7 @@ object RoomManager {
     /** Known to have an app without voice rooms. */
     fun needsUpdate(k: String): Boolean {
         val c = try { app?.chat?.contacts?.get(k) } catch (e: Exception) { null } ?: return false
-        return c.caps.isNotEmpty() && "v1" !in c.caps
+        return !io.github.ravenor907.muninn.net.Contacts.unknownCaps(c.caps) && "v1" !in c.caps
     }
 
     private fun members(group: String): List<String> {
@@ -630,7 +632,7 @@ object RoomManager {
     fun onSignal(fromKey: String, json: String) {
         if (app == null) return
         exec.execute {
-            val o = try { JSONObject(json) } catch (e: Exception) { return@execute }
+            val o = try { SafeJson.obj(json) } catch (e: Exception) { return@execute }
             val call = o.opt("call") as? String ?: return@execute
             when {
                 call == "-" -> roomMessage(fromKey, o)
@@ -648,7 +650,9 @@ object RoomManager {
     private fun roomMessage(from: String, o: JSONObject) {
         val group = o.optString("g"); val room = o.optString("ch"); val t = o.optString("t")
         val verdict = RoomLogic.accept(state(group), me(), from, o, now())
+        // 1.54: a member whose clock is up to 3 minutes off still connects and rings (RoomLogic.withinSkew).
         val fresh = verdict == "ok"
+        val near = fresh || (verdict == "stale" && RoomLogic.withinSkew(RoomLogic.ts(o), now()))
         if (!fresh && verdict != "stale") return
         // Cap g2: someone timed out or banned doesn't join, ring or show up in this group's rooms (a leave still counts).
         if (t != "vleave" && barred(group, from)) return
@@ -657,7 +661,7 @@ object RoomManager {
             "vjoin", "vleave" -> {
                 if (presenceTable.apply(from, o, now(), beats(from), fresh)) bumpPresence()
                 if (t == "vjoin") {
-                    if (fresh && here && !peers.containsKey(from) && now() - (offered[from] ?: 0L) >= 30_000) {
+                    if (near && here && !peers.containsKey(from) && now() - (offered[from] ?: 0L) >= 30_000) {
                         if (RoomLogic.full(peers.size)) sendRoom("full", from, group, room) else { offered[from] = now(); offerTo(from) }
                     }
                 } else {
@@ -674,7 +678,7 @@ object RoomManager {
                 if (here || _ring.value?.let { it.g == group && it.ch == room } == true) return   // in it, or the same ring again
                 val inCall = CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true
                 val who = nameOf(group, from); val grp = state(group)?.name ?: ""
-                if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, group); return }
+                if (!near || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, group); return }
                 val a = app ?: return
                 if (try { a.chat.blocked.value.contains(from) } catch (e: Exception) { false }) return
                 // Ultra privacy: calls are off, so it doesn't ring; a missed call that says why (not in a muted group).
@@ -696,8 +700,8 @@ object RoomManager {
                     if (r != null && r.g == group && r.ch == room) { stopRing(); missed(who, grp, group) }
                 }, RoomLogic.RING_MS, TimeUnit.MILLISECONDS)
             }
-            "vdecline" -> if (fresh && here) { declined += from; _notices.tryEmit("${nameOf(group, from)} can't join right now") }
-            "full" -> if (fresh && here && now() - joinedAt < 30_000) doLeave("This room is full (${RoomLogic.MAX_PEOPLE} people)")
+            "vdecline" -> if (near && here) { declined += from; _notices.tryEmit("${nameOf(group, from)} can't join right now") }
+            "full" -> if (near && here && now() - joinedAt < 30_000) doLeave("This room is full (${RoomLogic.MAX_PEOPLE} people)")
         }
     }
 
@@ -721,15 +725,17 @@ object RoomManager {
         val room = o.opt("ch") as? String ?: return
         val call = o.opt("call") as? String ?: return
         // The rest is a plain 5.2 offer: checked the same way.
-        val plain = JSONObject(o.toString()).apply { remove("g"); remove("ch") }
+        val plain = SafeJson.obj(o.toString()).apply { remove("g"); remove("ch") }
         val s = try { CallLogic.parse(from, plain.toString()) } catch (e: CallLogic.Bad) { return }
-        if (!CallLogic.fresh(s.ts, now())) return
+        if (!RoomLogic.withinSkew(s.ts, now())) return
         val st = state(group)
         if (g != group || ch != room || st == null || !st.has(from) || s.codec != CallCrypto.CODEC || barred(group, from)) {
             CallManager.host.send(from, CallLogic.simple("decline", call))
             return
         }
         val cur = peers[from]
+        // 1.54: never over 8 people, even when an offer comes before this side's "full" reached them.
+        if (cur == null && RoomLogic.full(peers.size)) { CallManager.host.send(from, CallLogic.simple("decline", call)); return }
         if (cur != null) {
             if (cur.s.callId == call) { cur.s.onSignal(s); return }   // a resent offer
             // Both offered (6.3 step 4): the lower chat key's offer wins.

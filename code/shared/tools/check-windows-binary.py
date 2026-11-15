@@ -14,6 +14,14 @@ Fails (exit 1, with GitHub annotations) when Huginn.exe:
   - imports Windows functions for writing the registry (RegCreateKey, RegSetValue, RegSetKeyValue...): the portable
     build keeps its settings in an INI file in the data folder beside Huginn.exe. Moving an older version's settings
     out of the registry once goes through Qt (Qt6Core.dll), not Huginn.exe.
+  - imports Windows functions for reading the firmware's tables (GetSystemFirmwareTable, EnumSystemFirmwareTables), the
+    classic sandbox and virtual machine check, or for watching the keyboard outside Huginn's own window
+    (GetAsyncKeyState, GetKeyState, GetKeyboardState, RegisterRawInputDevices, the keylogger signals). Push to talk and
+    the call keys use Qt's key events and RegisterHotKey only.
+  Delay-loaded imports count the same as ordinary ones.
+Warns (without failing) when Huginn.exe imports a function that ends processes (TerminateProcess): the C runtime's
+security-check handler that every MSVC program links imports it, so it can't fail the build, but it is listed so a new
+use stands out. Huginn never ends another program.
   - lacks version details (VERSIONINFO) or an application manifest.
   - lacks the hardening Windows looks for: Control Flow Guard, CET shadow stack support, a random
     load address (high entropy, 64-bit) and no running code from data (DEP).
@@ -33,7 +41,10 @@ FORBIDDEN_IMPORTS = {"resumethread", "createprocessa", "createprocessw", "create
                      "openprocess", "regoverridepredefkey", "queryfullprocessimagenamew",
                      "regcreatekeya", "regcreatekeyw", "regcreatekeyexa", "regcreatekeyexw", "regcreatekeytransacteda",
                      "regcreatekeytransactedw", "regsetvaluea", "regsetvaluew", "regsetvalueexa", "regsetvalueexw",
-                     "regsetkeyvaluea", "regsetkeyvaluew"}
+                     "regsetkeyvaluea", "regsetkeyvaluew",
+                     "getsystemfirmwaretable", "enumsystemfirmwaretables",
+                     "getasynckeystate", "getkeystate", "getkeyboardstate", "registerrawinputdevices"}
+WARN_IMPORTS = {"terminateprocess", "ntterminateprocess", "zwterminateprocess", "debugactiveprocess"}
 
 
 def find_text(data):
@@ -77,28 +88,43 @@ def cstr(data, off):
     return data[off:end].decode("ascii", "replace")
 
 
-def imports(data):
-    sections, dirs, is64 = pe_sections(data)
-    rva, size = dirs[1]
-    found = []
-    if not rva:
-        return found
-    off = rva_to_off(sections, rva)
+def thunk_names(data, sections, is64, thunk_rva, dll, found):
+    thunk = rva_to_off(sections, thunk_rva)
+    step, flag = (8, 1 << 63) if is64 else (4, 1 << 31)
     while True:
-        oft, _, _, name_rva, ft = struct.unpack_from("<IIIII", data, off)
-        if not name_rva:
+        v = struct.unpack_from("<Q" if is64 else "<I", data, thunk)[0]
+        if not v:
             break
-        dll = cstr(data, rva_to_off(sections, name_rva))
-        thunk = rva_to_off(sections, oft or ft)
-        step, flag = (8, 1 << 63) if is64 else (4, 1 << 31)
+        if not v & flag:
+            found.append((dll, cstr(data, rva_to_off(sections, v & 0x7FFFFFFF) + 2)))
+        thunk += step
+
+
+def imports(data):
+    """(dll, function) for every import by name: the import table (directory 1) and the delay-load table (13)."""
+    sections, dirs, is64 = pe_sections(data)
+    found = []
+    rva, _ = dirs[1]
+    if rva:
+        off = rva_to_off(sections, rva)
         while True:
-            v = struct.unpack_from("<Q" if is64 else "<I", data, thunk)[0]
-            if not v:
+            oft, _, _, name_rva, ft = struct.unpack_from("<IIIII", data, off)
+            if not name_rva:
                 break
-            if not v & flag:
-                found.append((dll, cstr(data, rva_to_off(sections, v & 0x7FFFFFFF) + 2)))
-            thunk += step
-        off += 20
+            thunk_names(data, sections, is64, oft or ft, cstr(data, rva_to_off(sections, name_rva)), found)
+            off += 20
+    rva, _ = dirs[13]
+    if rva:
+        off = rva_to_off(sections, rva)
+        while True:
+            # ImgDelayDescr: attributes, DLL name, module handle, IAT, INT, bound IAT, unload IAT, time stamp (RVAs when
+            # attribute bit 0 is set, as every current linker writes them).
+            attrs, name_rva, _, _, int_rva = struct.unpack_from("<IIIII", data, off)
+            if not name_rva:
+                break
+            if attrs & 1 and int_rva:
+                thunk_names(data, sections, is64, int_rva, cstr(data, rva_to_off(sections, name_rva)) + " (delay-loaded)", found)
+            off += 32
     return found
 
 
@@ -163,7 +189,13 @@ def main():
             hits = find_text(data)
             if ours:
                 try:
-                    hits += ["imports %s!%s" % (d, fn) for d, fn in imports(data) if fn.lower() in FORBIDDEN_IMPORTS]
+                    found = imports(data)
+                    hits += ["imports %s!%s" % (d, fn) for d, fn in found if fn.lower() in FORBIDDEN_IMPORTS]
+                    warn = ["%s!%s" % (d, fn) for d, fn in found if fn.lower() in WARN_IMPORTS]
+                    if warn:
+                        annotate("warning", "Huginn.exe can end processes",
+                                 "imports " + ", ".join(warn) + " (expected once, from the C runtime's security-check handler; "
+                                 "anything more is new)")
                     types = resource_types(data)
                     if 16 not in types:
                         hits.append("no VERSIONINFO resource")
@@ -178,7 +210,8 @@ def main():
             elif hits:
                 print("note: %s: %s" % (rel, "; ".join(hits)))
             elif ours:
-                print("Huginn.exe: no script, hidden-window, process-injection or registry-writing traces; has version details and a manifest; "
+                print("Huginn.exe: no script, hidden-window, process-injection, registry-writing, firmware-reading or key-polling traces; "
+                      "has version details and a manifest; "
                       "built with CFG, CET, ASLR (high entropy) and DEP")
     if not os.path.exists(main_exe):
         annotate("error", "Binary check", "No Huginn.exe at the top of " + folder)

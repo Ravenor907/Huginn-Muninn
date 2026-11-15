@@ -63,7 +63,7 @@ QStringList Chat::pickPictures() const
 
 QString Chat::sendPhotos(const QString &where, const QStringList &paths, bool hd)
 {
-    QList<QByteArray> jpegs;
+    QStringList stills;
     int bad = 0, gifs = 0;
     for (const QString &p : paths) {
         // Cap a1: a GIF goes on its own, animated (never in an album).
@@ -74,32 +74,41 @@ QString Chat::sendPhotos(const QString &where, const QStringList &paths, bool hd
                 ++bad;
             continue;
         }
-        const QByteArray j = Photos::prepare(p, hd);
-        if (j.isEmpty())
-            ++bad;
-        else
-            jpegs << j;
+        stills << p;
     }
-    if (jpegs.isEmpty() && gifs == 0)
-        return paths.size() == 1 ? QStringLiteral("That picture couldn't be opened.") : QStringLiteral("Those pictures couldn't be opened.");
-    QString g, ch;
-    const bool group = inGroup(where, &g, &ch);
-    // Up to 10 in an album; each photo is still its own message with its own receipts.
-    for (int at = 0; at < jpegs.size(); at += MoreWire::kAlbumMax) {
-        const QList<QByteArray> part = jpegs.mid(at, MoreWire::kAlbumMax);
-        const QString album = part.size() > 1 ? QUuid::createUuid().toString(QUuid::WithoutBraces) : QString();
-        for (int i = 0; i < part.size(); ++i) {
-            QVariantMap extra;
-            if (!album.isEmpty())
-                extra = {{QStringLiteral("al"), album}, {QStringLiteral("ai"), i}, {QStringLiteral("an"), int(part.size())}};
-            if (group)
-                sendGroupBlob(g, ch, part.at(i), 0, extra);
+    if (stills.isEmpty())
+        return gifs == 0 ? (paths.size() == 1 ? QStringLiteral("That picture couldn't be opened.") : QStringLiteral("Those pictures couldn't be opened.")) : QString();
+    // Decoded, shrunk and encoded on the picture thread; the album goes when all of them are ready, and any that
+    // couldn't be opened are said then.
+    preparePictures(stills, hd, [this, where, bad, gifs](const QList<QByteArray> &prepared) {
+        QList<QByteArray> jpegs;
+        int failed = bad;
+        for (const QByteArray &j : prepared) {
+            if (j.isEmpty())
+                ++failed;
             else
-                sendBlob(where, part.at(i), 0, extra);
+                jpegs << j;
         }
-    }
-    return bad == 0 ? QString() : bad == 1 ? QStringLiteral("One picture couldn't be opened; the rest are on their way.")
-                                           : QStringLiteral("%1 pictures couldn't be opened; the rest are on their way.").arg(bad);
+        if (jpegs.isEmpty() && gifs == 0) {
+            Q_EMIT notice(failed == 1 ? QStringLiteral("That picture couldn't be opened.") : QStringLiteral("Those pictures couldn't be opened."));
+            return;
+        }
+        // Up to 10 in an album; each photo is still its own message with its own receipts.
+        for (int at = 0; at < jpegs.size(); at += MoreWire::kAlbumMax) {
+            const QList<QByteArray> part = jpegs.mid(at, MoreWire::kAlbumMax);
+            const QString album = part.size() > 1 ? QUuid::createUuid().toString(QUuid::WithoutBraces) : QString();
+            for (int i = 0; i < part.size(); ++i) {
+                QVariantMap extra;
+                if (!album.isEmpty())
+                    extra = {{QStringLiteral("al"), album}, {QStringLiteral("ai"), i}, {QStringLiteral("an"), int(part.size())}};
+                sendPreparedPhoto(where, part.at(i), extra);
+            }
+        }
+        if (failed > 0)
+            Q_EMIT notice(failed == 1 ? QStringLiteral("One picture couldn't be opened; the rest are on their way.")
+                                      : QStringLiteral("%1 pictures couldn't be opened; the rest are on their way.").arg(failed));
+    });
+    return QString();
 }
 
 QString Chat::sendVideo(const QString &where, const QByteArray &mp4, int ms)
@@ -450,7 +459,8 @@ QString Chat::saveMedia(const QString &id)
         path = QDir(dir).filePath(stem + QStringLiteral(" (%1).").arg(n) + ext);
     if (big) {
         QFile hold(path);   // its name taken now, so a second Save right after gets another
-        hold.open(QIODevice::WriteOnly);
+        if (!hold.open(QIODevice::WriteOnly))
+            return QString();   // the folder can't be written: said as a save that didn't work
         hold.close();
         exportBig(id, path);
         return QStringLiteral("saving");

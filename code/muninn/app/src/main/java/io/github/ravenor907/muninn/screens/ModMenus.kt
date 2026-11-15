@@ -273,12 +273,14 @@ internal fun GroupModPanels(app: Muninn, g: String) {
             val here = chats[g].orEmpty().any { it.id == r.msg && it.unsent.isEmpty() }
             val chName = app.chat.groups.group(g)?.state?.channel(r.ch)?.n
             Line("${r.fromName} reported ${r.kName}" + if (r.read) "" else " · new",
-                (if (chName != null) "#$chName · " else "") + r.text.ifEmpty { "(a photo or file)" } + if (here) "" else " · gone now", icon = "info", enabled = false) {}
+                (if (chName != null) "#$chName · " else "") + r.text.ifEmpty { "(a photo or file)" } +
+                    (if (!r.checked) " · can't be checked (that message isn't on this phone)" else if (here) "" else " · gone now"), icon = "info", enabled = false) {}
             androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
                 if (here && r.ch.isNotEmpty()) MButton("Go to it") { ChatNav.channel[g] = r.ch; ChatNav.openGroup(g) }
-                val canAct = app.chat.groups.canModerate(g, r.k)
+                // Only from a report this phone could check against its own copy.
+                val canAct = r.checked && app.chat.groups.canModerate(g, r.k)
                 if (here && canAct) MButton("Delete for everyone", kind = Kind.Danger) {
                     io.github.ravenor907.muninn.ui.Ui.sure(io.github.ravenor907.muninn.ui.Ask("Delete for everyone?",
                         "It shows as Removed by an admin on every member's phone.", "Delete", danger = true, hold = true,

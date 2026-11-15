@@ -15,6 +15,9 @@ void start();
 void claimed();
 // At the very end of main, after everything else has closed: this run closed cleanly.
 void cleanExit();
+// Erase everything: crash.log is closed (Windows can't delete a file that is open) and nothing more is written to it
+// in this run, so the erase can take it away. The next start keeps a fresh one.
+void stop();
 // A timestamped line (scrubbed of the home folder and addresses).
 void note(const QString &what);
 // A line as it is, from a crash handler.

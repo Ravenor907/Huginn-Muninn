@@ -19,7 +19,7 @@ for f in $FILES; do
   [ -f "$f" ] || fail "Download missing" "$f wasn't built or downloaded."
 done
 if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
-  fail "Release signing key missing" "Add the secret RELEASE_SIGNING_KEY (Settings > Secrets and variables > Actions), then re-run this job."
+  fail "Release signing key missing" "Add the secret RELEASE_SIGNING_KEY to the release environment (Settings > Environments > release > Environment secrets), then re-run this job."
 fi
 
 k="$(mktemp)"

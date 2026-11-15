@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.AppStorage
 import io.github.ravenor907.muninn.screens.AppStorageOps

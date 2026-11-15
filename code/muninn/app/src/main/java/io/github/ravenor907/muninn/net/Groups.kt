@@ -26,6 +26,8 @@ class Groups(
     private val keys: KeyPair, private val me: String, private val host: Host,
     private val read: (String) -> String?, private val write: (String, String) -> Unit,
     private val now: () -> Long = { System.currentTimeMillis() },
+    /** A store file ([FILE], [CHATS] or [OUTS]) didn't load: it is kept aside and never saved over (Vault.loadFailed). */
+    private val loadFailed: (String) -> Unit = {},
 ) {
     interface Host {
         val myName: String
@@ -39,6 +41,8 @@ class Groups(
         fun drop(env: String)
         /** A real contact (not a group peer). */
         fun isContact(k: String): Boolean
+        /** Their name as this phone shows it. */
+        fun nameOf(k: String): String = "Someone"
         /** Someone whose invite (or who puts me straight into a group) is taken: a real contact; on a Kids' Device, only one of its parents. */
         fun mayInvite(k: String): Boolean = isContact(k)
         /** A member who isn't a contact becomes a group peer, so they can be reached (3.7). */
@@ -61,6 +65,13 @@ class Groups(
         fun hasJ1(k: String): Boolean = false
         /** Group [g] became [type] ("folk" or "family"): the Family folder is looked at again. */
         fun typeChanged(g: String, type: String) {}
+        /**
+         * Which groups this phone trusts as Family changed (a Yes to "Add it as Family?", or a group left, removed or no
+         * longer Family): the Family folder is looked at again, and what a group put there that no trusted group backs goes.
+         */
+        fun familyChanged() {}
+        /** A Family group signed by [by] is trusted at once, without asking (a Kids' Device: only from one of its parents). */
+        fun familyAuto(by: String): Boolean = false
         /** Their app said "g2": timeouts and bans go to them (section 26). */
         fun hasG2(k: String): Boolean = false
         /** Their app said "f2": group files and the group's file rules (section 27). */
@@ -158,7 +169,8 @@ class Groups(
         }
     }
 
-    private data class Token(val i: String, val g: String, val x: Long, val multi: Boolean)
+    /** [to]: the contact an invite went to (only on this phone, so its sender hears when it ran out unanswered). */
+    private data class Token(val i: String, val g: String, val x: Long, val multi: Boolean, val to: String = "")
     /** Cap j1, on the admin who counts a link: its token, who made it, expiry (ms, 0 never), max uses (0 no limit), uses, revoked. */
     private data class LinkRec(val i: String, val g: String, val by: String, val x: Long, val max: Int, val uses: Int = 0, val off: Boolean = false)
     private val links = ArrayList<LinkRec>()
@@ -188,7 +200,9 @@ class Groups(
      * whom, the message, its channel, what it said, when, and whether the list has shown it.
      */
     data class Report(val id: String, val g: String, val from: String, val fromName: String, val k: String, val kName: String,
-                      val msg: String, val ch: String, val text: String, val time: Long, val read: Boolean = false)
+                      val msg: String, val ch: String, val text: String, val time: Long, val read: Boolean = false,
+                      /** The message is on this phone and [k] wrote it: who and what are this phone's own copy, not the reporter's word. */
+                      val checked: Boolean = true)
     private val reports = HashMap<String, List<Report>>()
     private val _reports = MutableStateFlow<Map<String, List<Report>>>(emptyMap())
     /** For the screens: each group's reports, newest first (admins only ever get any). */
@@ -198,6 +212,23 @@ class Groups(
     private val _waiting = MutableStateFlow<List<Waiting>>(emptyList())
     val waitingJoins: StateFlow<List<Waiting>> = _waiting.asStateFlow()
     private val last = HashMap<String, Change>()
+    /**
+     * Family consent (owner decision, 1.54): groups whose Family trust this phone's person said yes to (or made, or had as
+     * Family before 1.54). Only these give Family treatment: files without Accept, direct calls, the Family folder. A
+     * Family group not in it is an ordinary group here until "Add it as Family?" gets a Yes. [familyNo]: Not now.
+     */
+    private val familyOk = HashSet<String>()
+    private val familyNo = HashSet<String>()
+    /** Who made it Family, or put me in it (for the question's words). */
+    private val familyBy = HashMap<String, String>()
+    data class FamilyAsk(val g: String, val name: String, val by: String)
+    private val _familyAsks = MutableStateFlow<List<FamilyAsk>>(emptyList())
+    /** Family groups waiting for "Add <group> as Family?" (Requests). */
+    val familyAsks: StateFlow<List<FamilyAsk>> = _familyAsks.asStateFlow()
+    /** Store files that didn't load: never written this run. */
+    private val unloaded = HashSet<String>()
+    /** When each join by a code or link was asked (a dead one stops waiting after [JOIN_WAIT_MS]). */
+    private val joinAt = HashMap<String, Long>()
     private val deleted = HashMap<String, Long>()
     /** Unsent before it got here: message id to who unsent it and when. Only a later copy from that very sender is dropped. */
     private val unsentBy = HashMap<String, Pair<String, Long>>()
@@ -209,8 +240,8 @@ class Groups(
 
     /** Writes [name] only when [text] differs from what was last written there (a failed write is tried again next time). */
     private fun writeIfChanged(name: String, text: String) {
-        if (!written.changed(name, text)) return
-        write(name, text)
+        if (name in unloaded || !written.changed(name, text)) return
+        try { write(name, text) } catch (_: Exception) { return }
         written.done(name, text)
     }
     /** "g|key" to when: syncs asked of them (their states are welcome) and states sent back (not again at once). */
@@ -240,6 +271,38 @@ class Groups(
 
     fun group(g: String): Group? = synchronized(lock) { groups[g] }
 
+    // ------------------------------------------------------------------ Family consent (1.54)
+
+    private fun isFamily(s: State) = Limits.groupType(s) == Limits.FAMILY
+    private fun trustedLocked(g: String) = groups[g]?.let { !it.readOnly && isFamily(it.state) && g in familyOk } == true
+
+    /** [g] is a Family group this phone's person said yes to (or made): only then Family trust comes from it. */
+    fun familyTrusted(g: String): Boolean = synchronized(lock) { trustedLocked(g) }
+
+    /** The groups trusted as Family here. */
+    fun trustedFamily(): Set<String> = synchronized(lock) { groups.keys.filter { trustedLocked(it) }.toSet() }
+
+    /**
+     * The answer to "Add <group> as Family?" (or Group settings › Family on this device): yes trusts it here; "Not Family"
+     * keeps it an ordinary group and is remembered, so it's never asked again (the switch can still turn it on).
+     */
+    fun answerFamily(g: String, yes: Boolean) = act {
+        if (groups[g] == null) return@act
+        if (yes) { familyOk.add(g); familyNo.remove(g) } else { familyOk.remove(g); familyNo.add(g) }
+        Unit
+    }
+
+    /** Group [g] is Family here without a yes yet: asked (a Kids' Device takes one from its parent at once). [by]: who did it. */
+    private fun askFamily(g: String, by: String) {
+        if (g in familyOk) return
+        if (host.familyAuto(by)) { familyOk.add(g); return }
+        val s = groups[g]?.state ?: return
+        familyBy[g] = nameIn(s, by, "Someone")
+        if (g in familyNo) return   // "Not Family" was said: never asked again
+        host.notice("${familyBy[g]} made ${s.name} a Family group. It stays an ordinary group here until you say yes in Requests.")
+        host.arrived(g, s.name, "Add ${s.name} as Family?")
+    }
+
     /** [m] mentions me: my name, a nickname of mine, or @everyone from an admin (read from the message, never a title). */
     fun mentionsMe(g: String, m: GMsg): Boolean = !m.mine && m.unsent.isEmpty() &&
         group(g)?.state?.let { s -> Rich.mentionsMe(m.text, host.myName, host.mentionNames, s.isAdmin(m.from)) } == true
@@ -261,7 +324,7 @@ class Groups(
      * with the group waits for them before it rings (see GroupRing).
      */
     fun stateWaiting(g: String): Set<String> = act {
-        outs.filter { it.g == g && it.room == "group" && (try { JSONObject(it.plain).optString("t") } catch (e: Exception) { "" }) == "state" }
+        outs.filter { it.g == g && it.room == "group" && (try { SafeJson.obj(it.plain).optString("t") } catch (e: Exception) { "" }) == "state" }
             .map { it.to }.toSet()
     }
 
@@ -278,6 +341,8 @@ class Groups(
             listOf(Channel(MAIN, "general", "text"), Channel(Proto06.newChannelId(), "Voice", "voice")), now()), if (kind == Limits.FAMILY) Limits.FAMILY else Limits.FOLK, days, true).signedBy(keys.private, me)
         Proto06.check(s)
         groups[g] = Group(s)
+        // Made here: Family trust is this person's own choice.
+        if (kind == Limits.FAMILY) familyOk.add(g)
         g
     }
 
@@ -349,6 +414,9 @@ class Groups(
     fun fileRefusal(g: String, from: String, size: Long): String = synchronized(lock) {
         val grp = groups[g]
         if (grp == null || grp.readOnly) "Refused: you aren't in that group."
+        // Cap g2 (26.3): someone timed out or banned sends no files either (a long video is a file too).
+        else if (from != me && barredLocked(g, from)) "Refused: they're timed out or banned in ${grp.state.name}."
+        else if (from == me && statusLocked(g).isNotEmpty()) statusLocked(g) + "."
         else Sharing.refusal(grp.state.members.map { it.k }, grp.state.admins, grp.state.fs, grp.state.fm, from, size)
     }
 
@@ -421,7 +489,8 @@ class Groups(
         if (bannedLocked(g, k)) return@act "They're banned from ${s.name}. Unban them in Group settings first."
         if (s.members.size >= Proto06.MAX_MEMBERS) return@act "${s.name} is full (${Proto06.MAX_MEMBERS} people)."
         if (s.kind.isNotEmpty() && !host.hasD1(k)) return@act "They need Muninn or Huginn 0.94 to be in a ${Limits.kindName(s.kind)} group."
-        val t = Token(Proto06.newToken(), g, now() / 1000 + Proto06.CODE_MS / 1000, false)
+        // Good as long as a Folk message lasts (7 days): a phone that's off overnight still gets to answer.
+        val t = Token(Proto06.newToken(), g, now() / 1000 + INVITE_MS / 1000, false, k)
         tokens.add(t)
         val id = Proto06.newLogicalId()
         out(k, "group", JSONObject().put("t", "invite").put("g", g).put("id", id).put("state", s.json()).put("inv", t.i).put("x", t.x).toString(), id, g)
@@ -471,6 +540,7 @@ class Groups(
         if (groups[c.g]?.let { !it.readOnly && it.state.has(me) } == true) return@act "You're already in ${c.gn}."
         if (!host.isContact(c.a)) host.peer(c.a, c.an.ifBlank { "Admin" }, c.p)
         joining[c.g] = c.a
+        joinAt[c.g] = now()
         joinNames[c.g] = c.gn to c.an
         refusals.remove(c.g)
         sendJoin(c.g, c.a, c.i)
@@ -523,7 +593,7 @@ class Groups(
         null
     }
 
-    private fun isLeave(o: Out): Boolean = o.room == "group" && (try { JSONObject(o.plain).optString("t") } catch (e: Exception) { "" }) == "leave"
+    private fun isLeave(o: Out): Boolean = o.room == "group" && (try { SafeJson.obj(o.plain).optString("t") } catch (e: Exception) { "" }) == "leave"
 
     /** Left-and-deleted groups whose leave reached everyone (or gave up): their record goes now. */
     private fun purgeLeft() {
@@ -581,7 +651,7 @@ class Groups(
         val all = More.vote(m.votes, poll.options.size, me, v, ts) ?: return@act false
         edit(g, msgId) { it.copy(votes = all) }
         val id = Proto06.newLogicalId()
-        val plain = JSONObject().put("t", "vote").put("g", g).put("id", id).put("msg", msgId).put("v", org.json.JSONArray(v)).put("ts", ts).toString()
+        val plain = JSONObject().put("t", "vote").put("g", g).put("id", id).put("msg", msgId).put("v", JSONArray(v)).put("ts", ts).toString()
         grp.state.members.map { it.k }.filter { it != me && host.hasM2(it) }.forEach { out(it, "group", plain, id, g) }
         true
     }
@@ -683,12 +753,18 @@ class Groups(
         outs.removeAll { (it.id == msgId).also { gone -> if (gone) host.drop(it.env) } }
     }
 
-    /** The group is on screen: clear its dot and, with read receipts on, tell each author what was read. */
-    fun markRead(g: String) = act {
-        unread.remove(g)
-        val fresh = chats[g].orEmpty().filter { !it.mine && !it.seen && it.unsent.isEmpty() }
+    /**
+     * The group is on screen: with read receipts on, tell each author what was read. [ch]: only that channel was shown
+     * (the main one also shows a removed channel's messages); the group's dot clears once nothing unseen is left in it.
+     * Null: the whole group (a linked computer read it, or a Kids' Device).
+     */
+    fun markRead(g: String, ch: String? = null) = act {
+        val s = groups[g]?.state
+        fun shown(m: GMsg) = ch == null || m.ch == ch || (ch == MAIN && s?.channel(m.ch)?.t != "text")
+        val fresh = chats[g].orEmpty().filter { !it.mine && !it.seen && it.unsent.isEmpty() && shown(it) }
+        if (chats[g].orEmpty().none { !it.mine && !it.seen && it.unsent.isEmpty() && !shown(it) }) unread.remove(g)
         if (fresh.isEmpty()) return@act
-        chats[g] = chats[g].orEmpty().map { if (!it.mine && !it.seen) it.copy(seen = true) else it }
+        chats[g] = chats[g].orEmpty().map { if (!it.mine && !it.seen && shown(it)) it.copy(seen = true) else it }
         if (host.readReceipts) fresh.groupBy { it.from }.forEach { (k, l) -> l.map { it.id }.chunked(Proto06.MAX_RECEIPT_IDS).forEach { receipt(k, g, it, "read") } }
     }
 
@@ -852,10 +928,8 @@ class Groups(
     /** Every record still in force for [g], to [to] (after a sync, or when an admin just added them). */
     private fun sendMods(g: String, to: String) {
         if (!host.hasG2(to)) return
-        val t = now()
-        val list = mods[g].orEmpty().values.flatMap { slots ->
-            listOfNotNull(slots["ban"]?.takeIf { ModLogic.banned(it) }, slots["timeout"]?.takeIf { ModLogic.timedOut(it, t) })
-        }
+        // The newest record of each slot, unban and ended timeouts too: an old ban relayed later then loses to its unban.
+        val list = mods[g].orEmpty().values.flatMap { slots -> listOfNotNull(slots["ban"], slots["timeout"]) }
         list.chunked(ModLogic.MAX_LIST).forEach { part ->
             val id = Proto06.newLogicalId()
             out(to, "group", JSONObject().put("t", "mod").put("g", g).put("id", id).put("list", JSONArray().apply { part.forEach { put(it) } }).toString(), id, g)
@@ -914,16 +988,26 @@ class Groups(
             "joinno" -> joining[g] == from
             else -> return 400
         }
-        if (!allowed) return 403
+        if (!allowed) {
+            // Cap g4: a link or code this admin knows but that stopped working (revoked, used up, expired, or the group
+            // turned Family): the joiner hears so instead of waiting for good.
+            if (t == "join" && grp != null && !grp.readOnly && grp.state.isAdmin(me) && links.any { it.i == p.optString("inv") && it.g == g })
+                refuseJoin(g, from, "other")
+            return 403
+        }
         when (t) {
             "invite" -> {
                 val s = try { Proto06.parseState(p.getJSONObject("state")) } catch (e: Exception) { return 400 }
                 val x = p.optLong("x")
                 if (s.g != g || !s.isAdmin(from) || !Proto06.accept(null, s).first) return 400
-                if (x * 1000 > now() && grp?.let { !it.readOnly && it.state.has(me) } != true && invites.none { it.g == g && it.from == from }) {
+                val inIt = grp?.let { !it.readOnly && it.state.has(me) } == true
+                if (x * 1000 > now() && !inIt && invites.none { it.g == g && it.from == from }) {
                     invites.add(Invite(g, s.name, from, fromName, p.optString("inv"), x, s))
                     host.notice("$fromName invited you to ${s.name}")
                     host.arrived(g, s.name, "$fromName invited you")
+                } else if (x * 1000 <= now() && !inIt) {
+                    // Came too late (the phone was off): said, instead of nothing at all.
+                    host.notice("$fromName's invite to ${clean(s.name, Proto06.MAX_NAME)} ran out before it got here. Ask them for a new one.")
                 }
             }
             "join" -> {
@@ -1045,13 +1129,21 @@ class Groups(
                 val s = grp!!.state
                 // Kept only on this admin's phone, in the group's Reports list (never a line in a channel), unread with a
                 // notification like an @mention. The same person reporting the same message again counts once.
+                // Who wrote it and what it said come from this phone's own copy, never the reporter's word: a report naming
+                // someone else as its author is dropped. Not here (gone, or before this admin joined): kept, marked as
+                // not checkable, and offers no Ban or Timeout.
+                val here = chats[g]?.firstOrNull { it.id == msg && !it.mine }
+                if ((here != null && here.from != k) || k == from || k == me) { receipt(from, g, listOf(id), "delivered"); return 200 }
                 if (reports[g].orEmpty().none { it.msg == msg && it.from == from }) {
-                    val chId = chats[g]?.firstOrNull { it.id == msg }?.ch.orEmpty()
-                    val r = Report(Proto06.newLogicalId(), g, from, nameIn(s, from, fromName), k, nameIn(s, k, modNames[k] ?: "Someone"), msg, chId, text, now())
+                    val chId = here?.ch.orEmpty()
+                    val shown = if (here != null) (if (here.unsent.isEmpty()) here.text.take(500) else "") else text
+                    val r = Report(Proto06.newLogicalId(), g, from, nameIn(s, from, fromName), k, nameIn(s, k, modNames[k] ?: "Someone"), msg, chId, shown, now(),
+                        checked = here != null)
                     reports[g] = (listOf(r) + reports[g].orEmpty()).take(100)
                     unread.add(g)
                     val chName = s.channel(chId)?.n
-                    host.arrived(g, "Report in ${s.name}", "${r.fromName} reported ${r.kName}${if (chName != null) " in #$chName" else ""}: ${text.ifEmpty { "(a photo or file)" }}")
+                    host.arrived(g, "Report in ${s.name}", "${r.fromName} reported ${r.kName}${if (chName != null) " in #$chName" else ""}: " +
+                        if (r.checked) shown.ifEmpty { "(a photo or file)" } else "(can't be checked: that message isn't on this phone)")
                 }
             }
             "mod" -> {
@@ -1171,6 +1263,12 @@ class Groups(
 
     /** Applies 3.3 to an incoming state. [op]: its hint; "add" from a contact puts me straight in (cap m1). */
     private fun takeState(from: String, s: State, op: String = "") {
+        takeOp = op
+        try { takeState0(from, s) } finally { takeOp = "" }
+    }
+
+    private fun takeState0(from: String, s: State) {
+        val op = takeOp
         val grp = groups[s.g]
         if (grp == null) {
             val added = op == "add" && s.by == from && host.mayInvite(from) && joining[s.g] == null
@@ -1179,6 +1277,8 @@ class Groups(
             invites.removeAll { it.g == s.g }
             groups[s.g] = Group(s)
             peers(s)
+            // Put in (or let in to) a Family group: an ordinary group here until this person says yes.
+            if (isFamily(s)) askFamily(s.g, if (added) from else s.by)
             if (added) {
                 val who = nameIn(s, from, "Someone")
                 host.notice("$who added you to ${s.name}")
@@ -1195,6 +1295,9 @@ class Groups(
         }
         take(grp, s)
     }
+
+    /** The op hint of the state being taken (a "remove" or "leave" is someone's deliberate change, never undone). */
+    private var takeOp = ""
 
     /** [s] replaces the current state of [grp] (already checked, or made here). */
     private fun take(grp: Group, s: State) {
@@ -1215,6 +1318,12 @@ class Groups(
             sendLinks(s.g)
         }
         if (Limits.groupType(cur) != Limits.groupType(s)) host.typeChanged(s.g, Limits.groupType(s))
+        // Family consent: made Family by me is my own choice; by anyone else (or back in a Family group) it asks first.
+        if (isFamily(s) && gone.isEmpty() && (!isFamily(cur) || grp.gone.isNotEmpty())) {
+            if (s.by == me) { familyOk.add(s.g); familyNo.remove(s.g) } else askFamily(s.g, s.by)
+        }
+        // Turned Folk: the trust goes (turned Family again, it's asked again, unless "Not Family" was said).
+        if (!isFamily(s) && isFamily(cur)) familyOk.remove(s.g)
         peers(s)
         // Stop sending messages to anyone who isn't in it any more.
         val gone2 = cur.members.map { it.k }.filter { !s.has(it) }.toSet()
@@ -1222,7 +1331,21 @@ class Groups(
         if (gone == "removed" && grp.gone.isEmpty()) host.notice("You were removed from ${s.name}")
         if (gone.isEmpty() && grp.gone.isNotEmpty()) host.notice("You're back in ${s.name}")
         // Two admins changed the same version and mine lost: make my change again on top of the winner.
-        if (s.v == cur.v && cur.by == me && s.by != me) last[s.g]?.takeIf { it.v == cur.v }?.let { changeLocked(s.g, it) }
+        val mine = last[s.g]
+        if (mine != null && (mine.op == "join" || mine.op == "add") && s.by != me) {
+            // A join or add I made, lost to another admin's change made at the same time (whatever its version): made
+            // again on top of it until it shows, unless someone took them out on purpose, or they're banned now.
+            when {
+                s.has(mine.a) || takeOp == "remove" || takeOp == "leave" || bannedLocked(s.g, mine.a) || !s.isAdmin(me) || gone.isNotEmpty() -> last.remove(s.g)
+                else -> changeLocked(s.g, mine)?.let { why ->
+                    last.remove(s.g)
+                    // Can't be made again (full now): they get the state that left them out, so they aren't in a ghost copy.
+                    host.notice(why)
+                    val rid = Proto06.newLogicalId()
+                    out(mine.a, "group", JSONObject().put("t", "state").put("g", s.g).put("id", rid).put("op", "sync").put("state", groups[s.g]!!.state.json()).toString(), rid, s.g)
+                }
+            }
+        } else if (s.v == cur.v && cur.by == me && s.by != me) mine?.takeIf { it.v == cur.v }?.let { changeLocked(s.g, it) }
         replayHeld(s.g)
     }
 
@@ -1451,16 +1574,21 @@ class Groups(
     private inline fun <T> act(f: () -> T): T {
         val r: T
         val send: List<Out>
+        val fam: Boolean
         synchronized(lock) {
             r = f()
             send = queue.toList(); queue.clear()
             prune()
             purgeLeft()
-            save(); publish()
+            save(); fam = publish()
         }
         send.forEach { try { host.send(it) } catch (_: Exception) {} }
+        if (fam) try { host.familyChanged() } catch (_: Exception) {}
         return r
     }
+
+    /** The Family-trusted groups last published, so a change is told once ([Host.familyChanged]). */
+    private var lastFamily: Set<String>? = null
 
     private fun addMsg(m: GMsg) { chats[m.g] = (chats[m.g].orEmpty() + m).takeLast(1000) }
 
@@ -1471,6 +1599,8 @@ class Groups(
     fun addBigVideo(g: String, from: String, fromName: String, id: String, ms: Int): Boolean = act {
         val grp = groups[g] ?: return@act false
         if (grp.readOnly || !grp.state.has(from)) return@act false
+        // Cap g2: nothing shows from someone timed out or banned (and I don't post while I am).
+        if (barredLocked(g, from)) return@act false
         val mine = from == me
         val name = if (mine) host.myName else nameIn(grp.state, from, fromName)
         addMsg(GMsg(id, g, MAIN, from, name, "", mine, now(), photo = id, state = if (mine) "sending" else "", video = ms, big = true))
@@ -1503,11 +1633,22 @@ class Groups(
         val t = now()
         deleted.entries.removeIf { t - it.value > 2 * DAY }
         unsentBy.entries.removeIf { t - it.value.second > 2 * DAY }
+        // An invite to a contact that ran out unanswered: its sender hears so (they'd otherwise think it was ignored).
+        tokens.filter { it.x * 1000 < t && !it.multi && it.to.isNotEmpty() }.forEach { tk ->
+            groups[tk.g]?.takeIf { !it.readOnly && !it.state.has(tk.to) }?.let { grp ->
+                host.notice("Your invite to ${grp.state.name} for ${nameIn(grp.state, tk.to, host.nameOf(tk.to))} ran out unanswered. Invite them again if you like.")
+            }
+        }
         tokens.removeAll { it.x * 1000 < t }
         // Cap j1: links done for a day (expired, used up or revoked) are forgotten.
         links.removeAll { it.off || (it.x != 0L && it.x < t - DAY) || (it.max != 0 && it.uses >= it.max) }
+        invites.filter { it.x * 1000 < t }.forEach { host.notice("${it.fromName}'s invite to ${it.name} ran out. Ask them for a new one.") }
         invites.removeAll { it.x * 1000 < t }
         asked.entries.removeIf { t - it.value > 10 * 60_000 }
+        // A join by a code or link nobody answered in a day (an older admin's app says nothing for a dead one): the
+        // waiting row says to ask again instead of waiting for good.
+        joinAt.keys.retainAll(joining.keys)
+        joinAt.forEach { (g, at) -> if (t - at > JOIN_WAIT_MS && refusals[g] == null && joinNames.containsKey(g)) refusals[g] = "other" }
         answered.entries.removeIf { t - it.value > 10 * 60_000 }
     }
 
@@ -1518,11 +1659,17 @@ class Groups(
      */
     fun pruneOlder(cutoff: (Int) -> Long) {
         val due = synchronized(lock) {
-            chats.any { (g, l) -> val c = cutoff(groups[g]?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT); l.any { it.time < c } }
+            chats.any { (g, l) -> val c = cutoff(groups[g]?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT); l.any { it.time < c } } ||
+                reports.any { (g, l) -> val c = cutoff(groups[g]?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT); l.any { it.time < c } }
         }
         if (!due) return
         act {
             val t = now()
+            // Reports keep what a message said: they go by the same limit.
+            for (g in reports.keys.toList()) {
+                val c = cutoff(groups[g]?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT)
+                reports[g]?.let { l -> if (l.any { it.time < c }) reports[g] = l.filter { it.time >= c } }
+            }
             for (g in chats.keys.toList()) {
                 val c = cutoff(groups[g]?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT)
                 val (old, keep) = chats[g]!!.partition { it.time < c }
@@ -1542,7 +1689,20 @@ class Groups(
         deleted.clear(); unsentBy.clear(); unread.clear(); held.clear(); tries.clear(); heldAt.clear(); publishedAt.clear(); receipted.clear()
     }
 
-    private fun publish() {
+    /** Messages not seen yet in [g] (any channel). */
+    fun hasUnseen(g: String): Boolean = synchronized(lock) { chats[g].orEmpty().any { !it.mine && !it.seen && it.unsent.isEmpty() } }
+
+    /** True when the groups trusted as Family changed. */
+    private fun publish(): Boolean {
+        // Left, removed or gone: its Family trust goes with it (joining again asks again).
+        familyOk.retainAll { g -> groups[g]?.let { !it.readOnly } == true }
+        familyNo.retainAll(groups.keys)
+        familyBy.keys.retainAll(groups.keys)
+        _familyAsks.value = groups.values.filter { !it.readOnly && isFamily(it.state) && it.g !in familyOk && it.g !in familyNo }
+            .map { FamilyAsk(it.g, it.state.name, familyBy[it.g] ?: "Someone") }
+        val fam = groups.keys.filter { trustedLocked(it) }.toSet()
+        val famChanged = lastFamily != null && lastFamily != fam
+        lastFamily = fam
         _groups.value = LinkedHashMap(groups.filterValues { it.gone != LEAVING })
         _chats.value = HashMap(chats)
         _invites.value = invites.toList()
@@ -1555,6 +1715,7 @@ class Groups(
             .map { (g, n) -> Waiting(g, n.first, n.second, refusals[g].orEmpty()) }
         reports.keys.retainAll(groups.keys)
         _reports.value = HashMap(reports)
+        return famChanged
     }
 
     // ------------------------------------------------------------------ storage
@@ -1565,7 +1726,12 @@ class Groups(
             o.put("groups", JSONArray().apply { groups.values.forEach { gr ->
                 put(JSONObject().put("s", gr.state.json()).put("h", JSONArray().apply { gr.history.forEach { put(it.json()) } }).put("gone", gr.gone))
             } })
-            o.put("tokens", JSONArray().apply { tokens.forEach { put(JSONObject().put("i", it.i).put("g", it.g).put("x", it.x).put("m", it.multi)) } })
+            o.put("tokens", JSONArray().apply { tokens.forEach { put(JSONObject().put("i", it.i).put("g", it.g).put("x", it.x).put("m", it.multi)
+                .apply { if (it.to.isNotEmpty()) put("to", it.to) }) } })
+            // Family consent (1.54): its presence also says the migration ran.
+            o.put("famOk", JSONArray(familyOk.toList())).put("famNo", JSONArray(familyNo.toList()))
+            o.put("famBy", JSONObject().apply { familyBy.forEach { (g, n) -> put(g, n) } })
+            o.put("joinAt", JSONObject().apply { joinAt.forEach { (g, t) -> put(g, t) } })
             o.put("invites", JSONArray().apply { invites.forEach { put(JSONObject().put("g", it.g).put("n", it.name).put("f", it.from).put("fn", it.fromName)
                 .put("i", it.inv).put("x", it.x).put("s", it.state.json())) } })
             o.put("joining", JSONObject().apply { joining.forEach { (g, k) -> put(g, k) } })
@@ -1582,7 +1748,7 @@ class Groups(
             o.put("refused", JSONObject().apply { refusals.forEach { (g, w) -> put(g, w) } })
             o.put("reports", JSONObject().apply { reports.forEach { (g, l) -> put(g, JSONArray().apply { l.forEach { r ->
                 put(JSONObject().put("id", r.id).put("f", r.from).put("fn", r.fromName).put("k", r.k).put("kn", r.kName).put("m", r.msg)
-                    .put("ch", r.ch).put("x", r.text).put("t", r.time).put("rd", r.read)) } }) } })
+                    .put("ch", r.ch).put("x", r.text).put("t", r.time).put("rd", r.read).apply { if (!r.checked) put("nc", true) }) } }) } })
             o.put("lists", JSONObject().apply { linkLists.forEach { (g, l) -> put(g, JSONArray().apply { l.forEach { put(JSONObject().put("id", it.id)
                 .put("by", it.by).put("bn", it.byName).put("x", it.x).put("max", it.max).put("uses", it.uses).put("c", it.counter)) } }) } })
             writeIfChanged(FILE, o.toString())
@@ -1615,17 +1781,33 @@ class Groups(
 
     private fun strings(a: JSONArray?): Set<String> = if (a == null) emptySet() else (0 until a.length()).map { a.getString(it) }.toSet()
 
+    /**
+     * Each store file loads on its own. One that can't be read whole (a newer Muninn's, or damaged) is copied aside as
+     * "<name>.unreadable" and never saved over this run ([loadFailed]), so going back to stable or a bad restore loses
+     * nothing; the groups that did load still show.
+     */
     private fun load() {
-        try {
-            read(FILE)?.let { text ->
-                val o = JSONObject(text)
+        loadFile(FILE) { text ->
+                val o = SafeJson.obj(text)
+                var bad: Exception? = null
                 o.optJSONArray("groups")?.let { a -> for (i in 0 until a.length()) {
-                    val x = a.getJSONObject(i)
-                    val s = Proto06.parseState(x.getJSONObject("s"))
-                    val h = x.optJSONArray("h")?.let { hs -> (0 until hs.length()).map { Proto06.parseState(hs.getJSONObject(it)) } }.orEmpty()
-                    groups[s.g] = Group(s, h, x.optString("gone"))
+                    // One group that can't be read doesn't stop the others.
+                    try {
+                        val x = a.getJSONObject(i)
+                        val s = Proto06.parseState(x.getJSONObject("s"))
+                        val h = x.optJSONArray("h")?.let { hs -> (0 until hs.length()).mapNotNull { try { Proto06.parseState(hs.getJSONObject(it)) } catch (_: Exception) { null } } }.orEmpty()
+                        groups[s.g] = Group(s, h, x.optString("gone"))
+                    } catch (e: Exception) { bad = e }
                 } }
-                o.optJSONArray("tokens")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { tokens.add(Token(it.getString("i"), it.getString("g"), it.getLong("x"), it.optBoolean("m"))) } }
+                o.optJSONArray("tokens")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { tokens.add(Token(it.getString("i"), it.getString("g"), it.getLong("x"), it.optBoolean("m"), it.optString("to"))) } }
+                // Family consent: kept as it was. No record yet (the first start of 1.54): every Family group already here
+                // was Family before this version, set up by this family, so it stays trusted without asking.
+                val famOk = o.optJSONArray("famOk")
+                if (famOk != null) familyOk.addAll(strings(famOk))
+                else familyOk.addAll(groups.values.filter { !it.readOnly && isFamily(it.state) }.map { it.g })
+                familyNo.addAll(strings(o.optJSONArray("famNo")))
+                o.optJSONObject("famBy")?.let { j -> j.keys().forEach { familyBy[it] = j.optString(it) } }
+                o.optJSONObject("joinAt")?.let { j -> j.keys().forEach { joinAt[it] = j.optLong(it) } }
                 o.optJSONArray("invites")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let {
                     invites.add(Invite(it.getString("g"), it.optString("n"), it.getString("f"), it.optString("fn"), it.optString("i"), it.optLong("x"), Proto06.parseState(it.getJSONObject("s"))))
                 } }
@@ -1639,7 +1821,7 @@ class Groups(
                 o.optJSONObject("reports")?.let { j -> j.keys().forEach { g -> j.optJSONArray(g)?.let { a ->
                     reports[g] = (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { r ->
                         Report(r.optString("id"), g, r.optString("f"), r.optString("fn"), r.optString("k"), r.optString("kn"), r.optString("m"),
-                            r.optString("ch"), r.optString("x"), r.optLong("t"), r.optBoolean("rd")) } }
+                            r.optString("ch"), r.optString("x"), r.optLong("t"), r.optBoolean("rd"), !r.optBoolean("nc")) } }
                 } } }
                 o.optJSONObject("made")?.let { j -> j.keys().forEach { madeLinks[it] = j.getString(it) } }
                 // Cap g2: kept as they were taken (the signature was checked when each came); the shape is checked again.
@@ -1655,9 +1837,10 @@ class Groups(
                 o.optJSONObject("lists")?.let { j -> j.keys().forEach { g -> val a = j.getJSONArray(g); linkLists[g] = (0 until a.length()).map { a.getJSONObject(it) }.map {
                     LinkInfo(it.getString("id"), g, it.getString("by"), it.optString("bn"), it.optLong("x"), it.optInt("max"), it.optInt("uses"), it.getString("c"),
                         madeLinks[it.getString("id")] ?: "") } } }
-            }
-            read(CHATS)?.let { text ->
-                val o = JSONObject(text)
+                bad?.let { throw it }
+        }
+        loadFile(CHATS) { text ->
+                val o = SafeJson.obj(text)
                 o.keys().forEach { g -> val a = o.getJSONArray(g); chats[g] = (0 until a.length()).map { a.getJSONObject(it) }.map {
                     GMsg(it.getString("id"), it.getString("g"), it.optString("ch", MAIN), it.getString("f"), it.optString("n"), it.optString("x"), it.optBoolean("m"),
                         it.optLong("t"), it.optString("ph"), it.optInt("vo"), it.optString("u"), it.optString("st"),
@@ -1668,16 +1851,24 @@ class Groups(
                         it.optJSONObject("ra")?.let { ra -> ra.keys().asSequence().associateWith { k -> ra.optLong(k) } }.orEmpty(),
                         strings(it.optJSONArray("nrd")), gif = it.optBoolean("gif"), part = it.optString("ps"), partAt = it.optInt("pi"), big = it.optBoolean("vb"))
                 } }
-            }
-            read(OUTS)?.let { text ->
-                val a = JSONArray(text)
+        }
+        loadFile(OUTS) { text ->
+                val a = SafeJson.arr(text)
                 for (i in 0 until a.length()) a.getJSONObject(i).let {
                     outs.add(Out(it.getString("e"), it.getString("to"), it.getString("r"), it.optString("p"), it.optString("id"), it.getString("g"), it.optLong("t"),
                         photo = it.optString("ph"), voice = it.optInt("vo"), ch = it.optString("ch"),
                         video = it.optInt("vd"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an"), gif = it.optBoolean("gif")))
                 }
-            }
-        } catch (_: Exception) {}
+        }
+    }
+
+    private fun loadFile(name: String, use: (String) -> Unit) {
+        val text = try { read(name) } catch (_: Exception) { null } ?: return
+        try { use(text) } catch (e: Exception) {
+            try { write("$name.unreadable", text) } catch (_: Exception) {}
+            unloaded.add(name)
+            try { loadFailed(name) } catch (_: Exception) {}
+        }
     }
 
     companion object {
@@ -1760,6 +1951,10 @@ class Groups(
         /** [Group.gone] after Leave (one step): hidden, kept only to deliver the leave. */
         const val LEAVING = "leaving"
         const val DAY = 86_400_000L
+        /** An invite to a contact lasts as long as a Folk message: 7 days (a group code stays an hour, Proto06.CODE_MS). */
+        const val INVITE_MS = 7 * DAY
+        /** A join by a code or link nobody answered stops waiting after this (the row says to ask again). */
+        const val JOIN_WAIT_MS = DAY
         /** 5 s, 10 s, 20 s, 1 min, then every 5 min, like private messages (until relays hold it, see NetLogic). */
         val RETRY = NetLogic.RETRY
         /** Names and text from others: no control characters, at most [limit] characters. */

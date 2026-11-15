@@ -3,6 +3,7 @@
 #include "../busy.h"
 #include "winstart.h"
 #include "crashlog.h"
+#include "../system.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -85,42 +86,6 @@ bool sameHost(const QString &host)
     return host.isEmpty() || here.isEmpty() || host.compare(here, Qt::CaseInsensitive) == 0;
 }
 
-#ifndef Q_OS_WIN
-// The other Flatpak copies of Huginn (each runs in its own sandbox, so their process ids aren't visible here).
-void endOtherFlatpakCopies()
-{
-    QString mine;
-    QFile info(QStringLiteral("/.flatpak-info"));
-    if (info.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        const QList<QByteArray> lines = info.readAll().split('\n');
-        for (const QByteArray &l : lines)
-            if (l.startsWith("instance-id="))
-                mine = QString::fromUtf8(l.mid(12)).trimmed();
-    }
-    if (mine.isEmpty())
-        return;   // without knowing which copy is this one, none is ended
-    QProcess ps;
-    ps.start(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("ps"), QStringLiteral("--columns=instance,application")});
-    if (!ps.waitForFinished(3000)) {
-        ps.kill();
-        ps.waitForFinished(1000);
-        return;
-    }
-    const QStringList rows = QString::fromUtf8(ps.readAllStandardOutput()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-    for (const QString &row : rows) {
-        const QStringList cols = row.simplified().split(QLatin1Char(' '));
-        if (cols.size() < 2 || cols.at(1) != QLatin1String(kAppId) || cols.at(0) == mine)
-            continue;
-        qWarning("single instance: ending a Huginn that doesn't answer");
-        QProcess kill;
-        kill.start(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("kill"), cols.at(0)});
-        if (!kill.waitForFinished(3000)) {
-            kill.kill();
-            kill.waitForFinished(1000);
-        }
-    }
-}
-#endif
 }
 
 SingleInstance::SingleInstance(QObject *parent, const QString &where)
@@ -241,11 +206,13 @@ QString SingleInstance::problemText() const
             return QStringLiteral("Huginn is already open under another Windows account on this computer, using this same folder. "
                                   "Close it there first, or give each account its own copy of Huginn.");
     }
-    return QStringLiteral("Huginn is already open%1 but isn't answering. Wait a moment, or end Huginn in Task Manager, then open it again.")
+    return QStringLiteral("Huginn is already open%1 and is still starting or busy. Wait a moment, then open it again. If it stays like "
+                          "this for minutes, end Huginn in Task Manager, then open it again.")
         .arg(pid > 0 ? QStringLiteral(" (process %1)").arg(pid) : QString());
 #else
     // In the Flatpak each copy has its own process numbers, so none is named.
-    return QStringLiteral("Huginn is already open%1 but isn't answering. Wait a moment, or end Huginn in your system monitor, then open it again.")
+    return QStringLiteral("Huginn is already open%1 and is still starting or busy. Wait a moment, then open it again. If it stays like "
+                          "this for minutes, end Huginn in your system monitor, then open it again.")
         .arg(pid > 0 && !inFlatpak() ? QStringLiteral(" (process %1)").arg(pid) : QString());
 #endif
 }
@@ -283,7 +250,23 @@ void SingleInstance::listen()
                 if (line.isEmpty() && !now && s->state() == QLocalSocket::ConnectedState)
                     return;
                 s->setProperty("huginnShown", true);
-                const QByteArray first = line.split('\n').value(0).trimmed();
+                const QList<QByteArray> lines = line.split('\n');
+                const QByteArray first = lines.value(0).trimmed();
+                // Game mode: Steam started a new copy, but this one wasn't started by Steam (an older restart ran it on
+                // the host), so its window can't come forward there. It makes way: saved and closed, the new copy
+                // (which Steam shows) takes over. Never silently gone while this one stays out of sight.
+                bool fromSteam = false;
+                for (const QByteArray &l : lines)
+                    fromSteam = fromSteam || l.trimmed() == "from-steam";
+                if (fromSteam && System::detectGameMode() && !startedBySteam() && !m_yielding) {
+                    m_yielding = true;
+                    CrashLog::note(QStringLiteral("single instance: Steam started Huginn again; this copy (not started by Steam) makes way"));
+                    s->write("yield\n");
+                    s->flush();
+                    // exit(), not quit(): the window's close question isn't asked. Everything is saved on aboutToQuit.
+                    QTimer::singleShot(0, qApp, [] { QCoreApplication::exit(0); });
+                    return;
+                }
                 if (first.startsWith("show "))
                     useActivationToken(first.mid(5).trimmed());
                 bringToFront();
@@ -337,7 +320,7 @@ void SingleInstance::markClosing()
     }).detach();
 }
 
-bool SingleInstance::knock()
+SingleInstance::Knock SingleInstance::knock()
 {
 #ifdef Q_OS_WIN
     // We were just started by the user, so we may hand the foreground to the running copy.
@@ -357,24 +340,64 @@ bool SingleInstance::knock()
                 line += token;
             }
 #endif
+            // Game mode, started by Steam: a running copy Steam didn't start is asked to make way (listen()).
+            const bool fromSteam = System::detectGameMode() && startedBySteam();
+            if (fromSteam)
+                line += "\nfrom-steam";
             s.write(line + '\n');
             s.waitForBytesWritten(500);
-            // Alive: it answers, or (a copy that never answers) it hangs up at once.
-            const bool answered = s.waitForReadyRead(kAnswerMs) || s.state() != QLocalSocket::ConnectedState;
+            // Alive: it answers, or (a copy that never answers) it hangs up at once. A copy that is still starting (the
+            // first start's move from AppData, a long chat history, the window loading on a handheld) holds the lock
+            // before it can answer: waited for up to kStartingMs, unless it is closing (that one never answers).
+            QElapsedTimer waited;
+            waited.start();
+            bool answered = false;
+            for (;;) {
+                if (s.waitForReadyRead(kAnswerMs) || s.state() != QLocalSocket::ConnectedState) {
+                    answered = true;
+                    break;
+                }
+                if (QFile::exists(m_closing) || waited.elapsed() >= kStartingMs)
+                    break;
+            }
+            if (!answered) {
+                s.abort();
+                return NoAnswer;
+            }
+            // "ok" comes at once; "yield" follows when it is closing for this copy (an older copy never says it).
+            QByteArray got = s.readAll();
+            QElapsedTimer t;
+            t.start();
+            while (fromSteam && !got.contains("yield") && s.state() == QLocalSocket::ConnectedState && t.elapsed() < 1500) {
+                if (s.waitForReadyRead(int(1500 - t.elapsed())))
+                    got += s.readAll();
+            }
+            got += s.readAll();
             s.abort();
-            return answered;
+            return got.contains("yield") ? Yielded : Answered;
         }
         QThread::msleep(300);
     }
-    return false;
+    return NoAnswer;
 }
 
 bool SingleInstance::takeOverStaleLock()
 {
     // Someone holds the lock: knock so they come forward. An answer means it runs: this copy quits.
-    if (knock()) {
+    const Knock answer = knock();
+    if (answer == Answered) {
         m_outcome = Shown;
         return false;
+    }
+    // It is closing for this copy (game mode, see knock()): waited for as a restarted copy waits.
+    if (answer == Yielded) {
+        if (m_lock->tryLock(kRestartWaitMs)) {
+            CrashLog::note(QStringLiteral("single instance: took over from a copy Steam didn't start"));
+            return true;
+        }
+        if (cantWrite(m_lock))
+            return false;
+        qWarning("single instance: the copy making way is still running");
     }
     // Round 17: a lock taken on another computer (a synced folder, like OneDrive or Dropbox, brought it here; or a
     // shared one) is never deleted as stale: no process here holds it, but that computer may well be running on these
@@ -525,9 +548,8 @@ void SingleInstance::endHolder()
             return;
         }
     }
-    // A copy in another Flatpak sandbox: its process id means nothing here.
-    if (inFlatpak())
-        endOtherFlatpakCopies();
+    // A copy in another Flatpak sandbox: its process id means nothing here, and no host command ends it (Huginn runs
+    // host commands only to update). Every copy that can be stuck closing watches for the end request itself.
 }
 #endif
 
@@ -545,8 +567,27 @@ void SingleInstance::release()
     }
 }
 
+bool SingleInstance::startedBySteam()
+{
+    return !qEnvironmentVariableIsEmpty("SteamGameId") || !qEnvironmentVariableIsEmpty("SteamAppId");
+}
+
+bool SingleInstance::reopenFromSteam()
+{
+    return inFlatpak() && System::detectGameMode();
+}
+
 bool SingleInstance::startAgain(const QString &program, const QString &workDir, const QStringList &env, const QStringList &args)
 {
+    // Game mode: flatpak-spawn --host would start the new copy outside Steam, where its window never comes forward
+    // and a later start from Steam only finds it hidden. The caller closes and asks to be opened from Steam instead.
+    if (inFlatpak() && program.isEmpty() && reopenFromSteam()) {
+        qWarning("single instance: not starting again outside Steam");
+        return false;
+    }
+    // Outside game mode the Flatpak starts its new copy on the host (flatpak-spawn --host flatpak run): a copy started
+    // inside this sandbox would end with it. This, and installing an update, are why the Flatpak may talk to
+    // org.freedesktop.Flatpak.
     QProcess p;
     if (inFlatpak() && program.isEmpty()) {
         p.setProgram(QStringLiteral("flatpak-spawn"));

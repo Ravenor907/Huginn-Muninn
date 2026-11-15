@@ -4,6 +4,8 @@ import worker, {
   handle, addressGroup, RelayLimits, SQL, POW_BITS, TOKEN_TTL, powOk, makeToken, legacyOver, resetMemory, dailyMinutes,
   TTL_RENEW, TTL_OLD, ID_MINUTES, YOUNG_IP_MINUTES, LEGACY_ID_MINUTES, LEGACY_IP_MINUTES, LEGACY_POOL_MINUTES, DAILY_MINUTES,
   HOUR_SHARE, SOFT_SHARE, YOUNG_S, ISOLATE_RATE, REG_PER_IP_DAILY, REG_DAILY, plan, METER_DAY_MB, METER_MAX_MB,
+  ORIGIN_MINUTES, originOf, readToken, KEEP_S, METER_MONTH_MB, METER_IP_DAY_MB, METER_REPORTS_ID, METER_REPORTS_DAILY,
+  METER_STOP_MB,
 } from "./worker.js";
 
 const SECRET = "test-app-secret";
@@ -28,6 +30,7 @@ class FakeSql {
     } else if (q === SQL.meterAdd) {
       this.months = this.months || new Map();
       this.months.set(b[0], (this.months.get(b[0]) || 0) + b[1]);
+      this.written++;
     } else if (q === SQL.meterRead) {
       const n = this.months && this.months.get(b[0]);
       if (n !== undefined) out.push({ mb: n });
@@ -119,8 +122,8 @@ function login(id, opts = {}) {
 }
 
 // A token the test Worker would have issued to an install that registered at `since` (default: long ago).
-async function tokenFor(e, id, since = NOW - 30 * 86400, exp = NOW + TOKEN_TTL) {
-  return makeToken(e, id, exp, since);
+async function tokenFor(e, id, since = NOW - 30 * 86400, exp = NOW + TOKEN_TTL, origin = undefined) {
+  return makeToken(e, id, exp, since, origin);
 }
 
 function hexId(i, pad = "c") { return i.toString(16).padStart(64, pad); }
@@ -232,11 +235,11 @@ await test("bodies over 1 KB are 413", async () => {
 
 // ---- Per install (M5: tied to the install token, stricter without one).
 
-await test("per install with a token: 900 minutes a day (90 renewing logins, or 30 old ones)", async () => {
-  assert.equal(ID_MINUTES, 900);
+await test("per install with a token: 600 minutes a day (60 renewing logins, or 20 old ones)", async () => {
+  assert.equal(ID_MINUTES, 600);
   const e = env();
   const tok = await tokenFor(e, ID);
-  for (let i = 0; i < 90; i++) assert.equal((await call(e, login(ID, { tok, rn: 1 }))).status, 200, "login " + i);
+  for (let i = 0; i < 60; i++) assert.equal((await call(e, login(ID, { tok, rn: 1 }))).status, 200, "login " + i);
   const r = await call(e, login(ID, { tok, rn: 1 }));
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "id_limit");
@@ -246,9 +249,9 @@ await test("per install with a token: 900 minutes a day (90 renewing logins, or 
   assert.equal((await call(e, login(other, { tok: await tokenFor(e, other), rn: 1 }))).status, 200);
   const tomorrow = NOW + 86400;
   assert.equal((await call(e, login(ID, { tok, rn: 1, now: tomorrow }), { now: tomorrow })).status, 200);
-  // Old (30 minute) logins: 30 of them.
+  // Old (30 minute) logins: 20 of them.
   const e2 = env();
-  for (let i = 0; i < 30; i++) assert.equal((await call(e2, login(ID, { tok }))).status, 200);
+  for (let i = 0; i < 20; i++) assert.equal((await call(e2, login(ID, { tok }))).status, 200);
   assert.equal((await call(e2, login(ID, { tok }))).data.error, "id_limit");
 });
 
@@ -283,10 +286,12 @@ await test("per install without a token: 60 minutes a day (2 logins)", async () 
 await test("a shared network (carrier NAT, a school): installs with a token are counted by install, not by address", async () => {
   const lim = new FakeLimits();
   const e = env(lim);
-  // 200 established installs behind one address, one old (30 minute) login each: 6000 minutes from one /24.
+  // 200 established installs behind one address (each registered at its own home), one old (30 minute) login each:
+  // 6000 minutes from one /24.
   for (let i = 0; i < 200; i++) {
     const id = hexId(i);
-    assert.equal((await call(e, login(id, { tok: await tokenFor(e, id) }), { ip: "203.0.113.1" })).status, 200, "install " + i);
+    const tok = await tokenFor(e, id, NOW - 30 * 86400, NOW + TOKEN_TTL, hexId(i).slice(-16));
+    assert.equal((await call(e, login(id, { tok }), { ip: "203.0.113.1" })).status, 200, "install " + i);
   }
   assert.ok(!lim.keys().some((k) => k.includes("|y:") || k.includes("|i:")));
 });
@@ -403,7 +408,7 @@ await test("requests at the same moment can't go over a cap", async () => {
   const e = env();
   const tok = await tokenFor(e, ID);
   const same = await Promise.all(Array.from({ length: 120 }, () => call(e, login(ID, { tok, rn: 1 }))));
-  assert.equal(same.filter((r) => r.status === 200).length, 90);
+  assert.equal(same.filter((r) => r.status === 200).length, 60);
   assert.ok(same.filter((r) => r.status === 429).every((r) => r.data.error === "id_limit"));
   const e2 = env();
   const toks = await Promise.all(Array.from({ length: 70 }, (_, i) => tokenFor(e2, hexId(i, "9"), NOW - 3600)));
@@ -496,14 +501,15 @@ await test("renewal: a two-hour call is 12 renewing logins and 120 minutes, and 
   const reg = await call(e, { ...login(ID), pow: solve(ID, NOW) }, { path: "/register" });
   assert.equal(reg.status, 200);
   let tok = reg.data.tok;
-  assert.match(tok, new RegExp("^" + (NOW + TOKEN_TTL) + "\\." + NOW + "\\.[0-9a-f]{32}$"));
+  const origin = await originOf(e, "203.0.113.7");
+  assert.match(tok, new RegExp("^" + (NOW + TOKEN_TTL) + "\\." + NOW + "\\." + origin + "\\.[0-9a-f]{32}$"));
   // Each login ends after 600 s; the app renews about 2 minutes before.
   for (let i = 0; i < 12; i++) {
     const t = NOW + i * 480;
     const r = await call(e, login(ID, { tok, rn: 1, now: t }), { now: t });
     assert.equal(r.status, 200);
     assert.equal(r.data.ttl, 600);
-    assert.equal(r.data.tok, await makeToken(e, ID, t + TOKEN_TTL, NOW));
+    assert.equal(r.data.tok, await makeToken(e, ID, t + TOKEN_TTL, NOW, origin));
     tok = r.data.tok;
   }
   assert.equal(lim.sql.rows.get(DAY + "|u:" + ID), 120);
@@ -597,24 +603,24 @@ await test("junk costs no Durable Object request, no TURN login and no row", asy
   assert.equal(upstreamCalls.length, 0);
 });
 
-await test("each token login writes 3 rows (4 while young), a token-less one 5, a registration 2; earlier days are wiped", async () => {
+await test("each token login writes 4 rows (5 while young), a token-less one 5, a registration 2; earlier days are wiped", async () => {
   const lim = new FakeLimits();
   const e = env(lim);
   const tok = await tokenFor(e, ID);
   await call(e, login(ID, { tok, rn: 1 }));
-  assert.equal(lim.sql.written, 3);
+  assert.equal(lim.sql.written, 4);
   await call(e, login(ID));
-  assert.equal(lim.sql.written, 8);
+  assert.equal(lim.sql.written, 9);
   await call(e, { ...login(ID), pow: solve(ID, NOW) }, { path: "/register" });
-  assert.equal(lim.sql.written, 10);
+  assert.equal(lim.sql.written, 11);
   const young = "b".repeat(64);
   await call(e, login(young, { tok: await tokenFor(e, young, NOW - 3600), rn: 1 }));
-  assert.equal(lim.sql.written, 14);
+  assert.equal(lim.sql.written, 16);
   assert.equal(lim.calls, 4);
   const tomorrow = NOW + 86400;
   await call(e, login(ID, { tok, rn: 1, now: tomorrow }), { now: tomorrow });
   const day2 = new Date(tomorrow * 1000).toISOString().slice(0, 10);
-  assert.equal(lim.keys().length, 3);
+  assert.equal(lim.keys().length, 4);
   assert.ok(lim.keys().every((k) => k.startsWith(day2 + "|")));
 });
 
@@ -635,9 +641,9 @@ await test("the SQL runs on real SQLite", async () => {
   const obj = new RelayLimits({ storage: { sql } });
   const ip = "0".repeat(32);
   const q = { day: DAY, hour: 8, sec: 28800, id: ID, ip, kind: "tok", cost: 10 };
-  for (let i = 0; i < 90; i++) assert.equal(obj.take(q).result, "ok");
+  for (let i = 0; i < 60; i++) assert.equal(obj.take(q).result, "ok");
   assert.deepEqual(obj.take(q), { result: "id", retry: TO_DAY });
-  assert.equal(db.prepare("SELECT n FROM counts WHERE k = ?").get("u:" + ID).n, 900);
+  assert.equal(db.prepare("SELECT n FROM counts WHERE k = ?").get("u:" + ID).n, 600);
   assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 3);
   for (let i = 0; i < 2; i++) assert.equal(obj.take({ ...q, kind: "legacy", cost: 30, id: "b".repeat(64) }).result, "ok");
   assert.equal(obj.take({ ...q, kind: "legacy", cost: 30, id: "b".repeat(64) }).result, "id");
@@ -646,6 +652,17 @@ await test("the SQL runs on real SQLite", async () => {
   assert.equal(db.prepare("SELECT n FROM counts WHERE k = ?").get("y:" + ip).n, 10);
   assert.equal(obj.take({ ...q, day: "2099-01-01" }).result, "ok");
   assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 3);
+  // The meter, its per-install month share, the origin row and the stop for files.
+  const m = { month: "2099-01", day: "2099-01-01", id: ID, ip, mb: 300 };
+  assert.deepEqual(obj.meter(m), { mb: 300 });
+  assert.deepEqual(obj.meter({ ...m, id: "b".repeat(64) }), { mb: 600 });
+  assert.equal(db.prepare("SELECT mb FROM meter WHERE month = ?").get("2099-01:" + ID).mb, 300);
+  assert.equal(obj.take({ ...q, day: "2099-01-01", o: "1".repeat(32) }).result, "ok");
+  assert.equal(db.prepare("SELECT n FROM counts WHERE k = ?").get("o:" + "1".repeat(32)).n, 10);
+  db.prepare("UPDATE meter SET mb = ? WHERE month = ?").run(METER_STOP_MB, "2099-01");
+  assert.equal(obj.take({ ...q, day: "2099-01-01", files: true, month: "2099-01" }).result, "month");
+  assert.deepEqual(obj.meter({ ...m, month: "2099-02", day: "2099-02-01" }), { mb: 300 });
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM meter WHERE month < '2099-02'").get().c, 0);
 });
 
 await test("the limits object refuses malformed questions", async () => {
@@ -729,10 +746,11 @@ await test("register: proof of work gives a token good for 7 days, carrying when
   assert.equal(r.status, 200);
   assert.equal(r.data.exp, NOW + TOKEN_TTL);
   assert.equal(TOKEN_TTL, 7 * 86400);
-  assert.match(r.data.tok, /^\d+\.\d+\.[0-9a-f]{32}$/);
-  assert.equal(r.data.tok, await makeToken(env(), ID, NOW + TOKEN_TTL, NOW));
+  assert.match(r.data.tok, /^\d+\.\d+\.[0-9a-f]{16}\.[0-9a-f]{32}$/);
+  const origin = await originOf(env(), "203.0.113.7");
+  assert.equal(r.data.tok, await makeToken(env(), ID, NOW + TOKEN_TTL, NOW, origin));
   // Worker-signed with its own secret: another Worker secret gives another token.
-  assert.notEqual(r.data.tok, await makeToken(env(new FakeLimits(), { TURN_KEY_API_TOKEN: "other" }), ID, NOW + TOKEN_TTL, NOW));
+  assert.notEqual(r.data.tok, await makeToken(env(new FakeLimits(), { TURN_KEY_API_TOKEN: "other" }), ID, NOW + TOKEN_TTL, NOW, origin));
 });
 
 await test("register: no or wrong proof of work, or a bad signature, is refused", async () => {
@@ -788,7 +806,7 @@ await test("a login with a token renews it, and its budget is not the token-less
   assert.equal(r.status, 200);
   assert.equal(r.data.username, "user123");
   assert.equal(r.data.exp, later + TOKEN_TTL);
-  assert.equal(r.data.tok, await makeToken(e, ID, later + TOKEN_TTL, NOW));
+  assert.equal(r.data.tok, await makeToken(e, ID, later + TOKEN_TTL, NOW, await originOf(e, "203.0.113.7")));
   // A login without a token gets no token back.
   const plain = await call(env(), login(ID));
   assert.equal(plain.data.tok, undefined);
@@ -796,7 +814,7 @@ await test("a login with a token renews it, and its budget is not the token-less
   const v1 = await makeToken(e, ID, NOW + 100);
   const r1 = await call(e, login(ID, { tok: v1 }), { ip: "192.0.2.5" });
   assert.equal(r1.status, 200);
-  assert.equal(r1.data.tok, await makeToken(e, ID, NOW + TOKEN_TTL, NOW + 100 - TOKEN_TTL));
+  assert.equal(r1.data.tok, await makeToken(e, ID, NOW + TOKEN_TTL, NOW + 100 - TOKEN_TTL, await originOf(e, "192.0.2.5")));
 });
 
 await test("tokens: another id's, forged or run out are refused", async () => {
@@ -869,10 +887,175 @@ await test("the month's count starts over in a new month, and costs no TURN logi
   const calls = upstreamCalls.length;
   await call(e, { ...login(ID, { tok }), mb: 700 }, { path: "/meter" });
   const later = NOW + 40 * 86400;
-  const tok2 = await tokenFor(e, ID, later - 86400, later + TOKEN_TTL);
+  const tok2 = await tokenFor(e, ID, later - 3 * 86400, later + TOKEN_TTL);
   const r = await call(e, { ...login(ID, { tok: tok2, now: later }), mb: 1 }, { path: "/meter", now: later });
   assert.equal(r.data.mb, 1);
   assert.equal(upstreamCalls.length, calls);
+});
+
+// ---- Relay meter abuse and the call relay's budgets (1.54 break test).
+
+const meter = (e, id, tok, mb, opts = {}) => call(e, { ...login(id, { tok, now: opts.now }), mb }, { ...opts, path: "/meter" });
+
+await test("meter: a young install's report waits (nothing written), asking works, and it counts once 2 days old", async () => {
+  const lim = new FakeLimits();
+  const e = env(lim);
+  const tok = await tokenFor(e, ID, NOW - 3600);
+  const r = await meter(e, ID, tok, 500);
+  assert.equal(r.status, 429);
+  assert.equal(r.data.error, "meter_wait");
+  assert.equal(r.data.retry, YOUNG_S - 3600);
+  assert.equal(lim.calls, 0);
+  assert.equal(lim.sql.written, 0);
+  assert.equal((await meter(e, ID, tok, 0)).data.mb, 0);
+  const later = NOW + YOUNG_S;
+  const tok2 = await tokenFor(e, ID, NOW - 3600, later + TOKEN_TTL);
+  assert.equal((await meter(e, ID, tok2, 500, { now: later })).data.mb, 500);
+});
+
+await test("meter: ten fake installs reporting all they can from one address group add 30 GB, not 950", async () => {
+  assert.equal(METER_DAY_MB, 10000);
+  assert.equal(METER_IP_DAY_MB, 30000);
+  const e = env();
+  let last;
+  for (let i = 0; i < 10; i++) {
+    const id = hexId(i, "7");
+    const tok = await tokenFor(e, id);
+    for (let j = 0; j < 20; j++) last = await meter(e, id, tok, METER_MAX_MB, { ip: "203.0.113." + (i + 1) });
+  }
+  assert.equal(last.status, 200);
+  assert.equal(last.data.mb, METER_IP_DAY_MB);
+  // Even from ten address groups, each install stops at 10 GB a day and 50 GB a month: 950 GB takes 19 aged installs
+  // reporting for 5 days or more.
+  resetMemory();
+  const e2 = env();
+  for (let i = 0; i < 10; i++) {
+    const id = hexId(i, "7");
+    const tok = await tokenFor(e2, id);
+    for (let j = 0; j < 20; j++) last = await meter(e2, id, tok, METER_MAX_MB, { ip: "198.51." + (i + 1) + ".1" });
+  }
+  assert.equal(last.data.mb, 10 * METER_DAY_MB);
+  assert.ok(METER_STOP_MB / METER_MONTH_MB >= 19);
+});
+
+await test("meter: one install's share of the month stops at 50 GB", async () => {
+  assert.equal(METER_MONTH_MB, 50000);
+  const e = env();
+  let last;
+  // 2027-01-15 to 2027-01-21: seven days of the most an install may say.
+  for (let d = 0; d < 7; d++) {
+    const t = NOW + d * 86400;
+    const tok = await tokenFor(e, ID, NOW - 30 * 86400, t + TOKEN_TTL);
+    for (let j = 0; j < 3; j++) last = await meter(e, ID, tok, METER_MAX_MB, { now: t });
+  }
+  assert.equal(last.data.mb, METER_MONTH_MB);
+});
+
+await test("meter: at most 100 counted reports a day per install and 1000 for everyone, then meter_limit", async () => {
+  assert.equal(METER_REPORTS_ID, 100);
+  assert.equal(METER_REPORTS_DAILY, 1000);
+  const lim = new FakeLimits();
+  const e = env(lim);
+  const tok = await tokenFor(e, ID);
+  for (let i = 0; i < 100; i++) assert.equal((await meter(e, ID, tok, 1)).status, 200);
+  assert.equal(lim.sql.written, 100 * 6);
+  const r = await meter(e, ID, tok, 1);
+  assert.equal(r.status, 429);
+  assert.equal(r.data.error, "meter_limit");
+  assert.equal(r.data.retry, TO_DAY);
+  // Asking still works.
+  assert.equal((await meter(e, ID, tok, 0)).data.mb, 100);
+  lim.sql.rows.set(DAY + "|mc", 1000);
+  const other = "b".repeat(64);
+  assert.equal((await meter(e, other, await tokenFor(e, other), 1)).data.error, "meter_limit");
+  // A report past the MB caps writes nothing.
+  resetMemory();
+  const lim2 = new FakeLimits();
+  const e2 = env(lim2);
+  lim2.sql.rows.set(DAY + "|m:" + ID, METER_DAY_MB);
+  assert.equal((await meter(e2, ID, tok, 10)).data.mb, 0);
+  assert.equal(lim2.sql.written, 0);
+});
+
+await test("origin: installs registered on one address group share 2400 minutes a day, wherever they log in from", async () => {
+  assert.equal(ORIGIN_MINUTES, 2400);
+  const e = env();
+  // 56 aged installs registered on 203.0.113.0/24 (same origin), logging in from all over: 4 installs' worth.
+  const origin = await originOf(e, "203.0.113.9");
+  let ok = 0;
+  let last;
+  for (let i = 0; i < 56; i++) {
+    const id = hexId(i, "8");
+    const tok = await tokenFor(e, id, NOW - 30 * 86400, NOW + TOKEN_TTL, origin);
+    for (let j = 0; j < 60; j++) {
+      last = await call(e, login(id, { tok, rn: 1 }), { ip: "198.51." + i + "." + (j + 1) });
+      if (last.status === 200) ok++;
+      else break;
+    }
+  }
+  assert.equal(ok * 10, ORIGIN_MINUTES);
+  assert.equal(last.data.error, "ip_limit");
+  assert.equal(last.data.retry, TO_DAY);
+  // Another origin is someone else, and an install's own origin can't be changed in its token.
+  const id = "b".repeat(64);
+  const own = await tokenFor(e, id, NOW - 30 * 86400, NOW + TOKEN_TTL, await originOf(e, "192.0.2.1"));
+  assert.equal((await call(e, login(id, { tok: own, rn: 1 }))).status, 200);
+  const moved = own.replace(/\.[0-9a-f]{16}\./, "." + origin.replace(/^./, origin[0] === "0" ? "1" : "0") + ".");
+  assert.equal((await call(e, login(id, { tok: moved, rn: 1 }))).data.error, "bad_token");
+  // Using up the whole day now takes 21 origins or more.
+  assert.ok(Math.ceil(DAILY_MINUTES / ORIGIN_MINUTES) >= 21);
+});
+
+await test("origin: a token from before origins takes the group of its first login and keeps it", async () => {
+  const e = env();
+  const tok = await tokenFor(e, ID);
+  const r = await call(e, login(ID, { tok, rn: 1 }), { ip: "198.51.100.4" });
+  assert.equal(r.status, 200);
+  const read = await readToken(e, ID, r.data.tok, NOW);
+  assert.equal(read.v, "ok");
+  assert.equal(read.origin, await originOf(e, "198.51.100.4"));
+  const r2 = await call(e, login(ID, { tok: r.data.tok, rn: 1 }), { ip: "192.0.2.9" });
+  assert.equal((await readToken(e, ID, r2.data.tok, NOW)).origin, read.origin);
+  assert.deepEqual(plan("tok", "I", "A", "08", 50000, true, "O").map((x) => x[0]), ["d", "h08", "y:A", "o:O", "u:I"]);
+});
+
+await test("register: an old token (run out less than 30 days ago) keeps its registration time and origin", async () => {
+  assert.equal(KEEP_S, 30 * 86400);
+  const e = env();
+  const origin = await originOf(e, "192.0.2.1");
+  const old = await tokenFor(e, ID, NOW - 60 * 86400, NOW - 86400, origin);
+  const t = NOW;
+  const r = await call(e, { id: ID, t, sig: sign(ID, t), pow: solve(ID, t), tok: old }, { path: "/register" });
+  assert.equal(r.status, 200);
+  const read = await readToken(e, ID, r.data.tok, NOW);
+  assert.equal(read.since, NOW - 60 * 86400);
+  assert.equal(read.origin, origin);
+  // Too old, or not this Worker's: a new registration.
+  const ancient = await tokenFor(e, ID, NOW - 90 * 86400, NOW - 31 * 86400, origin);
+  const r2 = await call(e, { id: ID, t, sig: sign(ID, t), pow: solve(ID, t), tok: ancient }, { path: "/register" });
+  assert.equal((await readToken(e, ID, r2.data.tok, NOW)).since, NOW);
+  const forged = old.slice(0, -1) + (old.endsWith("0") ? "1" : "0");
+  const r3 = await call(e, { id: ID, t, sig: sign(ID, t), pow: solve(ID, t), tok: forged }, { path: "/register" });
+  assert.equal((await readToken(e, ID, r3.data.tok, NOW)).since, NOW);
+});
+
+await test("the 950 GB stop: past it a login for files is refused until next month, calls go on", async () => {
+  const lim = new FakeLimits();
+  const e = env(lim);
+  const tok = await tokenFor(e, ID);
+  assert.equal((await call(e, { ...login(ID, { tok, rn: 1 }), f: 1 })).status, 200);
+  assert.equal((await call(e, { ...login(ID, { tok, rn: 1 }), f: 2 })).status, 400);
+  lim.obj.sql.exec(SQL.meterAdd, DAY.slice(0, 7), METER_STOP_MB);
+  const r = await call(e, { ...login(ID, { tok, rn: 1 }), f: 1 });
+  assert.equal(r.status, 429);
+  assert.equal(r.data.error, "month_limit");
+  assert.equal(r.data.retry, Date.UTC(2027, 1, 1) / 1000 - NOW);
+  // Remembered: not asked again.
+  const calls = lim.calls;
+  assert.equal((await call(e, { ...login(ID, { tok, rn: 1 }), f: true })).data.error, "month_limit");
+  assert.equal(lim.calls, calls);
+  // A call's login (no "f") is unchanged.
+  assert.equal((await call(e, login(ID, { tok, rn: 1 }))).status, 200);
 });
 
 console.log(passed + " tests passed");

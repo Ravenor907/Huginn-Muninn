@@ -50,11 +50,20 @@ public:
     // A copy that doesn't answer the knock in this long is hung (or closing and stuck). Only a stuck closing one is
     // asked to end itself, and its lock is taken once it has.
     static constexpr int kAnswerMs = 2000;
+    // A copy that holds the lock but doesn't answer yet is waited for this long (it may still be starting) before the
+    // person is told, unless it is closing.
+    static constexpr int kStartingMs = 15000;
     // Starts a new copy of Huginn that waits for this one to end (--restarted). program: Huginn.exe to start (this
     // program when empty); env: extra "NAME=value" settings for it. False when nothing could be started: then this
     // copy must stay open.
     static bool startAgain(const QString &program = QString(), const QString &workDir = QString(), const QStringList &env = QStringList(),
                            const QStringList &args = QStringList());
+    // Steam's game mode in the Flatpak: a copy started again from here would run outside Steam (on the host), where
+    // its window never comes forward. Huginn then never starts itself again: it saves, closes and asks to be opened
+    // again from Steam (startAgain() with no program says false).
+    static bool reopenFromSteam();
+    // This copy was started by Steam (a game or a non-Steam shortcut): Steam's game mode shows its window.
+    static bool startedBySteam();
     // Huginn is closing (main.cpp, on aboutToQuit after everything is saved): marked beside the lock until this
     // process lets it go. A copy started meanwhile that gets no answer for kStuckMs from the mark asks this one to end,
     // and this one ends itself (a watch started here). No copy ever ends another on Windows.
@@ -80,12 +89,15 @@ Q_SIGNALS:
 private:
     void release();
     void listen();
-    // Knocks on the running copy: true when it answers (it then comes to the front).
-    bool knock();
+    // Knocks on the running copy: Answered when it answers (it then comes to the front). In game mode a copy started
+    // from Steam also asks a running copy that Steam didn't start (so its window can't be seen there) to make way:
+    // Yielded when it is closing for this one.
+    enum Knock { NoAnswer, Answered, Yielded };
+    Knock knock();
     // The lock is held but nobody answers on the socket: a killed copy's lock, or a stuck closing one asked to end.
     bool takeOverStaleLock();
 #ifndef Q_OS_WIN
-    // Linux only: ends the copy named in the lock file when it is Huginn and didn't end itself when asked.
+    // Linux only (not the Flatpak): ends the copy named in the lock file when it is Huginn and didn't end itself when asked.
     void endHolder();
 #endif
     QString m_name;
@@ -97,4 +109,5 @@ private:
     QString m_otherHost;
     QTimer *m_watch = nullptr;
     Outcome m_outcome = Claimed;
+    bool m_yielding = false;
 };

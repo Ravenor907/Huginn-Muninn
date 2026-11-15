@@ -14,6 +14,8 @@
 #include <QProcess>
 #include <QFileInfo>
 #include <QTimer>
+#include <QPointer>
+#include <QThreadPool>
 #include "platform/crashlog.h"
 #include "platform/singleinstance.h"
 #include "platform/winupdate.h"
@@ -136,10 +138,16 @@ void Updater::periodicCheck()
     // or installing: nothing to do now.
     if (!m_periodic || (m_settings && !m_settings->autoUpdate()) || m_busy || m_installing || m_goingBack)
         return;
-    // An update already waits for Restart now: the update bar comes back if it was put away with Later.
+    // An update already waits for Restart now: the update bar comes back if it was put away with Later. One whose file
+    // is gone (antivirus quarantined it) is downloaded again instead of waiting for a restart that can't happen.
     if (!m_readyPath.isEmpty()) {
-        Q_EMIT remind();
-        return;
+        if (QFileInfo::exists(m_readyPath)) {
+            Q_EMIT remind();
+            return;
+        }
+        CrashLog::note(QStringLiteral("update: the downloaded update is gone; downloading it again"));
+        m_readyPath.clear();
+        Q_EMIT changed();
     }
     fetch(false, true);
 }
@@ -569,6 +577,11 @@ void Updater::download(const QString &url, const QString &tag)
     const QString dir = System::cacheDir();
     QDir().mkpath(dir);
     const QString path = dir + QStringLiteral("/Huginn-") + tag + (WinUpdate::supported() ? QStringLiteral(".zip") : QStringLiteral(".flatpak"));
+    // The update waiting for Restart now is this same file: it is being written again, so it no longer waits.
+    if (QDir::cleanPath(path) == QDir::cleanPath(m_readyPath)) {
+        m_readyPath.clear();
+        Q_EMIT changed();
+    }
     // Round 19: written to disk as it comes (never the whole file in memory), and never past kMaxDownload.
     auto file = std::make_shared<QFile>(path);
     if (!file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -644,6 +657,15 @@ void Updater::installFlatpak(const QString &path)
                              : QStringLiteral("Installing the update failed.");
             Q_EMIT changed();
             Q_EMIT notice(m_status);
+            return;
+        }
+        // Steam's game mode: a copy started from here would run outside Steam, never seen. Huginn saves and closes
+        // instead, and is opened again from Steam (on the new version).
+        if (SingleInstance::reopenFromSteam()) {
+            m_status = QStringLiteral("Updated. Huginn closes now: open it again from Steam.");
+            Q_EMIT changed();
+            Q_EMIT notice(m_status);
+            QTimer::singleShot(4000, qApp, [] { QCoreApplication::exit(0); });   // past the window's close question
             return;
         }
         // The new copy waits until this one has saved and closed. Closed only once it really started.
@@ -731,22 +753,54 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
 void Updater::checkThenInstall(const QString &path, const QString &tag, const QString &name, const QByteArray &expected, const QByteArray &sig,
                                const QByteArray &vsig)
 {
-    QFile f(path);
-    if (expected.size() != 64 || !f.open(QIODevice::ReadOnly)) {
+    if (expected.size() != 64) {
         QFile::remove(path);
         failed(QStringLiteral("The update couldn't be checked, so it wasn't installed. Try again later."));
         return;
     }
-    const QByteArray data = f.readAll();
-    f.close();
-    const QByteArray got = QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex();
-    if (got != expected) {
+    // Read (20 to 40 MB), hashed and its signatures checked on a worker thread: the window never stalls on it.
+    const QString version = labelFor(tag);
+    QPointer<Updater> self(this);
+    QThreadPool::globalInstance()->start([self, path, tag, name, expected, sig, vsig, version] {
+        // 0 checked, 1 unreadable, 2 SHA-256, 3 project signature, 4 version signature
+        int trouble = 0;
+        QByteArray got;
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) {
+            trouble = 1;
+        } else {
+            const QByteArray data = f.readAll();
+            f.close();
+            got = QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex();
+            if (got != expected)
+                trouble = 2;
+            else if (!signedByProject(data, sig))
+                trouble = 3;
+            else if (version.isEmpty() || !versionSignedBy(version, name, got, vsig, QByteArray::fromHex(kReleaseKey)))
+                trouble = 4;
+        }
+        QMetaObject::invokeMethod(qApp, [self, path, tag, version, expected, got, sig, vsig, trouble] {
+            if (self)
+                self->checked(path, tag, version, trouble, expected, got, sig, vsig);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Updater::checked(const QString &path, const QString &tag, const QString &version, int trouble, const QByteArray &expected,
+                      const QByteArray &got, const QByteArray &sig, const QByteArray &vsig)
+{
+    if (trouble == 1) {
+        QFile::remove(path);
+        failed(QStringLiteral("The update couldn't be checked, so it wasn't installed. Try again later."));
+        return;
+    }
+    if (trouble == 2) {
         qWarning("update: SHA-256 %s, release says %s", got.constData(), expected.constData());
         QFile::remove(path);
         failed(QStringLiteral("The download didn't match the release, so it wasn't installed. Try again."));
         return;
     }
-    if (!signedByProject(data, sig)) {
+    if (trouble == 3) {
         qWarning("update: no valid project signature (%d bytes of .sig)", int(sig.size()));
         QFile::remove(path);
         failed(QStringLiteral("This update isn't signed with the project's key, so it wasn't installed."));
@@ -754,8 +808,7 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
     }
     // The version signed in .vsig must be the one this release's tag names (the beta release: its label),
     // and newer than this copy: an older signed file posted again under a newer tag is never installed.
-    const QString version = labelFor(tag);
-    if (version.isEmpty() || !versionSignedBy(version, name, got, vsig, QByteArray::fromHex(kReleaseKey))) {
+    if (trouble == 4) {
         qWarning("update: no valid version signature (%d bytes of .vsig)", int(vsig.size()));
         QFile::remove(path);
         failed(QStringLiteral("This update's version isn't signed with the project's key, so it wasn't installed."));
@@ -773,29 +826,58 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
         failed(QStringLiteral("Unlock Huginn first, then try again."));
         return;
     }
-    // An automatic update never closes Huginn by itself: it waits, checked, until the person picks Restart now.
-    if (m_auto && !goingBack) {
-        m_auto = false;
-        m_busy = false;
-        m_readyPath = path;
-        m_status = QStringLiteral("Huginn %1 is ready. Press Restart now to install it.").arg(version);
-        Q_EMIT changed();
-        return;
-    }
-    installNow(path);
+    // A desktop update never closes Huginn by itself, whoever started it (automatic, Install, Update without Tor, Go
+    // back to stable): a call may have begun while it downloaded. It waits, checked, until the person picks Restart now,
+    // which asks first when a call, a voice room or a file is under way (Main.qml restartForUpdate).
+    m_auto = false;
+    m_busy = false;
+    m_goingBack = false;
+    m_readyPath = path;
+    m_readyVersion = version;
+    m_readySha = got;
+    m_readySig = sig;
+    m_readyVsig = vsig;
+    m_readyBack = goingBack;
+    m_status = QStringLiteral("Huginn %1 is ready. Press Restart now to install it.").arg(version);
+    Q_EMIT changed();
+    Q_EMIT remind();   // the update bar shows, even if an earlier one was put away with Later
 }
 
 void Updater::restartToUpdate()
 {
-    if (m_busy || m_readyPath.isEmpty() || !QFileInfo::exists(m_readyPath))
+    if (m_busy || m_readyPath.isEmpty())
         return;
-    m_busy = true;
     const QString path = m_readyPath;
+    // Checked again right before it goes in (the file sat in the data folder since): the same SHA-256, the project's
+    // signature and its signature of the version. Gone or changed (antivirus quarantined it, say): said, and it is
+    // downloaded again, rather than Restart now doing nothing.
+    bool good = false;
+    {
+        QFile f(path);
+        if (f.open(QIODevice::ReadOnly)) {
+            const QByteArray data = f.readAll();
+            good = QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex() == m_readySha && signedByProject(data, m_readySig)
+                && versionSignedBy(m_readyVersion, assetName(), m_readySha, m_readyVsig, QByteArray::fromHex(kReleaseKey));
+        }
+    }
+    if (!good) {
+        CrashLog::note(QStringLiteral("update: the downloaded update was gone or changed at Restart now"));
+        QFile::remove(path);
+        m_readyPath.clear();
+        m_status = QStringLiteral("The downloaded update is gone or was changed (antivirus may have quarantined it), so Huginn is "
+                                  "downloading it again. Restart now comes back when it's ready.");
+        Q_EMIT changed();
+        Q_EMIT notice(m_status);
+        m_goingBack = m_readyBack;
+        fetch(true);
+        return;
+    }
+    m_busy = true;
     m_readyPath.clear();
-    installNow(path);
+    installNow(path, m_readyVersion);
 }
 
-void Updater::installNow(const QString &path)
+void Updater::installNow(const QString &path, const QString &version)
 {
     m_installing = true;
     Q_EMIT aboutToRestart();   // everything is saved before the update replaces Huginn
@@ -808,7 +890,7 @@ void Updater::installNow(const QString &path)
     {
         // The version being put in, so a swap that fails at the next start can say which one (platform/winupdate.cpp).
         QSettings s = Settings::store();
-        s.setValue(QStringLiteral("update/trying"), m_latest);
+        s.setValue(QStringLiteral("update/trying"), version.isEmpty() ? m_latest : version);
         s.sync();
     }
     WinUpdate::install(path, this, [this](bool ok, bool restarting, const QString &msg) {

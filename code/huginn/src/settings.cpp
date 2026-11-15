@@ -14,6 +14,9 @@ Settings::Settings(QObject *parent)
     : QObject(parent)
     , m_settings(QSettings::defaultFormat(), QSettings::UserScope, Settings::org(), QStringLiteral("Huginn"))
 {
+    // Only this account's own file: never a system-wide one (C:\ProgramData\Huginn\Huginn.ini on Windows, which any
+    // account may create) or the organization-wide one.
+    m_settings.setFallbacksEnabled(false);
     // Seasonal was a theme of its own (saved as "seasonal", or a season's name, with the season under "season"). It is
     // now on top of any theme: that look opens as Dark with Seasonal on, the same season and the rest of its settings.
     if (!m_settings.contains(QStringLiteral("seasonal"))) {

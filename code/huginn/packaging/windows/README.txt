@@ -32,7 +32,9 @@ Don't open the same Huginn folder on two computers (a OneDrive or Dropbox
 folder, say): Huginn refuses to, as two copies on one folder break chats.
 
 UPDATING
-Huginn updates itself and keeps the data folder.
+Huginn downloads updates by itself and checks them. An update goes in only
+when you press Restart now (Huginn never restarts by itself), and it keeps the
+data folder.
 To update by hand, close Huginn, then copy the new files over the old ones.
 The zip has a "Huginn" folder at its top: copy what is INSIDE it (Huginn.exe,
 lib, README.txt, LICENSE.txt) into your old Huginn folder. Extracting the zip
@@ -40,3 +42,12 @@ into the old folder makes Huginn\Huginn\Huginn.exe instead, a second copy
 with no chats; Huginn says so if you open it.
 Or move "data" into the new Huginn folder. Deleting the data folder deletes
 your identity and chats (unless you have a backup).
+
+WHAT WINDOWS KEEPS ITSELF
+Windows keeps a few records of its own about Huginn outside its folder, and
+deleting the folder doesn't remove them: the tray icon's entry (its picture
+and tooltip) and notification settings, the firewall rules from the first
+"allow access" question, and Recent items for files you opened from Huginn.
+To clear them: Settings > Personalization > Taskbar > Other system tray icons,
+Settings > System > Notifications, Windows Defender Firewall > Allowed apps,
+and File Explorer's Clear history in its options.

@@ -23,6 +23,8 @@
 class Ble;
 class FileLink;
 class QIODevice;
+class QImage;
+class QThreadPool;
 class Labs;
 class Moderation;
 class Link;
@@ -78,6 +80,8 @@ class Chat : public QObject
     Q_PROPERTY(QString openChat MEMBER m_openChat NOTIFY changed)
     Q_PROPERTY(QVariantList groups READ groups NOTIFY changed)
     Q_PROPERTY(QVariantList groupInvites READ groupInvites NOTIFY changed)
+    // Family groups this computer hasn't said yes to yet: [{g, name, byName}] (familyOk).
+    Q_PROPERTY(QVariantList familyAsks READ familyAsks NOTIFY changed)
     Q_PROPERTY(QVariantList folders READ folders NOTIFY changed)
     Q_PROPERTY(QString netStatus READ netStatus NOTIFY changed)
     // Cap m1: who is typing to me and whose app is open (key -> until, ms), and my own Active status.
@@ -362,6 +366,22 @@ public:
     // Muted, someone nearby put away with Hide, or Reduce notifications (one per chat until opened; a group set to
     // mentions only): false. name: what the notification says (an @mention says so). Calls don't come this way.
     bool notifyFor(const QString &key, const QString &name = QString());
+    // What comes with the arrived signal being sent now, for its sound (main.cpp): quiet is something that shows but
+    // makes no sound (a reaction, a phone's message already read there or long waiting); 0 sentAt: not known.
+    struct Arrival {
+        bool quiet = false;
+        qint64 sentAt = 0;
+    };
+    const Arrival &arrival() const { return m_arrival; }
+    // A group's name, for Recent sounds (main.cpp).
+    QString groupTitle(const QString &g) const { return groupName(g); }
+    // arrived, quietly (shown, no sound) when quiet.
+    void arrive(const QString &name, const QString &text, const QString &key, bool quiet, qint64 sentAt = 0)
+    {
+        m_arrival = {quiet, sentAt};
+        Q_EMIT arrived(name, text, key);
+        m_arrival = {};
+    }
 
     // Calls (shared/docs/protocol.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
     // room "call" and sends it on every route at once, never through the Outbox.
@@ -391,6 +411,11 @@ public:
     // Groups (chatgroups.cpp). Calls that can fail return what to tell the person, "" when done.
     QVariantList groups() const;
     QVariantList groupInvites() const;
+    QVariantList familyAsks() const;
+    // "Add <group> as Family?" yes: its members get Family treatment here (files arrive without Accept, the Family
+    // folder, direct calls). No: it stays an ordinary group here and isn't asked again (the group's info can still say
+    // yes later). Local only: nothing is sent.
+    Q_INVOKABLE void answerFamily(const QString &g, bool yes);
     // kind: "" or "folk" (Folk) or "family" (Family), cap d1.
     Q_INVOKABLE QString createGroup(const QString &name, const QString &kind = QString());
     // Writes everything still waiting to be saved (before Huginn closes or restarts for an update).
@@ -538,6 +563,8 @@ public:
     // them, except one just blocked. After a block, every RingKey::kRenewMs, and on every lock change (main.cpp). The
     // old mailboxes are still read for two days. Only while unlocked (the keys go out sealed); false when it couldn't.
     bool renewRingKeys(const QString &except = QString());
+    // Contacts with calls off here keep the ring key they last got: that mailbox stays read for their nudges (RingKey::keepForNudges).
+    void keepRingForNudges();
     Vault *vault() const { return m_vault; }
     // Labs (labs.*): bug reports to the Labs contact, and on the Huginn with the Labs key, its inbox.
     void setLabs(Labs *labs) { m_labs = labs; }
@@ -691,11 +718,19 @@ private:
     qint64 m_bigSwept = 0;
     // The threads keeping or saving a longer video ("huginn-video-keep", "huginn-video-save"), so closing can wait for them.
     QList<QPointer<QObject>> m_bigThreads;
+    // Pictures being sent are decoded, shrunk and encoded here (one at a time, in the order they were sent), never on
+    // the window's thread; done runs back on it with each one's JPEG ("" for one that couldn't be opened).
+    QThreadPool *m_photoPool = nullptr;
+    void preparePictures(const QStringList &paths, bool hd, std::function<void(const QList<QByteArray> &)> done, const QString &shredAfter = QString());
+    void preparePicture(const QImage &img, std::function<void(const QByteArray &)> done);
+    // A prepared JPEG to a contact or a group channel ("g:<group>:<channel>").
+    void sendPreparedPhoto(const QString &key, const QByteArray &jpeg, const QVariantMap &extra = QVariantMap());
     void trackBigThread(QObject *t);
     // Cap v3 (29.4): video relay pieces leave paced, a few a second in all; one queue per key ("member|message").
     GroupVideo::Pacer m_videoPacer;
     QSet<QString> m_paced;
     bool m_delayed = false;   // something of mine hasn't got out yet (Nostr::delayed)
+    bool m_clockOff = false;  // a relay refused something of mine for its time in the last hour (Nostr::clockRefusedAt)
     qint64 m_pacerLimitSeen = 0;
     QList<QJsonObject> pieces(const QVariantMap &m);
     QList<QByteArray> sealedFor(const QString &key, const QString &id, const QVariantMap &m);
@@ -705,6 +740,17 @@ private:
     // Ratchet state per person, in the vault (ratchet/<hash>.json).
     void loadRatchet();
     void saveRatchet(const QString &key);
+    // A photo, GIF, voice or video goes as many pieces, each its own ratchet step. While a RatchetBatch is open each
+    // peer's state is saved once when it closes (after the last piece is sealed, before any of them is sent), not once
+    // per piece: the state is still always on disk before anything sealed with it leaves.
+    struct RatchetBatch {
+        explicit RatchetBatch(Chat *c) : chat(c) { ++chat->m_ratchetBatch; }
+        ~RatchetBatch() { chat->endRatchetBatch(); }
+        RatchetBatch(const RatchetBatch &) = delete;
+        RatchetBatch &operator=(const RatchetBatch &) = delete;
+        Chat *chat;
+    };
+    void endRatchetBatch();
     void forgetRatchet(const QString &key);
     QString ratchetFile(const QString &key) const;
     void noteCapable(const QString &key, bool capable);
@@ -834,11 +880,16 @@ private:
         int reportsUnread = 0;              // of those, not seen in the Reports list yet
         bool removed = false, left = false;
         qint64 since = 0;
+        // A Family group gives Family trust here only after this computer's own yes (or my own change made it Family).
+        // Leaving, being removed or it turning Folk takes it back. familyNo: asked and said no (not asked again).
+        bool familyOk = false, familyNo = false;
     };
+    bool familyTrusted(const Group &gr) const;
     struct GroupOut {                       // one member's copy of a group message, until they confirm
         QString g, to, logical, room;
         qint64 time = 0, next = 0;
         int count = 0;
+        qint64 heldAt = 0, publishedAt = 0;   // relays hold it since (0: not yet); it last went to them (relaysDue)
     };
     int receiveGroup(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &mailbox, const QString &via);
     int receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &mailbox, const QString &via);
@@ -946,6 +997,8 @@ private:
     // The sender's peer after a ratchet message opened, kept once the message is accepted.
     QString m_pendingKey;
     std::optional<Ratchet::Peer> m_pendingPeer;
+    int m_ratchetBatch = 0;
+    QSet<QString> m_ratchetDirty;   // sealed for while a RatchetBatch is open, saved as it closes
     // Who the message being handled proved to be from, whether it said "cap":"r1", and its "caps".
     QString m_openedFrom;
     bool m_openedCap = false, m_openedHasCaps = false;
@@ -993,6 +1046,7 @@ private:
     QSet<QString> m_notified;                           // chats that notified since they were last opened
     bool m_reportArriving = false;                      // takeReport is announcing a report (toMe: it's for me)
     QHash<QString, bool> m_alerted;                     // whether the last message for a key notified
+    Arrival m_arrival;   // see arrival()
     bool toMe(const QString &key, const QString &name) const;   // a group message that mentions or answers me
     QSet<QString> m_rightAway;
     QHash<QString, QString> m_chatColors;
@@ -1000,7 +1054,14 @@ private:
     bool m_moving = false;                           // contacts whose "keep" got my yes back (once each)
     bool m_front = false;
     qint64 m_activeSent = 0;
-    struct Tries { int count = 0; qint64 next = 0; };
+    // heldAt: when a relay first stored it (0: not yet); publishedAt: when it last went to the relays (relaysDue).
+    struct Tries { int count = 0; qint64 next = 0; qint64 heldAt = 0; qint64 publishedAt = 0; };
+public:
+    // Like Muninn's NetLogic.publish: a try goes to the relays every time until one of them holds it, then only once
+    // each at 1 hour and 6 hours after that (the relays keep it for the other side meanwhile). Updates publishedAt
+    // when it says yes.
+    static bool relaysDue(qint64 heldAt, qint64 &publishedAt, qint64 now);
+private:
     QHash<QString, Tries> m_tries;
     struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; QString file; };
     QVariantMap m_uploads;

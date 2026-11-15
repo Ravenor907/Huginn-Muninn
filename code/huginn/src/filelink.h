@@ -20,6 +20,8 @@ class Chat;
 class QFile;
 class QTimer;
 class QUdpSocket;
+class QHostAddress;
+class QThread;
 class StunProbe;
 class TurnClient;
 struct TurnLogin;
@@ -85,6 +87,11 @@ public:
     static bool relayMay(const QString &choice, bool ultra, bool family, bool peerCan);
     static bool torMay(bool ultra);
     static constexpr qint64 kRelayStopBytes = 950 * 1000000000LL;   // the relay carries no more files this month past this
+    // The month's shared total (relay.md "Relayed media") is advisory: anyone can make installs and report to it. It is
+    // believed only up to twice the even pace of the free month (66 GB a day so far this month), and it can only bring
+    // the 720p copy; the stop (kRelayStopBytes) comes from this install's own count.
+    static constexpr qint64 kSharedPerDayBytes = 66 * 1000000000LL;
+    static qint64 relayShared(qint64 shared, int dayOfMonth);
     static constexpr int kAutoRetryMax = 50;
     bool relayStopped() const;
     bool relayPlan(const QString &peer, const QString &group) const;
@@ -390,6 +397,12 @@ private:
     bool startData(Xfer *x);
     void dataTick(Xfer *x);
     void onDatagram(Xfer *x);
+    // A packet the opening thread decrypted (onDatagram), back on this thread in the order it came. False: stop
+    // (the transfer ended or failed).
+    bool takeOpened(Xfer *x, quint8 type, const QByteArray &payload, const QHostAddress &from, quint16 port);
+    // Direct transfers' packets are decrypted here, off the window's thread (one thread, so they stay in order).
+    QThread *m_opener = nullptr;
+    QObject *m_openerCtx = nullptr;
     void sendAck(Xfer *x);
     void receivedAll(Xfer *x);
     // A file of theirs that arrived whole and checked: renamed from its .part and saved (its card says where).

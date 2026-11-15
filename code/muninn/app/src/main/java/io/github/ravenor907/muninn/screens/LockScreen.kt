@@ -61,13 +61,14 @@ import androidx.compose.ui.semantics.semantics
 fun LockScreen(app: Muninn, inApp: Boolean = false, done: (Boolean) -> Unit) {
     // The lock file or the keys can't be read: never a new key over what's here, the way back instead.
     val trouble by app.vault.trouble.collectAsState()
-    trouble?.let { VaultTrouble(app, it, done); return }
+    val ask by Ui.ask.collectAsState()
+    // Its Restore asks first: the question is drawn here, since nothing else is on screen.
+    trouble?.let { VaultTrouble(app, it, done); ask?.let { a -> AskDialog(a) }; return }
     var pw by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var wrong by remember { mutableStateOf(false) }
     var shakes by remember { mutableStateOf(0) }   // a wrong pattern shakes the pad
     var forgot by remember { mutableStateOf(false) }   // "Forgot it?": the way back is a backup
-    val ask by Ui.ask.collectAsState()
     val scope = rememberCoroutineScope()
     val pattern = remember { app.vault.usesPattern }
     // 1.42: a pattern lock also opens with its unlock password, typed instead of drawn.
@@ -320,10 +321,9 @@ private fun ForgotLock(app: Muninn, onBack: () -> Unit) {
             }
             if (restoring) Panel {
                 RestoreFlow(app, erases = true, onCancel = { restoring = false }) { o ->
-                    val files = io.github.ravenor907.muninn.net.Backup.prepare(app, o)
-                    // The lock isn't in the backup: after the restart a new one is set before any chat shows.
-                    val old = app.vault.startOverKeeping(needsLock = true)
-                    io.github.ravenor907.muninn.net.Backup.restore(ctx, app.vault, files)
+                    // The lock isn't in the backup: after the restart a new one is set before any chat shows. Staged in one
+                    // step while the lock screen stays up (nothing opens on an empty vault meanwhile); Muninn restarts next.
+                    val old = io.github.ravenor907.muninn.net.Backup.restoreOver(app, o, needsLock = true)
                     // What was here can't be opened without the lock: erased, not kept. The wrong tries go too: they counted
                     // against a lock that's gone (this took the backup and its Backup password, and erased what was here).
                     // So does "Erase after too many tries": the new lock starts with it off, like any new lock.

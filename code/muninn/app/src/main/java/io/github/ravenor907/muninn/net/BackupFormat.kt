@@ -2,16 +2,12 @@ package io.github.ravenor907.muninn.net
 
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
+import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.security.SecureRandom
-import javax.crypto.AEADBadTagException
-import javax.crypto.Cipher
-import javax.crypto.CipherOutputStream
 import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * The backup file, the same in Huginn and Muninn (shared/docs/backup.md). Plain Kotlin (no Android) so it can be
@@ -58,7 +54,29 @@ object BackupFormat {
                  val kdf: String = "", val n: Int = 0, val r: Int = 0, val p: Int = 0, val m: Int = 0, val t: Int = 0)
     /** A file to put in the backup. [load] gives its plain bytes, or null to leave it out. */
     class Entry(val name: String, val load: () -> ByteArray?)
-    class Opened(val header: Header, val files: List<Pair<String, ByteArray>>)
+    /**
+     * An opened backup. [files]: every file, or (read from a stream, [more] set) only the "@" entries, the small ones
+     * the Restore screen and settings need; [each] then reads the file again for the rest. [items]: how many files that
+     * aren't "@" entries it holds.
+     */
+    class Opened(val header: Header, val files: List<Pair<String, ByteArray>>, internal val more: Streamed? = null,
+                 val items: Int = files.count { !it.first.startsWith("@") }) {
+        /** Hands every file over, in order (read again from the file when it was streamed). Throws if it no longer checks out. */
+        fun each(take: (String, ByteArray) -> Unit) { if (more != null) more.each(take) else files.forEach { (n, d) -> take(n, d) } }
+    }
+
+    /** A backup to read again from [reopen], with the key its password made. */
+    class Streamed internal constructor(private val key: ByteArray, private val reopen: () -> InputStream) {
+        fun each(take: (String, ByteArray) -> Unit) {
+            reopen().use { input ->
+                val (h, head) = readHead(input)
+                val r = reader(input, h, head, key)
+                entries(r, { true }) { n, d -> take(n, d!!) }
+                r.drain()
+                if (!r.checked) throw NotABackup("This backup is damaged.")
+            }
+        }
+    }
 
     class NotABackup(message: String) : Exception(message)
     class WrongPassword : Exception("Wrong password")
@@ -81,16 +99,14 @@ object BackupFormat {
             else "{\"v\":${h.v},\"salt\":\"${b64(salt)}\",\"kdf\":\"scrypt\",\"N\":${h.n},\"r\":${h.r},\"p\":${h.p},") +
             "\"created\":\"${esc(created)}\",\"app\":\"${esc(app)}\"}"
         val iv = ByteArray(12).also { random.nextBytes(it) }
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-        key.fill(0)
         val hb = header.toByteArray()
         val head = MAGIC + ByteBuffer.allocate(4).putInt(hb.size).array() + hb
-        if (h.v >= 3) c.updateAAD(head)
         out.write(head)
         out.write(iv)
+        // Streamed: only the file being written is in memory, however big the backup (GcmStream, the same bytes as one GCM).
+        val sealed = try { GcmStream.Writer(out, key, iv, if (h.v >= 3) head else ByteArray(0)) } finally { key.fill(0) }
         var count = 0
-        DataOutputStream(BufferedOutputStream(CipherOutputStream(out, c), 64 * 1024)).use { d ->
+        DataOutputStream(BufferedOutputStream(sealed, 64 * 1024)).use { d ->
             entries.forEachIndexed { i, e ->
                 val data = e.load()
                 if (data != null) {
@@ -154,23 +170,101 @@ object BackupFormat {
      */
     fun open(bytes: ByteArray, password: String, app: String = "muninn"): Opened {
         val (h, at) = header(bytes)
+        if (bytes.size - at < 12 + 16) { usable(h, app); throw NotABackup("This backup is damaged.") }
+        return open({ java.io.ByteArrayInputStream(bytes) }, password, app, keepAll = true)
+    }
+
+    /** An older backup opens only in the app that made it; an Argon2id one only in Huginn. */
+    private fun usable(h: Header, app: String) {
         if (h.v < 3 && h.app != app) throw NotABackup(when (h.app) {
             "huginn" -> "This older backup was made in Huginn. Restore it in Huginn."
             "muninn" -> "This older backup was made in Muninn. Restore it in Muninn."
             else -> "This isn't a Huginn or Muninn backup."
         })
         if (h.v == 2 && h.kdf == "argon2id") throw NotABackup("This older backup only opens in Huginn.")
-        if (bytes.size - at < 12 + 16) throw NotABackup("This backup is damaged.")
-        val key = key(h, password)
-        val plain = try {
-            val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, bytes, at, 12))
-            if (h.v >= 3) c.updateAAD(bytes, 0, at)
-            c.doFinal(bytes, at + 12, bytes.size - at - 12)
-        } catch (e: AEADBadTagException) {
-            throw WrongPassword()   // a wrong password and a changed file look the same, by design
-        } finally { key.fill(0) }
-        return Opened(h, unpack(plain))
+    }
+
+    /**
+     * Checks the password and the whole file, streamed from [reopen] (opened once now, and again by [Opened.each] to
+     * restore): nothing is held but the "@" entries ([keepAll]: every file, for tests and small files). Any size the
+     * phone could make opens. Throws [WrongPassword] or [NotABackup].
+     */
+    fun open(reopen: () -> InputStream, password: String, app: String = "muninn", keepAll: Boolean = false): Opened {
+        reopen().use { input ->
+            val (h, head) = readHead(input)
+            usable(h, app)
+            val key = key(h, password)
+            var ok = false
+            try {
+                val r = reader(input, h, head, key)
+                val kept = ArrayList<Pair<String, ByteArray>>()
+                var items = 0
+                val shape = try {
+                    entries(r, { keepAll || it.startsWith("@") }) { n, d -> if (d != null) kept += n to d; if (!n.startsWith("@")) items++ }
+                    null
+                } catch (e: NotABackup) { e }
+                // To its end either way: a wrong password and a changed file look the same, by design.
+                try { r.drain() } catch (e: GcmStream.BadTag) { throw WrongPassword() }
+                if (shape != null || !r.checked) throw shape ?: NotABackup("This backup is damaged.")
+                ok = true
+                return Opened(h, kept, if (keepAll) null else Streamed(key, reopen), items)
+            } catch (e: GcmStream.BadTag) { throw WrongPassword() }
+            finally { if (!ok || keepAll) key.fill(0) }
+        }
+    }
+
+    /** "MUNB1", the header's length and the header: the header and those bytes (the additional data of a v3 backup). */
+    internal fun readHead(input: InputStream): Pair<Header, ByteArray> {
+        val start = ByteArray(MAGIC.size + 4)
+        if (readFully(input, start) < start.size || !start.copyOfRange(0, MAGIC.size).contentEquals(MAGIC)) throw NotABackup("This isn't a Huginn or Muninn backup.")
+        val len = ByteBuffer.wrap(start, MAGIC.size, 4).int
+        if (len <= 0 || len > MAX_HEADER) throw NotABackup("This backup is damaged.")
+        val hb = ByteArray(len)
+        if (readFully(input, hb) < len) throw NotABackup("This backup is damaged.")
+        val head = start + hb
+        return header(head).first to head
+    }
+
+    /** The decrypting stream after the header (the nonce first). */
+    internal fun reader(input: InputStream, h: Header, head: ByteArray, key: ByteArray): GcmStream.Reader {
+        val nonce = ByteArray(12)
+        if (readFully(input, nonce) < 12) throw NotABackup("This backup is damaged.")
+        return GcmStream.Reader(java.io.BufferedInputStream(input, 64 * 1024), key, nonce, if (h.v >= 3) head else ByteArray(0))
+    }
+
+    private fun readFully(input: InputStream, b: ByteArray): Int {
+        var n = 0
+        while (n < b.size) { val r = input.read(b, n, b.size - n); if (r < 0) break; n += r }
+        return n
+    }
+
+    /**
+     * The files inside, one by one: [take] gets each name and, when [keep] says so, its data (else null: skipped
+     * without holding it). A file's data is read in pieces, so a damaged length can't ask for more memory than the file has.
+     */
+    internal fun entries(input: InputStream, keep: (String) -> Boolean, take: (String, ByteArray?) -> Unit) {
+        val d = java.io.DataInputStream(input)
+        val buf = ByteArray(64 * 1024)
+        while (true) {
+            val first = d.read()
+            if (first < 0) return
+            val n = try { (first shl 24) or (d.readUnsignedByte() shl 16) or (d.readUnsignedByte() shl 8) or d.readUnsignedByte() }
+                catch (e: java.io.EOFException) { throw NotABackup("This backup is damaged.") }
+            if (n <= 0 || n > MAX_NAME) throw NotABackup("This backup is damaged.")
+            val name = ByteArray(n)
+            val len = try { d.readFully(name); d.readInt() } catch (e: java.io.EOFException) { throw NotABackup("This backup is damaged.") }
+            if (len < 0) throw NotABackup("This backup is damaged.")
+            val nm = name.toString(Charsets.UTF_8)
+            val want = keep(nm)
+            val out = if (want) java.io.ByteArrayOutputStream(minOf(len, 1 shl 20)) else null
+            var left = len
+            while (left > 0) {
+                val r = d.read(buf, 0, minOf(left, buf.size))
+                if (r < 0) throw NotABackup("This backup is damaged.")
+                out?.write(buf, 0, r); left -= r
+            }
+            take(nm, out?.toByteArray())
+        }
     }
 
     /** What a backup holds, for the screen before Restore. Counts come from [SHARED]; null when it has none (older backups). */
@@ -178,14 +272,14 @@ object BackupFormat {
                   val chats: Int?, val groups: Int?, val folders: Int?, val items: Int)
 
     fun summary(o: Opened): Summary {
-        val about = o.files.firstOrNull { it.first == ABOUT }?.let { try { org.json.JSONObject(String(it.second, Charsets.UTF_8)) } catch (e: Exception) { null } }
-        val shared = o.files.firstOrNull { it.first == SHARED }?.let { try { org.json.JSONObject(String(it.second, Charsets.UTF_8)) } catch (e: Exception) { null } }
+        val about = o.files.firstOrNull { it.first == ABOUT }?.let { try { SafeJson.obj(String(it.second, Charsets.UTF_8)) } catch (e: Exception) { null } }
+        val shared = o.files.firstOrNull { it.first == SHARED }?.let { try { SafeJson.obj(String(it.second, Charsets.UTF_8)) } catch (e: Exception) { null } }
         val app = about?.optString("app")?.takeIf { it.isNotEmpty() } ?: o.header.app
         return Summary(app, about?.optString("device") ?: "", about?.optString("created")?.takeIf { it.isNotEmpty() } ?: o.header.created,
             if (about != null && about.has("files")) about.optBoolean("files") else null,
             shared?.optJSONArray("contacts")?.length(), shared?.optJSONObject("chats")?.length(),
             shared?.optJSONArray("groups")?.length(), shared?.optJSONObject("folders")?.optJSONArray("folders")?.length(),
-            o.files.count { !it.first.startsWith("@") })
+            o.items)
     }
 
     /** The [ABOUT] entry. */

@@ -100,10 +100,14 @@ void notify(const QString &title, const QString &body, int timeoutMs, std::funct
     }
     // A message's title is who it's from; the others ("Missed call", "File waiting") name them in the text.
     const bool named = title != QLatin1String("Huginn") && title != QLatin1String("Missed call") && title != QLatin1String("File waiting");
-    s_shown.push_back({named ? title : title + QStringLiteral("\n") + body, chat, std::move(onClick)});
-    if (s_shown.size() > 30)
-        s_shown.erase(s_shown.begin());
-    s_newestAt = QDateTime::currentMSecsSinceEpoch();
+    // A notice about no chat with nothing to do on a click ("Notifications are muted", "Huginn didn't close") isn't
+    // kept: it would only make a later click on a message's notification open the chat list instead of its chat.
+    if (!chat.isEmpty() || onClick) {
+        s_shown.push_back({named ? title : title + QStringLiteral("\n") + body, chat, std::move(onClick)});
+        if (s_shown.size() > 30)
+            s_shown.erase(s_shown.begin());
+        s_newestAt = QDateTime::currentMSecsSinceEpoch();
+    }
     tray->showMessage(title, body, tray->icon(), timeoutMs);
 }
 

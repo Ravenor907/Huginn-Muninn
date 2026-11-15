@@ -243,6 +243,11 @@ private:
     void onEngineFailed(quint64 token, const QString &why);
     void startDownload();
     void downloadDone();
+    // After the part kept was hashed again (startDownload, on its own thread): the rest is asked for.
+    void requestRest();
+    // The download unpacked on its own thread: put in place, or said why not.
+    void unpacked(const QString &voice, bool ok, const QString &why);
+    bool m_working = false;   // a part being hashed or the download being unpacked, on its own thread
     // Says [why], and tries again in [retryMs] (0: not on its own).
     void downloadFailed(const QString &why, int retryMs);
     void cleanOther();

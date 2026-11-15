@@ -373,13 +373,6 @@ object TvCallFocus {
     }
 
     @Synchronized
-    private fun retake(am: AudioManager) {
-        val r = request ?: return
-        try { am.requestAudioFocus(r) } catch (_: Exception) {}
-        try { if (am.mode != AudioManager.MODE_IN_COMMUNICATION) am.mode = AudioManager.MODE_IN_COMMUNICATION } catch (_: Exception) {}
-    }
-
-    @Synchronized
     fun release(c: Context) {
         val r = request ?: return
         request = null

@@ -528,10 +528,14 @@ Item {
     readonly property var prompts: {
         const p = []
         const held = asks && (wait > 0 || busy)
-        if (usePattern) { if (!held) p.push({ key: "dpad", label: "Move" }, { key: "a", label: drawing ? "Done" : "Draw" }) }
+        if (usePattern) {
+            if (!held) p.push({ key: "dpad", label: "Move" }, { key: "a", label: drawing ? (pad.lifted ? "Put down" : "Done") : "Draw" })
+            // X lifts the line, for diagonal and knight moves (PatternPad).
+            if (!held && drawing) p.push({ key: "x", label: pad.lifted ? "Put down" : "Lift" })
+        }
         else if (!held) p.push({ key: "a", label: pw.text.length && (asks || spareRecall || pw2.text.length) ? goText : "Type" })
         if (!asks && mode !== "spare" && pendingPattern === "" && !drawing) p.push({ key: "lb", label: usePattern ? "Password" : "Pattern" })
-        if (canSpare) p.push({ key: "x", label: usePattern ? "Unlock password" : "Draw pattern" })
+        if (canSpare && !drawing) p.push({ key: "x", label: usePattern ? "Unlock password" : "Draw pattern" })
         if (canForget) p.push({ key: "y", label: "Forgot it?" })
         else if (spareRecall && bad) p.push({ key: "y", label: "Set a new one" })
         else if (spareHere) p.push({ key: "y", label: "Unlock password" })

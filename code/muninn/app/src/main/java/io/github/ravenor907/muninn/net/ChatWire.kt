@@ -193,6 +193,15 @@ object ChatWire {
 
     fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     fun fileName(key: String) = hex(MessageDigest.getInstance("SHA-256").digest(key.toByteArray())).take(40)
+
+    private val UUID_ID = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+    /** A 1:1 photo, voice or video message id from someone else: a UUID, nothing else (it becomes a file name). */
+    fun pieceIdOk(id: String): Boolean = UUID_ID.matches(id)
+
+    /** A kept blob's file name: a plain name inside its folder (no folders, no "." or "..", nothing hidden). */
+    fun blobIdOk(id: String): Boolean = id.isNotEmpty() && id.length <= 200 && !id.startsWith(".") &&
+        id.none { it == '/' || it == '\\' || it.code < 0x20 }
 }
 
 /**
@@ -208,7 +217,7 @@ class Outbox(private val dir: File, private val read: (File) -> String?, private
 
     fun get(id: String, now: Long = System.currentTimeMillis()): List<String>? {
         memo[id]?.let { (t, e) -> if (now - t <= ttl) return e; drop(id); return null }
-        val o = try { JSONObject(read(file(id)) ?: return null) } catch (e: Exception) { return null }
+        val o = try { SafeJson.obj(read(file(id)) ?: return null) } catch (e: Exception) { return null }
         val t = o.optLong("t")
         if (o.optString("id") != id || now - t > ttl) { drop(id); return null }
         val a = o.getJSONArray("e")
@@ -256,7 +265,7 @@ class Seen(private val ttl: Long = 2 * ChatWire.DAY, read: (() -> String?)? = nu
 
     init {
         try {
-            read?.invoke()?.let { JSONObject(it) }?.let { o ->
+            read?.invoke()?.let { SafeJson.obj(it) }?.let { o ->
                 val now = System.currentTimeMillis()
                 for (k in o.keys()) o.optJSONArray(k)?.let { a -> if (now - a.optLong(0) <= ttl) map[k] = a.optLong(0) to a.optString(1) }
             }
@@ -310,7 +319,7 @@ class Ratchets(private val dir: File, private val read: (File) -> String?, priva
     private fun file(key: String) = File(dir, ChatWire.fileName(key))
 
     fun get(key: String): Ratchet.Peer = live.getOrPut(key) {
-        try { read(file(key))?.let { Ratchet.Peer.fromJson(JSONObject(it)) } } catch (e: Exception) { null } ?: Ratchet.Peer()
+        try { read(file(key))?.let { Ratchet.Peer.fromJson(SafeJson.obj(it)) } } catch (e: Exception) { null } ?: Ratchet.Peer()
     }
 
     fun save(key: String, p: Ratchet.Peer) {

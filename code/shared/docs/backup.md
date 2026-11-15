@@ -25,8 +25,13 @@ screen):
 3. What's in it: when and on which device it was made, in which app, the counts of contacts, chats, groups and folders,
    and whether files and pictures are in it. Restore (replaces what's here) is held to confirm.
 4. A copy of what's here is kept first: Huginn copies its chat folder (lock file too) to `chat-kept-<date>` beside it;
-   Muninn copies its files (lock file and open key too) to a `kept-<time>` folder. Erase everything removes these
-   copies too. Then the backup goes in and the app restarts.
+   Muninn copies its files (lock file and open key too) to a `kept-<time>` folder, and keeps at most the two newest such
+   copies. Erase everything removes these copies too. Then the backup goes in and the app restarts.
+5. A restore never drops a lock. Settings › Restore keeps this device's lock. With the lock forgotten ("Forgot it?") or
+   unreadable (Muninn's "can't open your data" screen, when a lock was set), the backup goes in and the app asks for a
+   new lock before anything shows.
+6. The identity's internet mailbox is always worked out from the restored secret, never taken from settings, and the
+   relays' read positions start over, so messages still waiting on the relays for the restored identity arrive.
 
 ## 2. The file
 
@@ -70,6 +75,9 @@ names start with "@" and are never written as files:
 | `@about.json` | `{"v":1, "app", "device", "created", "files": true or false}`: which app and device made it, and whether files and pictures are in it. |
 | `@move.json` | The shared form of section 18.4 of protocol.md: identity, contacts, ratchets, chats (text), groups, folders and profile. The counts on the Restore screen come from it. |
 | `@prefs.json` | Muninn's settings (Muninn only). |
+
+Readers and writers SHOULD stream: a backup is written and read one file at a time (GCM's tag is checked at the end
+of a first pass before anything is restored), so any backup a device could make also restores on it.
 
 Huginn's settings go in as `huginn-settings.dat`. Files and pictures are `photos/...` and `mirror-media/...`; left out
 when the checkbox is off. A longer video's pieces (`photos/<id>.v/...`) are never in a backup or a move, since both are

@@ -200,6 +200,8 @@ object TvMic {
     }
 
     @Volatile private var call: CallAudio? = null
+    /** The newest call that asked for a stage ([forCall]'s gen). */
+    @Volatile private var callGen = 0L
 
     /**
      * The rates a call opens its microphone and speaker at: the TV's own with [TvVoice], else [callRate].
@@ -216,8 +218,12 @@ object TvMic {
      * [sessionId]); turns on Android's AGC only when [TvVoice] isn't there. It reads [level] for every
      * frame, so a new "Microphone level" reaches a call that is going on.
      */
-    fun forCall(sessionId: Int, captureRate: Int = 16_000, playRate: Int = captureRate, callRate: Int = 16_000): CallAudio? {
+    @Synchronized
+    fun forCall(sessionId: Int, captureRate: Int = 16_000, playRate: Int = captureRate, callRate: Int = 16_000, gen: Long = Long.MAX_VALUE): CallAudio? {
         if (!active) return null
+        // 1.54: an older call (generation [gen], see CallMedia) never opens a stage over, or closes, a newer call's.
+        if (gen < callGen) return null
+        if (gen != Long.MAX_VALUE) callGen = gen
         release()
         val a = CallAudio(captureRate, playRate, callRate)
         if (processing) a.start()
@@ -226,6 +232,7 @@ object TvMic {
         return a
     }
 
+    @Synchronized
     fun release() {
         try { callAgc?.release() } catch (_: Exception) {}
         callAgc = null

@@ -7,15 +7,17 @@ Files:
 
 - `worker.js`: the Worker, and the `RelayLimits` object that keeps the daily counts.
 - `wrangler.toml`: the Worker's name, the `LIMITS` binding and the storage setup, for `wrangler deploy`.
-- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `45 tests passed`.
-- `package.json` and `package-lock.json`: the exact wrangler version the deploy installs (`npm ci`).
+- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `53 tests passed`.
+- `package.json` and `package-lock.json`: the exact wrangler version, and every package under it with its hash, that
+  the deploy installs (`npm ci --ignore-scripts`). The deploy fails without the lockfile.
 
 ## How it gets to Cloudflare
 
 Each release (a push to main that changes `code/VERSION`) deploys this folder to the Worker `huginn-relay`
 (`https://huginn-relay.ravenor907.workers.dev`), in its own job after the release is out. Test builds and betas
-never touch it. The deploy job can only read the repository, installs wrangler from `package-lock.json` and keeps the
-Worker's secrets. Without the two GitHub secrets below, or if the deploy fails, the release still stands and the
+never touch it. The deploy job can only read the repository and keeps the Worker's secrets. It installs wrangler from
+`package-lock.json` with no install scripts, in a step that has no Cloudflare token; only the step that runs
+`wrangler deploy` gets the token. Without the two GitHub secrets below, or if the deploy fails, the release still stands and the
 run shows a warning.
 
 ## Setup steps
@@ -100,9 +102,10 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
 - Limits (details in `code/shared/docs/relay.md`, "Limits"): every budget counts minutes of relay login handed out.
   New app builds get 10 minute logins, ask for one only when a call needs the relay (not on Wi-Fi, Bluetooth or a
   direct path), and renew only while the relay carries the call, so the minutes are time spent relaying; older builds
-  get 30 minute logins, which count 3 times as much. Each day: 900 minutes per app install (counted by its install
-  token, never by its address, so a carrier's shared addresses or a school never block anyone), 1440 per address group
-  (an IPv4 /24 or an IPv6 /48) shared only by installs registered in the last 2 days, and 50,000 for everyone, at most
+  get 30 minute logins, which count 3 times as much. Each day: 600 minutes (10 hours) per app install, counted by its
+  install token; 2400 per origin (the address group an install registered from, carried in its token, so 4 devices of
+  one household relaying 10 hours each); 1440 per address group (an IPv4 /24 or an IPv6 /48) shared only by installs
+  registered in the last 2 days; and 50,000 for everyone, at most
   a quarter of that in any one hour (about 208 people relaying at once). 50,000 minutes of sound is about 30 GB a day,
   under the free 1,000 GB a month of TURN; video over the relay costs about 20 times as much a minute.
   Logins without an install token (very old apps, or anyone who pulled `APP_SECRET` out of an app) get far less: 60
@@ -110,8 +113,17 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
   Past 60% of the day's or hour's budget the relay is "busy": only installs registered at least 2 days earlier still
   get logins. When the relay says no, calls go on over Wi-Fi, Bluetooth and direct paths. The day resets at midnight UTC.
 - Optional Worker variables (Type: Text, not Secret): `DAILY_MINUTES` sets the day's budget for everyone (pick it from
-  what you are willing to pay for TURN; 50,000 minutes is about 833 hours of relaying). `LEGACY_UNTIL`, a Unix time in seconds:
-  from then on logins without a token are refused. Every app since 1.36 has a token, so this can be set now.
+  what you are willing to pay for TURN; 50,000 minutes is about 833 hours of relaying; the lowest it takes, 60, all but
+  stops the relay for the day). `LEGACY_UNTIL`, a Unix time in seconds: from then on logins without a token are
+  refused with `update_needed`. Don't set it while any family device still runs an app too old to have an install
+  token: from that moment its internet calls get no relay at all, for good, until it is updated. Logins without a
+  token have a small pool of their own (above) that anyone with `APP_SECRET` can use up for the day; making it smaller
+  would only make that easier, so it stays as it is until you choose a date to end it.
+- The month's relayed media (relay.md "Relayed media"): apps report what they relayed, and each app goes by its own
+  count for the 950 GB stop. The Worker counts a report only from an install registered at least 2 days earlier, at
+  most 10 GB a day and 50 GB a month per install, 30 GB a day per address group, and 1000 counted reports a day in all,
+  so a handful of made-up installs can't fill the month. Past 950 GB on that count it refuses logins that say they are
+  for files. It can't see the bytes TURN relays, so step H's alert is the real ceiling.
 - Junk requests: everything that reaches the Worker counts against the free plan's 100,000 requests a day. The Worker
   turns junk away before it costs anything else (no storage request, no TURN login), but only a rule in front of it can
   keep junk from counting. That needs a domain on this Cloudflare account; `wrangler.toml` and relay.md ("Junk
@@ -123,11 +135,11 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
   into an address by trying them all. All counts from earlier days are deleted when a new day starts.
 - If the storage object is missing or not working, the Worker refuses every request (answers 503).
   That is on purpose: the limits are what protect the TURN account.
-- Free plan budget: with every limit used up, about 24,200 storage rows written a day (and as many deleted the next
-  day), against the free 100,000. No new secret is needed: tokens are signed with a key made from `TURN_KEY_API_TOKEN`
+- Free plan budget: with every limit used up, about 35,150 storage rows written a day (and as many deleted later),
+  against the free 100,000. No new secret is needed: tokens are signed with a key made from `TURN_KEY_API_TOKEN`
   (or a `TOKEN_KEY` secret, if you add one).
 - A request body over 1 KB is refused (413) before it is read.
 - TURN data is billed by Cloudflare per GB relayed. Check **Realtime** in the dashboard for usage; step H's alert
   emails you when usage passes the limit you chose.
-- To deploy by hand from this folder: `npm ci`, then `npx wrangler deploy` (needs Node 22 or newer and a
+- To deploy by hand from this folder: `npm ci --ignore-scripts`, then `npx wrangler deploy` (needs Node 22 or newer and a
   Cloudflare login).

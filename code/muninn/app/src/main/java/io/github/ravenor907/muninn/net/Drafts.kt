@@ -225,7 +225,7 @@ object Drafts {
 
     fun decode(s: String?): Map<String, Draft> {
         if (s.isNullOrBlank()) return emptyMap()
-        val o = try { JSONObject(s) } catch (_: Exception) { return emptyMap() }
+        val o = try { SafeJson.obj(s) } catch (_: Exception) { return emptyMap() }
         val out = HashMap<String, Draft>()
         for (k in o.keys()) {
             val d = o.optJSONObject(k) ?: continue

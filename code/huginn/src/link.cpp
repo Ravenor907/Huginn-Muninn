@@ -34,6 +34,9 @@
 namespace
 {
 qint64 now() { return QDateTime::currentMSecsSinceEpoch(); }
+// A linked phone's message older than this (by its own clock, so with room for a clock a little off) waited somewhere:
+// it shows, without a sound here.
+constexpr qint64 kMirrorFreshMs = 30 * 60000;
 QString jstr(const QJsonObject &o, const char *k) { return o.value(QLatin1String(k)).toString(); }
 QString vstr(const QVariantMap &m, const char *k) { return m.value(QLatin1String(k)).toString(); }
 QByteArray compact(const QJsonValue &v)
@@ -2131,7 +2134,10 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
             // A group's message names its channel ("mirror:<peer>#<channel>"): only that tab on screen counts as looking
             // (main.cpp), and a click opens that tab. Mute and Reduce notifications go by the chat (Chat::notifyFor).
             const bool group = peer.startsWith(QLatin1String("g:"));
-            Q_EMIT m_chat->arrived(who, x.text.left(60), QStringLiteral("mirror:") + peer + (group ? QStringLiteral("#") + chOf(x) : QString()));
+            // The phone sounds for it itself: here it sounds only while it's news, not one already read on the phone
+            // (or here) and not one that waited (the phone's queue after a reconnect, more than 30 minutes old).
+            const bool stale = !unreadMsg(x, c.readAt, c.seen) || (x.time > 0 && now() - x.time > kMirrorFreshMs);
+            m_chat->arrive(who, x.text.left(60), QStringLiteral("mirror:") + peer + (group ? QStringLiteral("#") + chOf(x) : QString()), stale, x.time);
         }
         return true;
     }

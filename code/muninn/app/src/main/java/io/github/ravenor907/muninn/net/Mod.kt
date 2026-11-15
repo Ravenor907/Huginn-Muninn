@@ -149,7 +149,7 @@ class PeopleSound(private val read: () -> String?, private val write: (String) -
     val all: StateFlow<Map<String, Person>> = _all.asStateFlow()
 
     private fun load(): Map<String, Person> = try {
-        val o = JSONObject(read() ?: return emptyMap())
+        val o = SafeJson.obj(read() ?: return emptyMap())
         o.keys().asSequence().associateWith { k ->
             val p = o.getJSONObject(k)
             Person(p.optBoolean("m"), p.optBoolean("s"), if (p.has("v")) ModLogic.clampVolume(p.opt("v")) else ModLogic.VOLUME_DEFAULT)

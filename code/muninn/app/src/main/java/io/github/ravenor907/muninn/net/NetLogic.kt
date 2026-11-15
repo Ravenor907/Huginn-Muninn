@@ -62,10 +62,33 @@ object NetLogic {
     fun reconnectMs(n: Int, streak: Int): Long = maxOf(retryMs(n), swapMs(streak))
 
     /**
-     * Events can be backdated up to 10 minutes (see [Nostr.publish]), and the sender's clock may be off too (round 14):
-     * look back the blur plus 30 minutes past the last finish. Whatever comes again is dropped as seen.
+     * Events can be backdated up to 10 minutes (see [Nostr.publish]), and the sender's clock may be off too (round 14;
+     * 1.54: by hours, a dual-boot PC on the wrong time zone): look back 3 hours past the last finish. Whatever comes
+     * again is dropped as seen. Live events don't depend on it: they come on a request with no `since` at all.
      */
-    const val SINCE_SLACK_S = 40 * 60L
+    const val SINCE_SLACK_S = 3 * 3600L
+
+    /**
+     * This device's clock against the relays' (s, relay less local): the middle one of the relays' readings that are
+     * believable ([RELAY_OFFSET_MAX_S]), 0 when there are none or it's under [CLOCK_TRUST_S] (a few seconds' drift is
+     * left alone). Sent events are stamped with it, so a phone whose clock is off still gets its events taken and found.
+     */
+    fun clockOffset(offsets: Collection<Long>): Long {
+        val ok = offsets.filter { it in -RELAY_OFFSET_MAX_S..RELAY_OFFSET_MAX_S }.sorted()
+        if (ok.isEmpty()) return 0L
+        val mid = ok[ok.size / 2]
+        return if (kotlin.math.abs(mid) < CLOCK_TRUST_S) 0L else mid
+    }
+    const val CLOCK_TRUST_S = 60L
+    /** This device's clock is this far (s) from the relays': the person is told it looks wrong. */
+    const val CLOCK_WARN_S = 10 * 60L
+
+    /** A relay's "OK false" reason that says the event's time was refused (the sender's clock is off). */
+    fun timeRefused(reason: String): Boolean {
+        val r = reason.lowercase()
+        return r.startsWith("invalid") && (r.contains("created_at") || r.contains("future") || r.contains("too old") ||
+            r.contains("timestamp") || r.contains("expir"))
+    }
 
     /** At most this much (s) is believed of a relay's own clock against this device's. */
     const val RELAY_OFFSET_MAX_S = 86_400L

@@ -7,12 +7,14 @@ apps check (code/shared/vectors/p95-vectors.json). Run it to write the vectors; 
  - j1 (17): a link's id, whether a link still lets someone in, and "mi" in a group state.
  - k6 (7.11): which Kids' TV reconnect messages are well-formed, and when the new phone takes over (24 hours, nobody blocked).
 """
-import base64, hashlib, hmac, json, os, struct
+import base64, hashlib, hmac, json, os, struct, sys
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+# Its sibling tools, also under python3 -I (which leaves the script's folder off the path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import i1f1_ref
 import proto06_ref
 

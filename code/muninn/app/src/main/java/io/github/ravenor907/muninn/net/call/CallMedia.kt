@@ -334,7 +334,7 @@ class CallMedia(
         markLive(kind, from, fresh = true)
         // Authentic, relayed from an address the peer didn't advertise: answer there too.
         if (kind == CallLogic.Kind.RELAY && peerRelay.heard(from)) from?.let { turn?.permit(it); renewing?.permit(it) }
-        if (!gotFirst) { gotFirst = true; events.onFirstMedia() }
+        if (!gotFirst) { gotFirst = true; firstMediaAt = System.currentTimeMillis(); events.onFirstMedia() }
         synchronized(counters) { bytesIn += data.size }
         if (kind == CallLogic.Kind.RELAY) relayBytes.addAndGet(data.size + RELAY_OVERHEAD.toLong())
         when (o.type) {
@@ -432,6 +432,7 @@ class CallMedia(
         }
         if (c2 && gotFirst && now - lastReport >= 1_000) sendReport()
         if (c2) pollVideo(now)
+        watchAudio(now)
     }
 
     fun anyLive(): Boolean { val now = System.currentTimeMillis(); return paths.any { it.live(now) } }
@@ -522,12 +523,34 @@ class CallMedia(
     /** The call's sound, counted: a Kids' TV tells its parents when a call had none (CallHealth). */
     private val health = CallHealth()
 
-    /** Kids' TV, a call of 8 s or more where sound didn't go or didn't play: what happened, to its parents, once. */
-    private fun sayHealth() {
+    /**
+     * Kids' TV, after a call that connected (it was answered, its sound started, and sound packets came): the sound
+     * check, to its parents, once. Timed from when it connected, never the ringing. Sent when something looks wrong, and
+     * for the first few connected calls of each version even when it looks right (so a test call always says).
+     */
+    private fun healthReport(): String? {
+        if (!io.github.ravenor907.muninn.tv.TvMic.active || externalAudio || audioStartedAt == 0L || firstMediaAt == 0L) return null
+        val secs = (System.currentTimeMillis() - maxOf(firstMediaAt, audioStartedAt)) / 1000
+        val t = track
+        val route = if (t == null) "none" else try {
+            t.routedDevice?.let { d -> AudioRoute.typeName(d.type) } ?: "unknown"
+        } catch (_: Throwable) { "unknown" }
+        val mode = when (try { audio.mode } catch (_: Exception) { -9 }) {
+            AudioManager.MODE_NORMAL -> "normal"; AudioManager.MODE_IN_COMMUNICATION -> "call"; AudioManager.MODE_IN_CALL -> "phone call"
+            AudioManager.MODE_RINGTONE -> "ringing"; else -> "other"
+        }
+        val setup = CallHealth.Setup(mode, usage, route, trackRate, try { t?.playState ?: -1 } catch (_: Exception) { -1 })
+        val prefs = try { context.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) } catch (_: Exception) { null }
+        val ver = try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
+        val n = if (prefs?.getString("soundCheckVer", null) == ver) prefs.getInt("soundCheckN", 0) else 0
+        val text = health.report(secs, setup, always = n < ALWAYS_REPORTS) ?: return null
+        try { prefs?.edit()?.putString("soundCheckVer", ver)?.putInt("soundCheckN", n + 1)?.apply() } catch (_: Exception) {}
+        return text
+    }
+
+    private fun sayHealth(text: String?) {
+        if (text == null) return
         try {
-            if (!io.github.ravenor907.muninn.tv.TvMic.active || externalAudio) return
-            val secs = (System.currentTimeMillis() - started) / 1000
-            val text = health.problem(secs, playRate, track?.playState ?: -1) ?: return
             val app = context.applicationContext as? io.github.ravenor907.muninn.Muninn ?: return
             for (k in io.github.ravenor907.muninn.tv.KidTv.state.value.parents) app.chat.sendPrivate(k, text)
         } catch (_: Exception) {}
@@ -718,15 +741,23 @@ class CallMedia(
 
     private val audio = context.getSystemService(AudioManager::class.java)
     @Volatile private var record: AudioRecord? = null
-    private var track: AudioTrack? = null
-    private var aec: AcousticEchoCanceler? = null
-    private var ns: NoiseSuppressor? = null
+    @Volatile private var track: AudioTrack? = null
+    @Volatile private var aec: AcousticEchoCanceler? = null
+    @Volatile private var ns: NoiseSuppressor? = null
     private var proximity: PowerManager.WakeLock? = null
     companion object {
         /** TURN and UDP headers on each relayed packet, close enough for the month's count. */
         const val RELAY_OVERHEAD = 40
         /** Calls holding the phone in call mode now; read aloud puts the mode back to normal when this is 0. */
         @JvmField val liveCalls = java.util.concurrent.atomic.AtomicInteger(0)
+        /**
+         * 1.54: every call that starts its sound takes the next number. A microphone or speaker thread of an older call
+         * (one still retrying, or stuck in Android's audio) stops by itself and never touches the newer call's sound.
+         */
+        private val audioGen = java.util.concurrent.atomic.AtomicLong(0)
+        /** How many connected TV calls per version send the sound check even when it looks fine (the next test calls). */
+        private const val ALWAYS_REPORTS = 3
+        private const val STUCK_MS = 3_000L
     }
     private var oldMode = AudioManager.MODE_NORMAL
     @Volatile private var counted = false
@@ -735,8 +766,25 @@ class CallMedia(
     /** Kids' TV only: the TV's microphone and speaker sound (TvMic, TvVoice). Null on a phone. */
     @Volatile private var tvGain: io.github.ravenor907.muninn.tv.TvMic.CallAudio? = null
     /** The rates the microphone and the speaker run at: the call's own on a phone, the TV's own on a Kids' TV. */
-    private var micRate = Opus.RATE
-    private var playRate = Opus.RATE
+    @Volatile private var micRate = Opus.RATE
+    @Volatile private var playRate = Opus.RATE
+    /** The rate the speaker really runs at (a fallback speaker may run at the call's own rate). */
+    @Volatile private var trackRate = Opus.RATE
+    @Volatile private var minIn = 0
+    /** This call's number ([audioGen]), 0 until its sound starts. */
+    @Volatile private var gen = 0L
+    /** 1.54, a TV (Kids' or not): media routing and normal audio mode, so the call plays where the TV plays (see AudioRoute.tv). */
+    @Volatile private var tvRoute = false
+    @Volatile private var audioStartedAt = 0L
+    @Volatile private var firstMediaAt = 0L
+    /** When the microphone and the speaker last came back from read() and write(): a stuck one is unblocked and made again. */
+    @Volatile private var lastReadAt = 0L
+    @Volatile private var lastWriteAt = 0L
+    @Volatile private var micStuck = false
+    @Volatile private var speakerStuck = false
+    private var lastAudioWatch = 0L
+
+    private fun live(g: Long) = !stopped && g == gen && g == audioGen.get()
 
     // ------------------------------------------------------------------ voice rooms (section 6)
 
@@ -748,117 +796,232 @@ class CallMedia(
     fun nextPlay(): Play = jitter.next()
 
     /**
-     * Starts the microphone and the speaker. False if the microphone couldn't open (no permission?).
-     * [video]: a video call, which starts on the speaker unless a headset is connected (AudioRoute).
+     * Starts the microphone and the speaker. False if the call's sound can't run here at all (Opus didn't load).
+     * Never throws: a speaker or microphone that won't open is tried again while the call goes on, and the TV call
+     * sound check says so. [video]: a video call, which starts on the speaker unless a headset is connected (AudioRoute).
      */
     @SuppressLint("MissingPermission")
     fun startAudio(video: Boolean = false): Boolean {
         if (externalAudio) return true
         if (Opus.loadError != null) return false
-        oldMode = audio.mode
-        audio.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (stopped || gen != 0L) return true
+        val g = audioGen.incrementAndGet()
+        gen = g
+        audioStartedAt = System.currentTimeMillis()
+        tvRoute = try { io.github.ravenor907.muninn.tv.KidMode.isTv(context) } catch (_: Throwable) { false }
+        try {
+            oldMode = audio.mode
+            // A TV plays the call through the media path in normal mode (see AudioRoute.tv); a phone in call mode.
+            audio.mode = if (tvRoute) AudioManager.MODE_NORMAL else AudioManager.MODE_IN_COMMUNICATION
+        } catch (_: Exception) {}
         if (!counted) { counted = true; liveCalls.incrementAndGet() }
-        AudioRoute.start(audio, video = video)
+        try { AudioRoute.start(audio, video = video, tv = tvRoute) } catch (_: Exception) {}
         // Kids' TV: the microphone and speaker at the TV's own rate (TvVoice converts); a phone: the call's 16 kHz.
         val tv = io.github.ravenor907.muninn.tv.TvMic.active
-        io.github.ravenor907.muninn.tv.TvMic.callRates(context, Opus.RATE).let { (m, p) -> micRate = m; playRate = p }
-        val minIn = AudioRecord.getMinBufferSize(micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        try { io.github.ravenor907.muninn.tv.TvMic.callRates(context, Opus.RATE).let { (m, p) -> micRate = m; playRate = p } } catch (_: Exception) {}
+        minIn = AudioRecord.getMinBufferSize(micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         // A phone has one source; a Kids' TV tries the next one when a source won't open or start.
-        val rec = io.github.ravenor907.muninn.tv.TvMic.callSources().asSequence().mapNotNull { openMic(it, minIn) }.firstOrNull()
+        val rec = try { openFrom(0, g)?.first } catch (_: Exception) { null }
         record = rec
         // No microphone now (another app holds it, as a TV's voice search or camera can): the call's sound still plays
         // here, at the call's own rate (Android converts it), and the microphone is tried again every second, quietly.
-        // Before, a microphone that wouldn't open left the whole call silent both ways while the video went on.
         if (rec == null && tv) playRate = Opus.RATE
-        val minOut = AudioTrack.getMinBufferSize(playRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        // A TV's audio is slower to wake and its CPU weaker: a 100 ms cushion there, so it never runs dry.
-        val outBytes = if (tv) maxOf(minOut * 2, playRate / 10 * 2) else maxOf(minOut, Opus.FRAME * 2 * 3)
-        track = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(playRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setBufferSizeInBytes(outBytes)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        // The echo canceller's first guess at the speaker-to-microphone delay (it finds the real one itself).
-        tvGain?.delay(20 + outBytes / 2 * 1000 / playRate)
-        player = Thread({ playLoop(track!!) }, "muninn-call-play").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
-        mic = if (rec != null) Thread({ captureLoop(rec) }, "muninn-call-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
-        else Thread({
-            // Tried again until it opens or the call ends; then it records as if it had opened at the start.
-            while (!stopped) {
-                try { Thread.sleep(1_000) } catch (_: InterruptedException) { return@Thread }
-                if (stopped) return@Thread
-                val got = io.github.ravenor907.muninn.tv.TvMic.callSources().asSequence().mapNotNull { openMic(it, minIn) }.firstOrNull() ?: continue
-                if (stopped) { try { got.stop(); got.release() } catch (_: Exception) {}; return@Thread }
-                record = got
-                tvGain?.delay(20 + outBytes / 2 * 1000 / playRate)
-                captureLoop(got)
-                return@Thread
-            }
-        }, "muninn-call-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
-        // Against the ear only when it isn't on the speaker (a video call usually is).
-        proximityOn(!AudioRoute.onSpeaker)
+        track = buildTrack()
+        tvGain?.delay(echoDelay())
+        player = Thread({ playLoop(g) }, "muninn-call-play").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
+        mic = Thread({ micLoop(rec, g) }, "muninn-call-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
+        // Against the ear only when it isn't on the speaker (a video call usually is); never on a TV.
+        proximityOn(!tvRoute && !AudioRoute.onSpeaker)
         return true
+    }
+
+    /** The echo canceller's first guess at the speaker-to-microphone delay (it finds the real one itself). */
+    private fun echoDelay(): Int = 20 + outBytes(trackRate) / 2 * 1000 / maxOf(1, trackRate)
+
+    /** The speaker's buffer: a TV's audio is slower to wake and its CPU weaker, so a 100 ms cushion there. */
+    private fun outBytes(rate: Int): Int {
+        val minOut = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT).coerceAtLeast(0)
+        return if (io.github.ravenor907.muninn.tv.TvMic.active || tvRoute) maxOf(minOut * 2, rate / 10 * 2) else maxOf(minOut, Opus.FRAME * 2 * 3)
+    }
+
+    /** "media" or "voice": what the speaker plays as. A TV plays the call as media (see AudioRoute.tv). */
+    @Volatile private var usage = "voice"
+
+    /**
+     * The call's speaker, never throwing: as planned (media on a TV, a voice call on a phone), else the other kind at the
+     * same rate, else plain media at the call's own rate. Null (and the sound check says so) when none can be made.
+     */
+    private fun buildTrack(): AudioTrack? {
+        val first = if (tvRoute) AudioAttributes.USAGE_MEDIA else AudioAttributes.USAGE_VOICE_COMMUNICATION
+        val other = if (tvRoute) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA
+        val plans = listOf(first to playRate, other to playRate, AudioAttributes.USAGE_MEDIA to Opus.RATE).distinct()
+        for ((i, p) in plans.withIndex()) {
+            val (u, rate) = p
+            val t = try {
+                AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder().setUsage(u).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                    .setBufferSizeInBytes(outBytes(rate))
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            } catch (_: Throwable) { null }
+            if (t == null) continue
+            if (t.state != AudioTrack.STATE_INITIALIZED) { try { t.release() } catch (_: Exception) {}; continue }
+            trackRate = rate
+            usage = if (u == AudioAttributes.USAGE_MEDIA) "media" else "voice"
+            health.speakerFallback = i
+            return t
+        }
+        health.speakerFallback = -1
+        return null
+    }
+
+    /**
+     * Opens the first source of the call's list that records, starting at [start] (wrapping round). (recorder, its index)
+     * or null when none would.
+     */
+    private fun openFrom(start: Int, g: Long): Pair<AudioRecord, Int>? {
+        val srcs = io.github.ravenor907.muninn.tv.TvMic.callSources()
+        for (k in srcs.indices) {
+            if (!live(g)) return null
+            val i = (start + k) % srcs.size
+            openMic(srcs[i], g)?.let { return it to i }
+        }
+        return null
     }
 
     /**
      * Opens and starts the microphone on [src] with the echo canceller, noise suppressor and (Kids' TV)
-     * gain and AGC where the device has them. Null, with everything released, if it doesn't record.
+     * gain and AGC where the device has them. Null, with everything released, if it doesn't record, or once the call
+     * (generation [g]) is over: an older call's retry never opens a sound stage over a newer call's.
      */
     @SuppressLint("MissingPermission")
-    private fun openMic(src: Int, minIn: Int): AudioRecord? {
+    private fun openMic(src: Int, g: Long): AudioRecord? {
+        if (!live(g)) return null
         // A TV gets a roomy 200 ms buffer: a weak CPU that falls behind for a moment loses nothing.
         val inBytes = if (io.github.ravenor907.muninn.tv.TvMic.active) maxOf(minIn * 2, micRate / 5 * 2) else maxOf(minIn, Opus.FRAME * 2 * 4)
-        // As in 1.44, the last version whose TV calls had sound: the plain recorder. 1.46's "private" capture
-        // (setPrivacySensitive) is gone: TV calls were silent both ways from then on.
+        // As in 1.44, the last version whose TV calls had sound: the plain recorder (no "private" capture).
         val rec = try {
             AudioRecord(src, micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inBytes)
         } catch (e: Exception) { null }
-        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { health.tried += "$src no open"; rec?.release(); return null }
+        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { health.tried(src, "no open"); try { rec?.release() } catch (_: Exception) {}; return null }
+        if (!live(g)) { try { rec.release() } catch (_: Exception) {}; return null }
         // Kids' TV: echo canceller, noise suppression and gain (TvVoice), or a louder microphone without it.
-        tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId, micRate, playRate, Opus.RATE)
+        val a = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId, micRate, trackRate, Opus.RATE, g)
+        if (!live(g)) {
+            io.github.ravenor907.muninn.tv.TvMic.release(a)
+            try { rec.release() } catch (_: Exception) {}
+            return null
+        }
+        tvGain = a
         if (io.github.ravenor907.muninn.tv.TvMic.platformEffects()) {
             if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
             // Off in Settings: switched off rather than left alone, as the call microphone has Android's own on already.
             if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = CallManager.noiseRemoval(context) && io.github.ravenor907.muninn.tv.TvMic.platformNoise() } } catch (e: Exception) { null }
         }
         val ok = try { rec.startRecording(); rec.recordingState == AudioRecord.RECORDSTATE_RECORDING } catch (e: Exception) { false }
-        health.tried += if (ok) "$src ok" else "$src no start"
-        if (ok) { health.mic = src; return rec }
-        try { aec?.release(); ns?.release() } catch (_: Exception) {}
-        aec = null; ns = null
-        if (tvGain != null) { io.github.ravenor907.muninn.tv.TvMic.release(tvGain); tvGain = null }
-        rec.release()
+        health.tried(src, if (ok) "ok" else "no start")
+        if (ok) { health.mic = src; lastReadAt = System.currentTimeMillis(); return rec }
+        dropMicStage()
+        try { rec.release() } catch (_: Exception) {}
         return null
     }
 
-    private fun captureLoop(rec: AudioRecord) {
+    /** The microphone's effects and sound stage go (its recorder is let go by whoever holds it). */
+    private fun dropMicStage() {
+        try { aec?.release(); ns?.release() } catch (_: Exception) {}
+        aec = null; ns = null
+        tvGain?.let { io.github.ravenor907.muninn.tv.TvMic.release(it) }
+        tvGain = null
+    }
+
+    private enum class MicEnd { STOPPED, ERRORS, ZEROS, STUCK }
+
+    /**
+     * The microphone for the whole call: records, and when it fails (read errors: a dead recorder after an input switch
+     * or the audio server restarting; a stuck read; on a TV, several seconds of exact zeros: another app holds it) it is
+     * let go and opened again, the next source first for zeros. Without one, tried again every second.
+     */
+    private fun micLoop(first: AudioRecord?, g: Long) {
+        var rec = first
+        var idx = 0
+        try {
+            while (live(g)) {
+                if (rec == null) {
+                    try { Thread.sleep(1_000) } catch (_: InterruptedException) { return }
+                    val got = openFrom(idx, g) ?: continue
+                    rec = got.first; idx = got.second
+                    record = rec
+                    tvGain?.delay(echoDelay())
+                }
+                val why = captureLoop(rec, g)
+                try { rec.stop() } catch (_: Exception) {}
+                try { rec.release() } catch (_: Exception) {}
+                if (record === rec) record = null
+                rec = null
+                dropMicStage()
+                health.mic = -1
+                if (why == MicEnd.STOPPED || !live(g)) return
+                health.micReopens.incrementAndGet()
+                // Zeros: another app may hold this source; the next one is tried first. Errors or a stuck read: the same.
+                if (why == MicEnd.ZEROS) idx = (idx + 1) % maxOf(1, io.github.ravenor907.muninn.tv.TvMic.callSources().size)
+                val got = openFrom(idx, g)
+                if (got != null) { rec = got.first; idx = got.second; record = rec; tvGain?.delay(echoDelay()) }
+            }
+        } finally {
+            rec?.let { r -> try { r.stop() } catch (_: Exception) {}; try { r.release() } catch (_: Exception) {}; if (record === r) record = null }
+            if (gen == g && stopped) dropMicStage()
+        }
+    }
+
+    private fun captureLoop(rec: AudioRecord, g: Long): MicEnd {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
-        val enc = try { Opus.Encoder() } catch (e: Throwable) { return }
+        val enc = try { Opus.Encoder() } catch (e: Throwable) { return MicEnd.STOPPED }
         val pcm = ShortArray(Opus.FRAME)
         var lastSent = 0L
         var frames = 0
         var zeroFrames = 0
+        micStuck = false
+        lastReadAt = System.currentTimeMillis()
         // The microphone's 20 ms at its own rate (a Kids' TV may run it at 48 kHz).
         val tv = tvGain
+        val tvMic = tv != null || io.github.ravenor907.muninn.tv.TvMic.active || tvRoute
         val raw = if (tv != null && tv.captureFrame != Opus.FRAME) ShortArray(tv.captureFrame) else pcm
+        val errors = CallLogic.MicErrors()
+        val zeros = CallLogic.ZeroRun()
         try {
             // Already recording: openMic started it to know the source works.
-            while (!stopped) {
+            while (live(g)) {
                 var got = 0
-                var failed = false
-                while (got < raw.size && !stopped) { val n = rec.read(raw, got, raw.size - got); if (n <= 0) { failed = true; break }; got += n }
-                // A read error returns at once: a short pause so this loop never spins at audio priority. Nothing is
-                // restarted (as in 1.44: restarting the recorder is what a TV's microphone handles worst).
-                if (failed && !stopped) { try { Thread.sleep(20) } catch (_: InterruptedException) { break } }
-                if (got < raw.size) continue
-                // Another app took the microphone (for example a video cast to a Kids' TV): Android hands this app
-                // exact digital zeros, which a real room never gives. After about 250 ms of them, quietly take the
-                // call's audio mode back and restart the same recorder. No message: it must not interrupt.
-                if (tv == null && raw.all { it.toInt() == 0 }) {
-                    if (++zeroFrames == 12 && !stopped) try {
+                var failed = 0
+                while (got < raw.size && live(g)) { val n = rec.read(raw, got, raw.size - got); if (n <= 0) { failed = n; break }; got += n }
+                val now = System.currentTimeMillis()
+                lastReadAt = now
+                if (!live(g)) break
+                if (micStuck) return MicEnd.STUCK
+                if (got < raw.size) {
+                    if (failed < 0) health.readErr = failed
+                    // A read error returns at once: a short pause so this loop never spins at audio priority, and after
+                    // about half a second of nothing but errors the recorder is made again (a dead one never recovers).
+                    if (errors.read(false, now)) return MicEnd.ERRORS
+                    try { Thread.sleep(20) } catch (_: InterruptedException) { break }
+                    continue
+                }
+                errors.read(true, now)
+                health.micFrames.incrementAndGet()
+                val allZero = raw.all { it.toInt() == 0 }
+                if (allZero) health.micZero.incrementAndGet() else health.micReal.incrementAndGet()
+                if (tvMic) {
+                    // A TV: several seconds of exact zeros (another app, such as the assistant or voice search, holds
+                    // the microphone; Android hands this app zeros instead of an error): opened again, the next source first.
+                    val reopen = zeros.frame(allZero, now)
+                    if (zeros.seen) health.zerosSeen = true
+                    if (reopen) return MicEnd.ZEROS
+                } else if (allZero) {
+                    // A phone: after about 250 ms of exact zeros, quietly take the call's audio mode back and restart the
+                    // same recorder. No message: it must not interrupt.
+                    if (++zeroFrames == 12) try {
                         audio.mode = AudioManager.MODE_IN_COMMUNICATION
                         rec.stop(); rec.startRecording()
                     } catch (_: Exception) {}
@@ -872,37 +1035,58 @@ class CallMedia(
                 if (frames++ % 25 == 0) opusTuning().let { (b, l) -> enc.tune(b, l) }   // twice a second
                 val p = enc.encode(pcm, keepSilence = true) ?: continue
                 // DTX: one silence packet every 400 ms, so the other side's decoder makes comfort noise (5.5).
-                val now = System.currentTimeMillis()
                 if (Opus.isSilence(p) && now - lastSent < 400) continue
                 lastSent = now
                 send(CallCrypto.AUDIO, p)
             }
         } catch (_: Exception) {
+            if (live(g)) return MicEnd.ERRORS
         } finally {
-            try { rec.stop() } catch (_: Exception) {}; enc.close()
-            // Hung up while this thread was still inside read(): it lets the microphone go itself (see stop).
-            if (stopped) try { rec.release() } catch (_: Exception) {}
+            enc.close()
         }
+        return MicEnd.STOPPED
     }
 
-    private fun playLoop(t: AudioTrack) {
+    private fun playLoop(g: Long) {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         val dec = try { Opus.Decoder() } catch (e: Throwable) { return }
         val pcm = ShortArray(Opus.FRAME)
-        // Kids' TV: what goes to the speaker, at its own rate; the echo canceller hears it on the way.
-        val tv = tvGain
-        val out = if (tv != null) ShortArray(maxOf(tv.playFrame, Opus.FRAME)) else pcm
+        // Kids' TV: what goes to the speaker, at its own rate; the echo canceller hears it on the way. Read for every
+        // frame, so a microphone that opens late (or again) gets its echo canceller fed from then on.
+        val out = ShortArray(maxOf(48_000 / 50, Opus.FRAME))
         var wasSpeaking = false
+        var t: AudioTrack? = track
+        val errors = CallLogic.WriteErrors()
+        var rebuild = false
+        var frames = 0
         try {
-            t.play()
-            while (!stopped) {
-                val n = when (val f = jitter.next()) {
+            if (t != null) try { t.play() } catch (_: Exception) { rebuild = true }
+            lastWriteAt = System.currentTimeMillis()
+            while (live(g)) {
+                if (t == null || rebuild || speakerStuck) {
+                    // A dead or stuck speaker (an input switch, a soundbar or HDMI-CEC change, the audio server restarting):
+                    // made again. None to be had: tried again every second.
+                    if (t != null) {
+                        try { t.stop() } catch (_: Exception) {}; try { t.release() } catch (_: Exception) {}
+                        health.speakerRebuilds.incrementAndGet()
+                    }
+                    rebuild = false; speakerStuck = false
+                    t = buildTrack()
+                    track = t
+                    if (t == null) { try { Thread.sleep(1_000) } catch (_: InterruptedException) { break }; continue }
+                    try { t.play() } catch (_: Exception) {}
+                    tvGain?.delay(echoDelay())
+                    lastWriteAt = System.currentTimeMillis()
+                }
+                val f = jitter.next()
+                val n = when (f) {
                     is Play.Packet -> dec.decode(f.data, pcm)
                     is Play.Fec -> dec.decode(f.next, pcm, fec = true)
                     Play.Conceal -> dec.decode(null, pcm)
                     Play.Silence -> { pcm.fill(0); Opus.FRAME }
                 }
                 if (n <= 0) pcm.fill(0)
+                val real = f !is Play.Silence && n > 0
                 val s = speaking.feed(pcm, Opus.FRAME, System.currentTimeMillis())
                 if (s != wasSpeaking) { wasSpeaking = s; events.onSpeaking(s) }
                 // Their volume here (cap g2: 0 to 200 %), read for every frame after the speaking ring. Mute for me is for
@@ -911,14 +1095,63 @@ class CallMedia(
                 // The video this side shares plays here too, through the call's own sound (so the echo canceller knows it),
                 // lower while they talk.
                 CallShare.localQ.poll()?.let { CallShare.mix(pcm, it, s) }
-                val len = if (tv != null) tv.render(pcm, out) else Opus.FRAME
-                val w = t.write(out, 0, len)   // blocking: the audio clock paces this loop
-                if (w > 0 && n > 0) health.played.incrementAndGet() else if (w < 0) health.writeErr = w
+                val rate = trackRate
+                val want = rate / 50
+                val tv = tvGain
+                var len = if (tv != null && tv.playRate == rate) tv.render(pcm, out) else 0
+                // No processor (or it closed, or runs at another rate): the plain frame, stretched to the speaker's rate.
+                if (len <= 0) {
+                    if (tv != null) tv.render(pcm, ShortArray(tv.playFrame))   // the echo canceller still hears it
+                    len = stretch(pcm, out, want)
+                }
+                val w = try { t.write(out, 0, len) } catch (_: Exception) { AudioTrack.ERROR_DEAD_OBJECT }   // blocking: the audio clock paces this loop
+                val now = System.currentTimeMillis()
+                lastWriteAt = now
+                if (w > 0) {
+                    errors.write(true, now)
+                    if (real) health.playedReal.incrementAndGet() else health.playedSilence.incrementAndGet()
+                } else {
+                    if (w < 0) health.writeErr = w
+                    if (errors.write(false, now)) rebuild = true
+                    else try { Thread.sleep(20) } catch (_: InterruptedException) { break }   // never spin at audio priority
+                }
+                // Now and then: a speaker Android stopped by itself is started again, or made again if it won't.
+                if (++frames % 50 == 0 && !rebuild) try {
+                    if (t.playState != AudioTrack.PLAYSTATE_PLAYING) { t.play(); if (t.playState != AudioTrack.PLAYSTATE_PLAYING) rebuild = true }
+                } catch (_: Exception) { rebuild = true }
             }
         } catch (_: Exception) {
         } finally {
-            try { t.stop() } catch (_: Exception) {}; dec.close()
-            if (stopped) try { t.release() } catch (_: Exception) {}
+            dec.close()
+            // This thread's own speaker goes with it (stop() only lets go of one whose thread has left write()).
+            t?.let { x -> try { x.stop() } catch (_: Exception) {}; if (stopped || !live(g)) try { x.release() } catch (_: Exception) {} }
+        }
+    }
+
+    /** [pcm] (one call frame) into [out] at [want] samples: copied, or picked and repeated (nearest sample). */
+    private fun stretch(pcm: ShortArray, out: ShortArray, want: Int): Int {
+        val m = minOf(want, out.size)
+        if (m == pcm.size) { System.arraycopy(pcm, 0, out, 0, m); return m }
+        for (i in 0 until m) out[i] = pcm[(i.toLong() * pcm.size / m).toInt().coerceAtMost(pcm.size - 1)]
+        return m
+    }
+
+    /**
+     * Twice a second (the media timer): a read() or write() that hasn't come back for [STUCK_MS] is unblocked (the
+     * recorder or speaker stopped), and its thread makes it again.
+     */
+    private fun watchAudio(now: Long) {
+        if (audioStartedAt == 0L || externalAudio || now - lastAudioWatch < 500) return
+        lastAudioWatch = now
+        val r = record
+        if (r != null && lastReadAt > 0 && now - lastReadAt > STUCK_MS && !micStuck) {
+            micStuck = true
+            try { r.stop() } catch (_: Exception) {}
+        }
+        val t = track
+        if (t != null && lastWriteAt > 0 && now - lastWriteAt > STUCK_MS && !speakerStuck) {
+            speakerStuck = true
+            try { t.pause(); t.flush(); t.stop() } catch (_: Exception) {}
         }
     }
 
@@ -931,13 +1164,13 @@ class CallMedia(
     fun videoStarted() {
         if (externalAudio) return
         AudioRoute.videoCall()
-        proximityOn(!AudioRoute.onSpeaker)
+        proximityOn(!tvRoute && !AudioRoute.onSpeaker)
     }
 
     /** The sound goes to [id], one of [AudioRoute.outputs] (the call screen's Audio button). */
     fun setOutput(id: String) {
         AudioRoute.choose(id)
-        proximityOn(!AudioRoute.onSpeaker)
+        proximityOn(!tvRoute && !AudioRoute.onSpeaker)
     }
 
     /** Proximity: the screen goes dark against the ear (not on speaker). */
@@ -958,34 +1191,46 @@ class CallMedia(
 
     fun stop() {
         if (stopped) return
+        // What the sound was, read before anything is let go (the speaker's device and state).
+        val report = try { healthReport() } catch (_: Exception) { null }
         stopped = true
         synchronized(stunLock) { stunLock.notifyAll() }
         synchronized(sent[0]) { sent[0].clear() }; synchronized(sent[1]) { sent[1].clear() }
         ticker?.cancel(false)
         timer.shutdownNow()
         try { lan?.close() } catch (_: Exception) {}
+        // Never waits on the network (TurnClient lets go of its link on a thread of its own).
         try { turn?.close() } catch (_: Exception) {}
         try { renewing?.close() } catch (_: Exception) {}
-        sayHealth()
+        sayHealth(report)
         relayBytes.getAndSet(0).takeIf { it > 0 }?.let { n -> try { (context.applicationContext as io.github.ravenor907.muninn.Muninn).chat.meter.add(n) } catch (_: Exception) {} }
         bluetooth?.onMedia(null)
-        // Let the audio threads leave read() and write() before their objects go.
+        // Let the audio threads leave read() and write(): stopping (not releasing) the recorder and the speaker from here
+        // is safe and brings a stuck read() or write() back; the retry's sleep is interrupted.
+        try { record?.stop() } catch (_: Exception) {}
+        try { track?.let { it.pause(); it.flush(); it.stop() } } catch (_: Exception) {}
+        try { mic?.interrupt() } catch (_: Exception) {}
         try { mic?.join(500); player?.join(500) } catch (_: InterruptedException) {}
         // Released here only once its thread has left read() or write(); a thread still in there releases it itself
         // on the way out. Releasing under a running read is a native crash on some phones (a hang-up race).
-        if (mic?.isAlive != true) try { record?.release() } catch (_: Exception) {}
+        if (mic?.isAlive != true) {
+            try { record?.release() } catch (_: Exception) {}
+            try { aec?.release(); ns?.release() } catch (_: Exception) {}
+            // Only this call's own stage (TvMic.release(a)): never one a newer call has opened since.
+            tvGain?.let { io.github.ravenor907.muninn.tv.TvMic.release(it) }
+        }
         if (player?.isAlive != true) try { track?.release() } catch (_: Exception) {}
-        try { aec?.release(); ns?.release() } catch (_: Exception) {}
-        // Only this call's own stage (TvMic.release(a)): never one a newer call has opened since.
-        tvGain?.let { io.github.ravenor907.muninn.tv.TvMic.release(it) }
         proximityOn(false)
-        if (!externalAudio) try {
-            AudioRoute.stop()
-            // Never hand back call mode: a mode left over from an earlier call would keep the phone in it, and every
-            // sound afterwards (read aloud, videos) would play through call processing and sound robotic.
-            audio.mode = if (oldMode == AudioManager.MODE_IN_COMMUNICATION) AudioManager.MODE_NORMAL else oldMode
-            if (counted) { counted = false; liveCalls.decrementAndGet() }
+        if (!externalAudio && gen != 0L) try {
+            // Only the call that holds the sound now puts it back (an older call ending late never undoes a newer one's).
+            if (gen == audioGen.get()) {
+                AudioRoute.stop()
+                // Never hand back call mode: a mode left over from an earlier call would keep the phone in it, and every
+                // sound afterwards (read aloud, videos) would play through call processing and sound robotic.
+                audio.mode = if (oldMode == AudioManager.MODE_IN_COMMUNICATION) AudioManager.MODE_NORMAL else oldMode
+            }
         } catch (_: Exception) {}
+        if (counted) { counted = false; liveCalls.decrementAndGet() }
         keys?.wipe()
     }
 }

@@ -1125,7 +1125,7 @@ void ReadAloud::prepare()
 
 void ReadAloud::startDownload()
 {
-    if (m_downloading.isEmpty() || m_reply || ready())
+    if (m_downloading.isEmpty() || m_reply || m_working || ready())
         return;
     const QString file = fileFor(m_downloading);
     const QString sum = m_hashes.value(file);
@@ -1159,15 +1159,53 @@ void ReadAloud::startDownload()
     m_part = new QFile(partPath);
     m_sha = new QCryptographicHash(QCryptographicHash::Sha256);
     m_got = 0;
-    if (m_part->exists() && m_part->size() > 0 && m_part->size() < kMaxDownload && m_part->open(QIODevice::ReadOnly)) {
-        while (!m_part->atEnd())
-            m_sha->addData(m_part->read(1 << 20));
-        m_got = m_part->size();
-        m_part->close();
-    } else {
-        QFile::remove(partPath);
+    if (m_part->exists() && m_part->size() > 0 && m_part->size() < kMaxDownload) {
+        // Hashed again on its own thread (up to 60 MB is never read on the window's thread), then asked for the rest.
+        m_working = true;
+        setStatus(QStringLiteral("Checking the part of the natural voice already here"));
+        const QString voice = m_downloading;
+        QPointer<ReadAloud> self(this);
+        QThread *t = QThread::create([self, partPath, voice] {
+            auto *sha = new QCryptographicHash(QCryptographicHash::Sha256);
+            qint64 got = 0;
+            QFile part(partPath);
+            if (part.open(QIODevice::ReadOnly)) {
+                while (!part.atEnd())
+                    sha->addData(part.read(1 << 20));
+                got = part.size();
+            }
+            QCoreApplication *app = QCoreApplication::instance();
+            if (!app || !QMetaObject::invokeMethod(app, [self, sha, got, voice] {
+                    if (!self) {
+                        delete sha;
+                        return;
+                    }
+                    self->m_working = false;
+                    if (self->m_downloading != voice || self->m_reply || self->ready()) {
+                        delete sha;   // switched voices or deleted meanwhile
+                        self->startDownload();   // the voice wanted now, if any
+                        return;
+                    }
+                    delete self->m_sha;
+                    self->m_sha = sha;
+                    self->m_got = got;
+                    self->requestRest();
+                }, Qt::QueuedConnection))
+                delete sha;
+        });
+        t->setObjectName(QStringLiteral("read-aloud-check"));
+        connect(t, &QThread::finished, t, &QObject::deleteLater);
+        t->start(QThread::LowPriority);
+        return;
     }
-    if (!m_part->open(QIODevice::WriteOnly | QIODevice::Append)) {
+    QFile::remove(partPath);
+    requestRest();
+}
+
+void ReadAloud::requestRest()
+{
+    const QString file = fileFor(m_downloading);
+    if (!m_part || !m_part->open(QIODevice::WriteOnly | QIODevice::Append)) {
         downloadFailed(QStringLiteral("Can't save the voice in the data folder"), 15 * 60 * 1000);
         return;
     }
@@ -1253,21 +1291,49 @@ void ReadAloud::downloadDone()
         return;
     }
     m_failures = 0;
-    // Unpacked beside its final place (marked once whole), then put there.
+    // Unpacked beside its final place (marked once whole) on its own thread (60 MB is never unpacked on the window's
+    // thread), then put there (unpacked()).
     const QString dir = voiceDir(m_downloading);
     const QString fresh = dir + QStringLiteral(".new");
-    QDir(fresh).removeRecursively();
-    QString why;
-    if (!unpack(partPath, fresh, &why)) {
+    const QString voice = m_downloading;
+    m_working = true;
+    setStatus(QStringLiteral("Unpacking the natural voice"));
+    QPointer<ReadAloud> self(this);
+    QThread *t = QThread::create([self, partPath, fresh, voice] {
         QDir(fresh).removeRecursively();
+        QString why;
+        const bool ok = unpack(partPath, fresh, &why);
+        if (ok) {
+            QFile done(fresh + QStringLiteral("/.unpacked"));
+            if (done.open(QIODevice::WriteOnly))
+                done.close();
+        } else {
+            QDir(fresh).removeRecursively();
+        }
+        if (QCoreApplication *app = QCoreApplication::instance())
+            QMetaObject::invokeMethod(app, [self, ok, why, voice] { if (self) self->unpacked(voice, ok, why); }, Qt::QueuedConnection);
+    });
+    t->setObjectName(QStringLiteral("read-aloud-unpack"));
+    connect(t, &QThread::finished, t, &QObject::deleteLater);
+    t->start(QThread::LowPriority);
+}
+
+void ReadAloud::unpacked(const QString &voice, bool ok, const QString &why)
+{
+    m_working = false;
+    const QString partPath = voicesDir() + QLatin1Char('/') + fileFor(voice) + QStringLiteral(".part");
+    const QString dir = voiceDir(voice);
+    const QString fresh = dir + QStringLiteral(".new");
+    if (m_downloading != voice) {
+        // Switched voices or deleted meanwhile: the one wanted now (if any) goes on.
+        QDir(fresh).removeRecursively();
+        startDownload();
+        return;
+    }
+    if (!ok) {
         QFile::remove(partPath);
         downloadFailed(QStringLiteral("The natural voice couldn't be unpacked (%1)").arg(why), 15 * 60 * 1000);
         return;
-    }
-    {
-        QFile done(fresh + QStringLiteral("/.unpacked"));
-        if (done.open(QIODevice::WriteOnly))
-            done.close();
     }
     if (!placeUnpacked(dir)) {
         QDir(fresh).removeRecursively();

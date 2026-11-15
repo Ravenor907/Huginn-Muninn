@@ -584,7 +584,7 @@ internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?, folder: String = "")
             } else {
                 // An app installer opens only when the person asks, and on a Kids' TV not at all (a parent installs).
                 if (!(kids && FileText.isApp(m.file))) MButton("Open", kind = Kind.Accent) {
-                    if (!io.github.ravenor907.muninn.net.Received.open(context, savedUri, m.file)) Ui.say("Nothing on this device opens this kind of file.", true)
+                    io.github.ravenor907.muninn.net.Received.openChecked(context, savedUri, m.file)
                 }
                 MButton("Folder", icon = "folder") {
                     if (!io.github.ravenor907.muninn.net.Received.showFolder(context)) Ui.say("It's in ${where()}. Open it from your Files app.")

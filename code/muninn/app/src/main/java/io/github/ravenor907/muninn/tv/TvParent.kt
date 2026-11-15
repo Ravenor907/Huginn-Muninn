@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.ui.Ask
@@ -100,6 +101,8 @@ data class ManagedTv(
     val speed: Int? = null,
     /** k17: Updates, Pre-release (off: Stable, what every Kids' Device starts on). */
     val pre: Boolean = false,
+    /** 1.54: the config the device last said it runs is on Pre-release (so a change from here keeps it, see [KidVoice.preCarry]). */
+    val preRuns: Boolean = false,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -147,7 +150,7 @@ object TvParent {
     fun load(app: Muninn) {
         this.app = app
         synchronized(lock) {
-            _tvs.value = try { app.vault.read(file(app))?.let { fromJson(JSONObject(it), app.identity.autoUpdate) } } catch (e: Exception) { null } ?: emptyMap()
+            _tvs.value = try { app.vault.read(file(app))?.let { fromJson(SafeJson.obj(it), app.identity.autoUpdate) } } catch (e: Exception) { null } ?: emptyMap()
         }
         HavParent.load(app)
         loadKids(app)
@@ -170,7 +173,7 @@ object TvParent {
         if (i < 0) return null
         val body = text.substring(i + Contacts.PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
         return try {
-            val o = JSONObject(String(Base64.getUrlDecoder().decode(body), Charsets.UTF_8))
+            val o = SafeJson.obj(String(Base64.getUrlDecoder().decode(body), Charsets.UTF_8))
             if (o.optInt("tv") == 1) o.getString("k") else null
         } catch (e: Exception) { null }
     }
@@ -211,6 +214,8 @@ object TvParent {
 
     // ---- Kids' Devices this phone knows of (its own, and others' it was handed a card for or scanned)
 
+    /** 1.54: devices whose "applied" already asked this phone's person to help look after them (once a run). */
+    private val joinAsked = ConcurrentHashMap.newKeySet<String>()
     private const val KIDS_FILE = "tv-known.json"
     private val kidKeys = MutableStateFlow<Set<String>>(emptySet())
     @Volatile private var kidsLoaded = false
@@ -219,10 +224,10 @@ object TvParent {
         if (kidsLoaded) return
         kidsLoaded = true
         kidKeys.value = try {
-            app.vault.read(File(app.filesDir, KIDS_FILE))?.let { JSONArray(it) }?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }
+            app.vault.read(File(app.filesDir, KIDS_FILE))?.let { SafeJson.arr(it) }?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }
         } catch (_: Exception) { null } ?: emptySet()
         try {
-            app.vault.read(File(app.filesDir, KID_FROM_FILE))?.let { JSONObject(it) }?.let { o -> o.keys().forEach { k -> kidFrom[k] = o.getString(k) } }
+            app.vault.read(File(app.filesDir, KID_FROM_FILE))?.let { SafeJson.obj(it) }?.let { o -> o.keys().forEach { k -> kidFrom[k] = o.getString(k) } }
         } catch (_: Exception) {}
     }
 
@@ -341,7 +346,7 @@ object TvParent {
                 // k16 (1.42): the speed beside it, only when the device and every co-parent's app say k16.
                 speed = KidVoice.speedToSend(t.speed, k16(app, key), coParentCaps(app, t)),
                 // k17: only to a device whose app reads it.
-                pre = t.pre && preReady(app, t)) else null
+                pre = preToSend(app, t)) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -414,7 +419,7 @@ object TvParent {
      * phone is no longer one of its parents), or a card (7.6) from a contact who invited this person to talk with their kids' TV.
      */
     fun handle(app: Muninn, fromKey: String, plain: String): Boolean {
-        val o = try { JSONObject(plain) } catch (e: Exception) { return false }
+        val o = try { SafeJson.obj(plain) } catch (e: Exception) { return false }
         // Anything the device itself sends: it was heard from now ("Last seen" on its page).
         seen(fromKey)
         if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"), o.optJSONObject("cfg"))
@@ -451,8 +456,16 @@ object TvParent {
         synchronized(lock) {
             val t = _tvs.value[fromKey]
             if (t == null) {
-                // A TV whose parents now include this phone: it shows up here, to look after with them.
-                if (runs != null && app.contacts.get(fromKey) != null) join(app, fromKey, runs, null)
+                // A device whose parents now include this phone: 1.54, only one this phone already knows as a Kids'
+                // Device (a card its person said yes to, or its code), from a real contact, signed by a parent who is a
+                // real contact too; and only once the person says yes. Anyone can sign a config naming this phone.
+                if (runs != null && runs.by != me && app.contacts.contact(fromKey) != null && isKidDevice(fromKey) &&
+                    app.contacts.contact(runs.by) != null && joinAsked.add(fromKey)) {
+                    val name = app.contacts.get(fromKey)?.shown ?: "a Kids' Device"
+                    val who = app.chat.nameOf(runs.by)
+                    Ui.sure(Ask("Help look after $name?", "$name says $who made you one of its parents. Say yes only if you expected it.",
+                        "Yes", cancel = "Not now", onCancel = {}) { synchronized(lock) { if (!isManaged(fromKey)) join(app, fromKey, runs, null) } })
+                }
                 return true
             }
             if (t.disconnecting) { forget(app, fromKey); return true }
@@ -466,6 +479,12 @@ object TvParent {
             val sameV = runs != null && runs.by != me && mine != null && runs.v == mine.v && Canon.hash(runs.raw) != mine.hash
             val theirsWins = sameV && KidMerge.lost(mine!!.hash, Canon.hash(runs!!.raw))
             when {
+                // 1.54: the device was paired again and keeps counting from the highest version it ever took (so an old
+                // config can't come back): this phone's versions go on above it, and its settings go out again at once
+                // (from then on no disconnect or config signed in an earlier pairing fits the device either).
+                runs != null && v > runs.v && runs.by == me && maxOf(t.v, t.applied) < v -> {
+                    put(t.copy(applied = v, v = v, pendingV = minOf(t.pendingV, v), app = version, dev = dev)); resend = true
+                }
                 // Ours has the lower hash: the device takes it once it gets it (or already has). Nothing to adopt; keep
                 // waiting for its "applied", so neither phone says anything false.
                 sameV && !theirsWins && t.pending.isNotEmpty() -> put(t.copy(app = version, dev = dev))
@@ -555,10 +574,14 @@ object TvParent {
                     if (done && runs != null && KidVoice.of(runs.raw) == null && t.voice.isNotEmpty() && k15(app, fromKey) && KidVoice.allRead(coParentCaps(app, t))) resend = true
                     if (done && runs != null && KidVoice.speedOf(runs.raw) == null && t.speed != null && k16(app, fromKey) && KidVoice.allReadSpeed(coParentCaps(app, t))) resend = true
                     // k17: the same for Updates, either way.
-                    if (done && runs != null && KidVoice.preRelease(runs.raw) != (t.pre && preReady(app, t))) resend = true
+                    if (done && runs != null && KidVoice.preRelease(runs.raw) != preToSend(app, t)) resend = true
+                    // 1.54: Pre-release chosen but a co-parent's caps aren't known here: asked for, as for the voice.
+                    if (done && t.pre && !preReady(app, t)) probe = t
                 }
             }
             _tvs.value[fromKey]?.let { if (it.havHeld != held) put(it.copy(havHeld = held)) }
+            // 1.54: whether the device runs Pre-release now, kept for the next change from here.
+            if (runs != null) _tvs.value[fromKey]?.let { val p = KidVoice.preRelease(runs.raw); if (it.preRuns != p) put(it.copy(preRuns = p)) }
         }
         // Round 19: a co-parent's caps may be old (they updated): asked again, so the voice goes out once they read it.
         probe?.let { probeVoice(app, it) }
@@ -816,27 +839,44 @@ object TvParent {
         app.chat.met.value.filter { (k, m) -> m.iSaid && !m.theySaid && !m.dismissed && app.contacts.contact(k) == null }
             .map { (k, m) -> k to m.name }
 
-    /** A card: add the TV as a contact, only from someone who is already a contact, and never as a key change. */
+    /**
+     * A card (7.6): someone's Kids' Device, from a parent of it. 1.54: only from a real contact (never a group-only peer
+     * or someone in the trash), and nothing happens until this phone's person says yes: no contact is added, none is
+     * brought back from the trash, none is marked a Kids' Device, and this phone becomes nobody's parent by itself.
+     * Never as a key change.
+     */
     private fun takeCard(app: Muninn, fromKey: String, code: String, cfg: JSONObject?): Boolean {
-        if (app.contacts.get(fromKey) == null) return false
+        if (app.contacts.contact(fromKey) == null || app.chat.trash.has(fromKey)) return false
         val tv = Contacts.parse(code) ?: return false
-        // A card only ever carries a Kids' Device: group pickers here leave it out unless this phone looks after it.
-        markKid(app, tv.chatKey)
-        // k14: the parent to ask when this phone puts that device on one of its own.
-        if (tv.chatKey != app.identity.publicKey) noteKidFrom(app, tv.chatKey, fromKey)
-        if (tv.chatKey == app.identity.publicKey) return true
+        val me = app.identity.publicKey
+        if (tv.chatKey == me || tv.chatKey == fromKey) return true
+        // Someone this phone's person removed comes back only by their own choice (Contacts › Trash).
+        if (app.chat.trash.has(tv.chatKey)) return true
         // A parent made this phone a parent too: the config they signed lists it (and them) as parents.
-        val shared = TvRules.shared(tv.chatKey, app.identity.publicKey, cfg)?.takeIf { it.by == fromKey }
-        if (app.contacts.get(tv.chatKey) != null) {
-            if (shared != null && !isManaged(tv.chatKey)) synchronized(lock) { join(app, tv.chatKey, shared, fromKey) }
-            return true
-        }
-        if (app.chat.keyChangeFor(tv) != null) return true
-        app.chat.addContact(tv.copy(invite = null))
-        if (shared != null) { synchronized(lock) { join(app, tv.chatKey, shared, fromKey) }; return true }
+        val shared = TvRules.shared(tv.chatKey, me, cfg)?.takeIf { it.by == fromKey && fromKey in it.parents }
+        val known = app.contacts.contact(tv.chatKey)
+        // An ordinary contact here never turns into a Kids' Device because someone says so (it would leave group pickers).
+        if (known != null && !isKidDevice(tv.chatKey) && shared == null) return true
+        if (known != null && (shared == null || isManaged(tv.chatKey))) { noteKidFrom(app, tv.chatKey, fromKey); return true }
+        if (known == null && app.chat.keyChangeFor(tv) != null) return true
         val who = app.chat.nameOf(fromKey)
-        Ui.say("$who added you to ${tv.name}. You can talk with the kids there now.")
-        try { app.notify(who, "Added you to ${tv.name}: you can talk with the kids there now", tv.chatKey) } catch (_: Exception) {}
+        val name = known?.shown ?: tv.name
+        val title = if (shared != null) "Help look after $name?" else "Add $name?"
+        val text = if (shared != null) "$who asks you to be a parent of $name, a Kids' Device. Say yes only if you know it's theirs."
+            else "$who says $name is their Kids' Device and asks you to add it, so you can talk with the kids. Say yes only if you know it's theirs."
+        val ask = Ask(title, text, "Yes", cancel = "Not now", onCancel = {}) {
+            if (app.chat.trash.has(tv.chatKey)) return@Ask
+            if (app.contacts.contact(tv.chatKey) == null) {
+                if (app.chat.keyChangeFor(tv) != null) return@Ask
+                app.chat.addContact(tv.copy(invite = null))
+            }
+            markKid(app, tv.chatKey)
+            noteKidFrom(app, tv.chatKey, fromKey)
+            if (shared != null && !isManaged(tv.chatKey)) synchronized(lock) { join(app, tv.chatKey, shared, fromKey) }
+            else Ui.say("Added. You can talk with the kids on $name now.")
+        }
+        Ui.sure(ask)
+        try { app.notify(who, title, fromKey) } catch (_: Exception) {}
         return true
     }
 
@@ -1108,6 +1148,13 @@ object TvParent {
     /** Pre-release can go to this device now: it and every co-parent's app read it (an older app refuses the whole config). */
     fun preReady(app: Muninn, t: ManagedTv): Boolean = k17(app, t.key) && coParentCaps(app, t).all { it != null && KidVoice.UPDATES_CAP in it }
 
+    /**
+     * 1.54: what a config from here says for Updates. Pre-release when this phone's choice is Pre-release and either every
+     * co-parent's app is known to read it, or the device runs it already and no co-parent's app is known not to read it
+     * (one whose caps this phone hasn't learned yet never turns another parent's choice back to Stable).
+     */
+    fun preToSend(app: Muninn, t: ManagedTv): Boolean = t.pre && (preReady(app, t) || KidVoice.preCarry(t.preRuns, k17(app, t.key), coParentCaps(app, t)))
+
     /** The parent picked the device's updates: Stable, or Pre-release. */
     fun setPre(key: String, on: Boolean) = change(key) { it.copy(pre = on) }
 
@@ -1140,7 +1187,7 @@ object TvParent {
     fun probeVoice(app: Muninn, t: ManagedTv) {
         val me = app.identity.publicKey
         t.parents.filter { it != me && it != t.key && app.contacts.get(it) != null
-                && (app.contacts.get(it)?.caps ?: emptySet()).let { c -> KidVoice.CAP !in c || KidVoice.SPEED_CAP !in c } }
+                && (app.contacts.get(it)?.caps ?: emptySet()).let { c -> KidVoice.CAP !in c || KidVoice.SPEED_CAP !in c || KidVoice.UPDATES_CAP !in c } }
             .forEach { try { app.chat.probeCaps(it) } catch (_: Exception) {} }
     }
 
@@ -1208,7 +1255,7 @@ object TvParent {
      */
     private fun takeKidAdd(app: Muninn, fromKey: String, o: JSONObject): Boolean {
         val a = KidK14.kidAddIn(o) ?: return false
-        if (app.contacts.get(fromKey) == null) return false
+        if (app.contacts.contact(fromKey) == null) return false
         loadKids(app)
         // Never this phone, its own devices or the sender, and never someone already here who isn't known as a Kids' Device.
         // A device another parent handed over (by card or code) is still asked about: the ask names who shared it first.
@@ -1263,7 +1310,7 @@ object TvParent {
     /** Another family's parent put this phone's Kids' Device (the "k" in [o]) on theirs (its "tv"): it no longer waits. */
     private fun takeKidOk(app: Muninn, fromKey: String, o: JSONObject): Boolean {
         val (tv, k) = KidK14.kidOkIn(o) ?: return false
-        if (app.contacts.get(fromKey) == null) return false
+        if (app.contacts.contact(fromKey) == null) return false
         val t = _tvs.value[k] ?: return false
         if (tv in t.waitKid) change(k) { it.copy(waitKid = it.waitKid - tv) }
         return true
@@ -1398,7 +1445,7 @@ object TvParent {
             .put("others", JSONArray().apply { t.others.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
             .put("sharedWith", JSONArray(t.sharedWith)).put("nr", t.nr).put("upd", t.upd).put("keep", t.keep).put("update", t.update)
             .apply { t.off?.let { put("off", JSONArray(it)) } }
-            .apply { t.upd1?.let { put("upd1", JSONObject(TvUpd.stateMessage(it))).put("upd1At", t.upd1At) } }
+            .apply { t.upd1?.let { put("upd1", SafeJson.obj(TvUpd.stateMessage(it))).put("upd1At", t.upd1At) } }
             .put("chat", t.chat).put("quiet", KidRules.quietJson(t.quiet)).put("k11Sent", t.k11Sent).put("dev", t.dev)
             .put("hav", t.hav).put("havw", t.havw).put("havx", t.havx).put("havHeld", t.havHeld)
             .put("names", JSONObject().apply { t.names.forEach { (k, n) -> put(k, n) } }).put("tz", t.tz)
@@ -1406,11 +1453,11 @@ object TvParent {
             .put("look", t.look).put("season", t.season).put("accent", t.accent).put("lookPick", t.lookPick)
             .put("child", t.child).put("gok", KidK14.gokJson(t.gok)).put("gno", KidK14.gokJson(t.gno))
             .put("access", JSONObject().apply { KidK14.putInto(this, TvExtras(access = t.access)) })
-            .put("holdAsks", JSONArray().apply { t.holdAsks.forEach { put(JSONObject(KidK14.holdMessage(it))) } })
+            .put("holdAsks", JSONArray().apply { t.holdAsks.forEach { put(SafeJson.obj(KidK14.holdMessage(it))) } })
             .put("waitKid", JSONObject().apply { t.waitKid.forEach { (k, v) -> put(k, v) } })
-            .put("kidAsks", JSONArray().apply { t.kidAsks.forEach { put(JSONObject().put("a", JSONObject(KidK14.kidAddMessage(it.add))).put("from", it.from)) } })
+            .put("kidAsks", JSONArray().apply { t.kidAsks.forEach { put(JSONObject().put("a", SafeJson.obj(KidK14.kidAddMessage(it.add))).put("from", it.from)) } })
             .put("goneC", JSONArray(t.goneC)).put("goneP", JSONArray(t.goneP)).put("voice", t.voice)
-            .apply { t.speed?.let { put("speed", it) }; if (t.pre) put("pre", true) }
+            .apply { t.speed?.let { put("speed", it) }; if (t.pre) put("pre", true); if (t.preRuns) put("preRuns", true) }
             .apply { t.pin?.let { put("pin", KidRules.pinJson(it)) } })
     }
 
@@ -1458,7 +1505,7 @@ object TvParent {
                 } } ?: emptyList(),
                 goneC = strs(x.optJSONArray("goneC")), goneP = strs(x.optJSONArray("goneP")),
                 voice = x.optString("voice").takeIf { it in io.github.ravenor907.muninn.net.ReadAloudText.VOICES } ?: "",
-                speed = x.optInt("speed", 0).takeIf { it in KidVoice.SPEED_MIN..KidVoice.SPEED_MAX }, pre = x.optBoolean("pre"))
+                speed = x.optInt("speed", 0).takeIf { it in KidVoice.SPEED_MIN..KidVoice.SPEED_MAX }, pre = x.optBoolean("pre"), preRuns = x.optBoolean("preRuns"))
         } catch (e: Exception) { null }
     }.toMap()
 }

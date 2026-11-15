@@ -208,6 +208,9 @@ private:
     QString me() const;
     int peerCount() const;
     static qint64 now();
+    // A room message's ts within this of my clock, either way, counts as fresh (clocks that differ a little).
+    static constexpr qint64 kSkewMs = 5 * 60000;
+    bool withinSkew(const QJsonObject &msg) const;
 
     CallSignal *m_signal;
     QPointer<CallManager> m_calls;

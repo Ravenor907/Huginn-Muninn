@@ -151,8 +151,8 @@ object RingWire {
 
     /** A ring envelope's content opened with [ring], with its tag (a malformed "rt" counts as none), or null. */
     fun openRingTagged(content: String, ring: KeyPair): Rang? = try {
-        val o = JSONObject(String(Base64.getDecoder().decode(content)))
-        val p = openRing(o, ring)?.let { JSONObject(String(it, Charsets.UTF_8)) }
+        val o = SafeJson.obj(String(Base64.getDecoder().decode(content)))
+        val p = openRing(o, ring)?.let { SafeJson.obj(String(it, Charsets.UTF_8)) }
         if (p == null || !ringOk(p)) null
         else Rang(p.getString("call"), (p.get("ts") as Number).toLong(), p.opt("rt").takeIf { tagOk(it) } as? String ?: "")
     } catch (e: Exception) { null }
@@ -186,8 +186,16 @@ object RingWire {
 
     /** A sender wraps with a day key only within a week of when it was made. */
     fun mayUse(wt: Long, nowS: Long) = nowS - wt <= WRAP_USE_S && wt - nowS <= WRAP_AHEAD_S
-    /** Kept while younger than [WRAP_KEEP_S]; one stamped more than [WRAP_AHEAD_S] ahead (a clock set back since) goes. */
-    fun keep(t: Long, nowS: Long) = nowS - t < WRAP_KEEP_S && t - nowS <= WRAP_AHEAD_S
+    /**
+     * Kept while younger than [WRAP_KEEP_S] by its own stamp. 1.54: one stamped ahead of the clock (the clock was set
+     * back since) is kept too: it is the newest, the one contacts wrap to, and deleting it lost their messages. It only
+     * doesn't count as the newest ([usable]); [WrapKeys] keeps at most [WRAP_MAX] keys.
+     */
+    fun keep(t: Long, nowS: Long) = nowS - t < WRAP_KEEP_S
+    /** Can be announced as the newest: not stamped more than [WRAP_AHEAD_S] ahead. */
+    fun usable(t: Long, nowS: Long) = t - nowS <= WRAP_AHEAD_S
+    /** Day keys kept at most (the oldest stamps go first): 40 days of keys and room for a clock gone wrong. */
+    const val WRAP_MAX = 64
     fun rotateDue(newest: Long?, nowS: Long) = newest == null || nowS - newest >= WRAP_NEW_S || newest - nowS > WRAP_AHEAD_S
 
     /** After restoring a backup, a relay envelope for a day key not here yet waits this long for it (it may come again). */
@@ -233,7 +241,7 @@ object NudgeWire {
         else -> false
     }
 
-    private fun tOf(plain: String): String = try { JSONObject(plain).optString("t") } catch (e: Exception) { "" }
+    private fun tOf(plain: String): String = try { SafeJson.obj(plain).optString("t") } catch (e: Exception) { "" }
 
     /** The kind of a real message in [room] (a photo room's own kind comes from [blobKind]). */
     fun kindOf(room: String): String = when (room) {
@@ -324,8 +332,8 @@ object NudgeWire {
 
     /** A nudge's content opened with [keys] (a ring key or a nudge key): what it says, or null when it isn't a good nudge. */
     fun openContent(content: String, keys: KeyPair): Nudge? = try {
-        val o = JSONObject(String(Base64.getDecoder().decode(content)))
-        RingWire.openRing(o, keys)?.let { read(JSONObject(String(it, Charsets.UTF_8))) }
+        val o = SafeJson.obj(String(Base64.getDecoder().decode(content)))
+        RingWire.openRing(o, keys)?.let { read(SafeJson.obj(String(it, Charsets.UTF_8))) }
     } catch (e: Exception) { null }
 
     /** An event for the ring mailbox that isn't a ring: a nudge only while [locked] (unlocked, the message itself notifies). */
@@ -518,7 +526,7 @@ class WrapKeys(private val read: () -> String?, private val write: (String) -> U
     private var days: MutableList<Day>? = null
 
     private fun all(): MutableList<Day> = days ?: try {
-        JSONArray(read() ?: "[]").let { a -> MutableList(a.length()) { a.getJSONObject(it).let { o -> Day(o.getString("i"), o.getString("k"), o.getString("p"), o.getLong("t")) } } }
+        SafeJson.arr(read() ?: "[]").let { a -> MutableList(a.length()) { a.getJSONObject(it).let { o -> Day(o.getString("i"), o.getString("k"), o.getString("p"), o.getLong("t")) } } }
     } catch (e: Exception) { mutableListOf() }.also { days = it }
 
     private fun save(l: List<Day>) {
@@ -533,8 +541,9 @@ class WrapKeys(private val read: () -> String?, private val write: (String) -> U
     fun current(nowS: Long = System.currentTimeMillis() / 1000): Day = synchronized(lock) {
         val l = all()
         val before = l.size
-        l.removeAll { !RingWire.keep(it.t, nowS) }
-        val newest = l.maxByOrNull { it.t }
+        trim(l, nowS)
+        // Keys stamped ahead (the clock was set back) stay, so what was wrapped to them still opens, but aren't the newest.
+        val newest = l.filter { RingWire.usable(it.t, nowS) }.maxByOrNull { it.t }
         if (newest != null && !RingWire.rotateDue(newest.t, nowS)) { if (l.size != before) save(l); return newest }
         add(l, nowS)
     }
@@ -542,7 +551,7 @@ class WrapKeys(private val read: () -> String?, private val write: (String) -> U
     /** A new day key now, whatever the newest's age (after restoring a backup). */
     fun fresh(nowS: Long = System.currentTimeMillis() / 1000): Day = synchronized(lock) {
         val l = all()
-        l.removeAll { !RingWire.keep(it.t, nowS) }
+        trim(l, nowS)
         add(l, nowS)
     }
 
@@ -551,8 +560,16 @@ class WrapKeys(private val read: () -> String?, private val write: (String) -> U
         val pub = ChatCrypto.b64(kp.public.encoded)
         val d = Day(RingWire.wrapId(pub), pub, ChatCrypto.b64(kp.private.encoded), nowS)
         l.add(d)
+        trim(l, nowS, d)
         save(l)
         return d
+    }
+
+    /** Past keeping goes; beyond [RingWire.WRAP_MAX] the oldest stamps go (never [keep]). True when one went. */
+    private fun trim(l: MutableList<Day>, nowS: Long, keep: Day? = null): Boolean {
+        var gone = l.removeAll { !RingWire.keep(it.t, nowS) }
+        while (l.size > RingWire.WRAP_MAX) { l.remove(l.filter { it !== keep }.minByOrNull { it.t } ?: break); gone = true }
+        return gone
     }
 
     /** The key pair a wrapping's "w" names, while it's kept. */
@@ -563,7 +580,7 @@ class WrapKeys(private val read: () -> String?, private val write: (String) -> U
     /** Day keys past keeping are deleted (the chat's minute loop). */
     fun prune(nowS: Long = System.currentTimeMillis() / 1000) = synchronized(lock) {
         val l = all()
-        if (l.removeAll { !RingWire.keep(it.t, nowS) }) save(l)
+        if (trim(l, nowS)) save(l)
     }
 
     fun clear() = synchronized(lock) { days = mutableListOf(); save(emptyList()) }
@@ -584,7 +601,7 @@ class PeerKeys(private val read: () -> String?, private val write: (String) -> U
     private var map: MutableMap<String, Keys>? = null
 
     private fun all(): MutableMap<String, Keys> = map ?: try {
-        val o = JSONObject(read() ?: "{}")
+        val o = SafeJson.obj(read() ?: "{}")
         o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let { Keys(it.optString("rk").ifEmpty { null }, it.optString("rp").ifEmpty { null },
             it.optString("wk").ifEmpty { null }, it.optLong("wt"), it.optString("nk").ifEmpty { null }, it.optString("np").ifEmpty { null },
             it.optString("rt").ifEmpty { null }, RingWire.hfOf(it.optJSONArray("hf")).orEmpty()) } }.toMutableMap()
@@ -624,7 +641,13 @@ class PeerKeys(private val read: () -> String?, private val write: (String) -> U
  * someone holding the phone learns only that calls came and when.
  */
 class RingKey(private val file: File) {
-    private class Held(val keys: KeyPair, val pub: String, val secret: ByteArray, val mailbox: String, val until: Long = 0L)
+    /**
+     * [until]: a replaced key rings (with an allowed tag) and is read until then. [nudges]: 1.54, replaced because calls
+     * were turned off for someone, who keeps nudging to it (they never get the new key): its mailbox stays read for
+     * nudges only, past [until], while anyone has calls off ([release]).
+     */
+    private class Held(val keys: KeyPair, val pub: String, val secret: ByteArray, val mailbox: String, val until: Long = 0L,
+                       val nudges: Boolean = false)
     /** The current ring key, and the ones it replaced (after a block), each listened on until its [Held.until]. */
     private class All(val now: Held, val old: List<Held>)
     @Volatile private var held: All? = null
@@ -633,12 +656,12 @@ class RingKey(private val file: File) {
         val pub = o.getString("k")
         val secret = Schnorr.unhex(o.getString("n"))
         return Held(KeyPair(ChatCrypto.publicFrom(pub), ChatCrypto.privateFrom(o.getString("s"))), pub, secret,
-            Schnorr.hex(Schnorr.publicKey(secret)), o.optLong("u"))
+            Schnorr.hex(Schnorr.publicKey(secret)), o.optLong("u"), o.optBoolean("nu"))
     }
 
     private fun load(): All = held ?: synchronized(this) {
         held ?: when (val r = SafeFile.read(file) { b ->
-            val o = JSONObject(String(b))
+            val o = SafeJson.obj(String(b))
             val old = o.optJSONArray("old")?.let { a -> (0 until a.length()).mapNotNull { try { parse(a.getJSONObject(it)) } catch (e: Exception) { null } } }.orEmpty()
             All(parse(o), old)
         }) {
@@ -662,7 +685,7 @@ class RingKey(private val file: File) {
 
     private fun save(a: All) {
         val o = json(a.now)
-        if (a.old.isNotEmpty()) o.put("old", JSONArray().apply { a.old.forEach { put(json(it).put("u", it.until)) } })
+        if (a.old.isNotEmpty()) o.put("old", JSONArray().apply { a.old.forEach { put(json(it).put("u", it.until).apply { if (it.nudges) put("nu", true) }) } })
         if (broken) return
         try { SafeFile.write(file, o.toString().toByteArray()) } catch (_: Exception) {}
     }
@@ -674,7 +697,7 @@ class RingKey(private val file: File) {
     /** The ring mailbox's Nostr secret, to sign in to relays that ask (NIP-42). */
     val nostrSecret: ByteArray get() = load().now.secret
 
-    private fun live(nowMs: Long): List<Held> = load().let { a -> listOf(a.now) + a.old.filter { it.until > nowMs } }
+    private fun live(nowMs: Long): List<Held> = load().let { a -> listOf(a.now) + a.old.filter { it.until > nowMs || it.nudges } }
 
     /** Every ring mailbox listened on now: the current one, and a replaced one for [OLD_MS] after it was replaced. */
     fun mailboxes(nowMs: Long = System.currentTimeMillis()): List<String> = live(nowMs).map { it.mailbox }
@@ -707,18 +730,31 @@ class RingKey(private val file: File) {
      * Someone was blocked (or their calls turned off): a new ring key and ring mailbox, so what they hold no longer rings
      * this phone. The old mailbox is still listened on for [OLD_MS], for nudges from the others until the new key reaches them.
      */
-    fun renew(nowMs: Long = System.currentTimeMillis()) = synchronized(this) {
+    fun renew(nowMs: Long = System.currentTimeMillis(), nudges: Boolean = false) = synchronized(this) {
         val a = load()
-        val prev = Held(a.now.keys, a.now.pub, a.now.secret, a.now.mailbox, nowMs + OLD_MS)
-        val next = All(make(), a.old.filter { it.until > nowMs } + prev)
+        val prev = Held(a.now.keys, a.now.pub, a.now.secret, a.now.mailbox, nowMs + OLD_MS, nudges)
+        val next = All(make(), (a.old.filter { it.until > nowMs || it.nudges } + prev).takeLast(OLD_MAX))
         save(next)
         held = next
     }
 
-    /** Replaced ring keys past [OLD_MS] go. True when one went (listen again without it). */
+    /**
+     * 1.54: nobody has calls off any more (they have the current key again, or are gone): replaced keys kept for their
+     * nudges are read for [OLD_MS] more, then go as usual. True when something changed.
+     */
+    fun release(nowMs: Long = System.currentTimeMillis()): Boolean = synchronized(this) {
+        val a = load()
+        if (a.old.none { it.nudges }) return@synchronized false
+        val next = All(a.now, a.old.map { if (it.nudges) Held(it.keys, it.pub, it.secret, it.mailbox, maxOf(it.until, nowMs + OLD_MS)) else it })
+        save(next)
+        held = next
+        true
+    }
+
+    /** Replaced ring keys past [OLD_MS] go (not one kept for nudges). True when one went (listen again without it). */
     fun prune(nowMs: Long = System.currentTimeMillis()): Boolean = synchronized(this) {
         val a = load()
-        val keep = a.old.filter { it.until > nowMs }
+        val keep = a.old.filter { it.until > nowMs || it.nudges }
         if (keep.size == a.old.size) return@synchronized false
         val next = All(a.now, keep)
         save(next)
@@ -732,6 +768,8 @@ class RingKey(private val file: File) {
     companion object {
         /** How long a ring mailbox replaced after a block is still listened on. */
         const val OLD_MS = 2 * 86_400_000L
+        /** Replaced ring keys kept at most (each one's mailbox is asked for). */
+        const val OLD_MAX = 8
     }
 }
 
@@ -747,13 +785,13 @@ class RingTags(private val file: File, private val read: () -> String?, private 
     @Volatile private var allowed: Set<String>? = null
 
     private fun mine(): MutableMap<String, String> = byKey ?: try {
-        val o = JSONObject(read() ?: "{}")
+        val o = SafeJson.obj(read() ?: "{}")
         o.keys().asSequence().mapNotNull { k -> o.optString(k).takeIf { RingWire.tagOk(it) }?.let { k to it } }.toMap().toMutableMap()
     } catch (e: Exception) { mutableMapOf() }.also { byKey = it }
 
     private fun allowedNow(): Set<String> = allowed ?: synchronized(lock) {
         allowed ?: when (val r = SafeFile.read(file) { b ->
-            val a = JSONObject(String(b)).optJSONArray("a") ?: JSONArray()
+            val a = SafeJson.obj(String(b)).optJSONArray("a") ?: JSONArray()
             (0 until a.length()).map { a.optString(it) }.filter { it.length == 32 }.toSet()
         }) {
             is SafeFile.Read.Ok -> r.value

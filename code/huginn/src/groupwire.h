@@ -41,6 +41,9 @@ QString hash(const QJsonObject &obj);
 // obj with "sig" set (random k); obj unchanged and ok false if signing fails.
 QJsonObject sign(const QByteArray &privateDer, const QString &domain, const QJsonObject &obj, bool *ok = nullptr);
 bool verify(const QString &publicKeyB64, const QString &domain, const QJsonObject &obj);
+// Standard base64 read the way Muninn's java.util.Base64 decoder reads it: only the alphabet, '=' padding optional but
+// correct when there, nothing after it. Empty with ok false otherwise (Qt's own reader skips junk characters).
+QByteArray strictB64(const QString &text, bool *ok = nullptr);
 
 // Code points, as the limits count them.
 int length(const QString &s);

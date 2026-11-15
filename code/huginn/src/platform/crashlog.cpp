@@ -187,6 +187,20 @@ void cleanExit()
     }
 }
 
+void stop()
+{
+    QMutexLocker l(&s_lock);
+    if (s_file) {
+        std::fclose(s_file);
+        s_file = nullptr;
+    }
+#ifndef Q_OS_WIN
+    s_fd = -1;
+    s_pathC[0] = 0;
+#endif
+    s_path.clear();   // note() and line() write nothing from here on
+}
+
 QString scrub(const QString &text)
 {
     QString t = text;

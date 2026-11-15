@@ -591,6 +591,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val gmsgs by app.chat.groups.messages.collectAsState()
     val gunread by app.chat.groups.unreadGroups.collectAsState()
     val ginvites by app.chat.groups.pending.collectAsState()
+    val famAsks by app.chat.groups.familyAsks.collectAsState()
     val waitingJoins by app.chat.groups.waitingJoins.collectAsState()
     // Linked devices (section 15): which computers or tablets show this phone's chats.
     val mirroredTo by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
@@ -829,9 +830,10 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 // Daily Hávamál (Settings › Look): today's verse at the top of All, inside this item so no row moves.
                 if (sectioned) DailyHavCard(app, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
                 // Something waiting (a group invite, someone wanting to chat, an introduction): one row at the top, so it's never missed.
-                val firstAsk = ginvites.firstOrNull()?.let { "${app.chat.contacts.get(it.from)?.shown ?: it.fromName} invited you to ${it.name}" }
+                val firstAsk = famAsks.firstOrNull()?.let { "Add ${it.name} as Family?" }
+                    ?: ginvites.firstOrNull()?.let { "${app.chat.contacts.get(it.from)?.shown ?: it.fromName} invited you to ${it.name}" }
                     ?: requests.firstOrNull()?.let { "${it.name} wants to chat" }
-                val waitingAsks = requests.size + ginvites.size + intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size
+                val waitingAsks = requests.size + ginvites.size + intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size + famAsks.size
                 if (waitingAsks > 0) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                     .background(Palette.goldTint).clickable(role = Role.Button) { ChatNav.open = "requests" }.padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -926,7 +928,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             if (nearbyOn) items(shownNearby, key = { "n|" + it.key }) { c -> chatRow(c, null, "n|" + c.key) }
             // Requests, archived chats and the trash live in the chat list's menu (the dots beside Search).
             val pendingIntros = intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size
-            ChatNav.asks = requests.size + ginvites.size + pendingIntros
+            ChatNav.asks = requests.size + ginvites.size + pendingIntros + famAsks.size
             ChatNav.archived = archivedRows.size
             ChatNav.trashed = trashed.size
         }
@@ -1235,7 +1237,7 @@ private fun Conversation(app: Muninn, key: String) {
             } catch (_: Exception) {}
             val clean = app.chat.cleanFileName(chosenName ?: fallbackName)
             val card = io.github.ravenor907.muninn.net.FileLink.preparing(key, clean, size)
-            val tmp = java.io.File(java.io.File(context.cacheDir, "files").also { it.mkdirs() }, "out-" + System.nanoTime())
+            val tmp = io.github.ravenor907.muninn.net.FileLink.outCopy(java.io.File(context.cacheDir, "files"))
             // The file is copied in first: with too little room on the phone, say that, not "couldn't be opened".
             val room = try { tmp.parentFile?.usableSpace ?: Long.MAX_VALUE } catch (_: Exception) { Long.MAX_VALUE }
             val full = size > 0 && room < size + 32L * 1024 * 1024
@@ -1450,7 +1452,7 @@ private fun Conversation(app: Muninn, key: String) {
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${if (r.mine) "yourself" else name}", preview(r), "reply") { replyTo = null } } }
         Composer(text, { text = it; app.chat.typingTo(key, it.isNotBlank()) }, if (editing != null) "Edit your message" else "Message $name", onPhoto = {
             attaching = true
-        }, onMedia = savedMedia, onImage = { uri -> scope.launch {
+        }, onMedia = savedMedia, onImageIn = { uri -> scope.launch {
             // From the keyboard (a GIF or sticker picked in Gboard): a GIF goes at once, a picture asks like a picked photo.
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
         } }, voice = if (editing != null) null else VoiceHooks(
@@ -1577,13 +1579,15 @@ private fun editFits(text: String): Boolean {
 }
 
 /**
- * The message box. [onImage]: a picture or GIF the keyboard put in (Gboard's GIFs and stickers, a pasted picture),
+ * The message box. [onImageIn]: a picture or GIF the keyboard put in (Gboard's GIFs and stickers, a pasted picture),
  * handed over as its content link; without it the keyboard is told no pictures are taken here.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, onMedia: (() -> Unit)? = null, voice: VoiceHooks? = null,
-                     banner: (@Composable () -> Unit)? = null, onImage: ((Uri) -> Unit)? = null, tight: Boolean = false, onSend: () -> Unit) {
+                     banner: (@Composable () -> Unit)? = null, onImageIn: ((Uri) -> Unit)? = null, tight: Boolean = false, onSend: () -> Unit) {
+    // Ultra privacy: the keyboard is told no pictures are taken here, since its GIF search and download go outside Tor.
+    val onImage = if (io.github.ravenor907.muninn.net.UltraPrivacy.on) null else onImageIn
     val onImageSet = onImage != null
     val context = LocalContext.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
@@ -1629,7 +1633,8 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     val receiver = remember {
         object : ReceiveContentListener {
             override fun onReceive(transferableContent: TransferableContent): TransferableContent? {
-                val take = onImageNow ?: return transferableContent
+                // Ultra privacy turned on while this box was open: nothing from the keyboard is taken either.
+                val take = onImageNow?.takeIf { !io.github.ravenor907.muninn.net.UltraPrivacy.on } ?: return transferableContent
                 return transferableContent.consume { item ->
                     val uri = item.uri
                     val type = uri?.let { u -> try { context.contentResolver.getType(u) } catch (_: Exception) { null } }.orEmpty()
@@ -2190,12 +2195,17 @@ internal fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, labe
     }
 }
 
+/** Owner decision: what saying yes to a Family group means on this phone ("Add <group> as Family?"), as Huginn says it. */
+internal const val FAMILY_ASK_TEXT = "As Family, files from its people arrive without asking, they can call you directly, and they go in " +
+    "your Family folder. Say yes only if these are your closest people. Leaving the group undoes it."
+
 /** Message requests: someone with my code who isn't a contact yet, and group invites. Nothing reaches the chats until accepted. */
 @Composable
 private fun RequestsScreen(app: Muninn, back: () -> Unit) {
     BackHandler { back() }
     val requests by app.chat.requests.collectAsState()
     val ginvites by app.chat.groups.pending.collectAsState()
+    val famAsks by app.chat.groups.familyAsks.collectAsState()
     val intros by app.chat.intros.collectAsState()
     @Suppress("UNUSED_VARIABLE") val gs by app.chat.groups.all.collectAsState()
     val asked = intros.filter { !it.iSaid && !it.declined }
@@ -2203,7 +2213,18 @@ private fun RequestsScreen(app: Muninn, back: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         PageBar("Requests")
         LazyColumn(Modifier.weight(1f).padding(top = 12.dp)) {
-            if (requests.isEmpty() && ginvites.isEmpty() && asked.isEmpty() && offers.isEmpty()) item { Text("No requests.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            if (requests.isEmpty() && ginvites.isEmpty() && asked.isEmpty() && offers.isEmpty() && famAsks.isEmpty()) item { Text("No requests.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            // Family consent: a group made Family (or that put me in as Family) is an ordinary group until this Yes.
+            items(famAsks, key = { "fam" + it.g }) { a ->
+                Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+                    Text("Add ${a.name} as Family?", style = Type.big)
+                    Text("${a.by} made it a Family group. " + FAMILY_ASK_TEXT, style = Type.small)
+                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MButton("Add as Family", kind = Kind.Accent) { app.chat.groups.answerFamily(a.g, true); Ui.say("${a.name} is Family now.") }
+                        MButton("Not Family") { app.chat.groups.answerFamily(a.g, false) }
+                    }
+                }
+            }
             // Cap i1: introductions, and people in a group asking to be in touch.
             items(asked, key = { "n" + it.id }) { i ->
                 Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
@@ -2521,7 +2542,7 @@ private fun NewGroup(app: Muninn) {
             // A group with the people picked, and a group call to them at once.
             MButton("Call them", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Normal, enabled = chosen.isNotEmpty(), icon = "call") {
                 val picked = chosen.toList()
-                val (g, msg) = app.chat.startGroup(picked)
+                val (g, msg) = app.chat.startGroup(picked, kind)
                 if (g == null) { Ui.say(msg, true); return@MButton }
                 if (name.isNotBlank()) app.chat.groups.rename(g, name)
                 ChatNav.openGroup(g)
@@ -2712,7 +2733,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     var text by remember(ch, draftRev) { mutableStateOf(draft0.text) }
     val list = rememberLazyListState()
     LaunchedEffect(g) { app.chat.pruneSoon() }
-    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groupRead(g); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groupRead(g, ch); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     val context = LocalContext.current
     // While it's on screen, new messages here just buzz; its old notification goes.
     DisposableEffect(key) {
@@ -3051,7 +3072,7 @@ private fun GroupConversation(app: Muninn, g: String) {
         // Keyed by channel (round 17): typing just before a switch never lands in the other channel.
         if (!grp.readOnly && !adminsOnlyHere) androidx.compose.runtime.key(draftKey) { Composer(text, { text = it }, if (editing != null) "Edit your message" else "Message #$chName", banner = banner, onPhoto = {
             attaching = true
-        }, onMedia = savedMedia, onImage = { uri -> scope.launch {
+        }, onMedia = savedMedia, onImageIn = { uri -> scope.launch {
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
         } }, voice = if (editing != null) null else VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },

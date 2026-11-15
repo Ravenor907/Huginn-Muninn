@@ -65,6 +65,22 @@ object Sharing {
         return if (fm > 0 && who != NOBODY) "$line · Up to $fm MB" else line
     }
 
+    /**
+     * A name from someone else with the characters that can hide what it really is taken out: direction marks and
+     * overrides ("photo\u202Egpj.apk" shows as "photokpa.jpg"), other invisible formatting characters and control
+     * characters (C0 and C1). The zero-width joiner stays (emoji are made with it).
+     */
+    fun cleanName(name: String, markC0: Boolean = false): String {
+        if (name.none { hides(it, markC0) }) return name
+        val sb = StringBuilder(name.length)
+        for (c in name) if (!hides(c, markC0)) sb.append(c)
+        return sb.toString()
+    }
+
+    /** [markC0]: C0 controls are left in ([safeName] turns them into "_"). */
+    private fun hides(c: Char, markC0: Boolean): Boolean = c != '\u200D' && !(markC0 && (c.code < 0x20 || c.code == 0x7f)) &&
+        (Character.getType(c) == Character.FORMAT.toInt() || Character.getType(c) == Character.CONTROL.toInt())
+
     private val RESERVED = setOf("CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$")
 
     /**
@@ -73,7 +89,7 @@ object Sharing {
      */
     fun safeName(name: String, fallback: String): String {
         val sb = StringBuilder()
-        for (c in name) sb.append(if (c.code < 0x20 || c.code == 0x7f || c in "/\\:*?\"<>|") '_' else c)
+        for (c in cleanName(name, markC0 = true)) sb.append(if (c.code < 0x20 || c.code == 0x7f || c in "/\\:*?\"<>|") '_' else c)
         var out = sb.toString().trim()
         // At most 120 characters, never half of a surrogate pair.
         if (out.codePointCount(0, out.length) > 120) out = out.substring(0, out.offsetByCodePoints(0, 120))

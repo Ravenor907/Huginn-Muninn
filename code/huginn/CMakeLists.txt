@@ -55,6 +55,7 @@ qt_standard_project_setup(REQUIRES 6.6)
 qt_add_executable(huginn
     src/main.cpp
     src/settings.cpp src/settings.h
+    src/sounds.cpp src/sounds.h
     src/talkkey.cpp src/talkkey.h
     src/globalkeys.cpp src/globalkeys.h
     src/system.cpp src/system.h

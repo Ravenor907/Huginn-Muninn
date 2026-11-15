@@ -75,7 +75,9 @@ bool Chat::groupFilesArrive(const QString &g, qint64 size) const
     const auto it = m_groups.constFind(g);
     if (it == m_groups.cend() || it->state.isEmpty())
         return false;
-    return Limits::filesArrive(Limits::groupType(it->state), size, FileLink::kAutoBytes);
+    // A Family group this computer hasn't said yes to is treated as an ordinary (Folk) one.
+    return Limits::filesArrive(familyTrusted(*it) ? QString::fromLatin1(Limits::kFamily) : QString::fromLatin1(Limits::kFolk), size,
+                               FileLink::kAutoBytes);
 }
 
 QStringList Chat::groupFileMembers(const QString &g) const

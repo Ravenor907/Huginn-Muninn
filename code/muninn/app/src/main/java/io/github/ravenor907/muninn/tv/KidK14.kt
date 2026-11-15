@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -401,7 +402,7 @@ object KidK14 {
      */
     fun kidCode(code: String, by: String): String {
         val body = code.removePrefix(io.github.ravenor907.muninn.net.Contacts.PREFIX)
-        val o = JSONObject(String(java.util.Base64.getUrlDecoder().decode(body), Charsets.UTF_8)).put("kid", 1).put("by", by)
+        val o = SafeJson.obj(String(java.util.Base64.getUrlDecoder().decode(body), Charsets.UTF_8)).put("kid", 1).put("by", by)
         return io.github.ravenor907.muninn.net.Contacts.PREFIX +
             java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(o.toString().toByteArray(Charsets.UTF_8))
     }
@@ -413,7 +414,7 @@ object KidK14 {
         if (i < 0) return null
         val body = text.substring(i + prefix.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
         return try {
-            val o = JSONObject(String(java.util.Base64.getUrlDecoder().decode(body), Charsets.UTF_8))
+            val o = SafeJson.obj(String(java.util.Base64.getUrlDecoder().decode(body), Charsets.UTF_8))
             if (o.optInt("kid") != 1 || o.has("tv")) return null
             val k = o.opt("k"); val by = o.opt("by")
             if (!keyOk(k) || !keyOk(by) || k == by) null else k as String to by as String

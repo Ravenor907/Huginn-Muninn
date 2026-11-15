@@ -22,14 +22,14 @@ object MoveCommon {
         fun file(name: String) = v.read(File(a.filesDir, name))
         val contacts = JSONArray().apply { a.contacts.all.value.forEach { put(ChatWire.contactToJson(it)) } }
         val ratchets = JSONObject()
-        a.contacts.all.value.forEach { c -> v.read(File(File(a.filesDir, "ratchet"), ChatWire.fileName(c.chatKey)))?.let { ratchets.put(c.chatKey, JSONObject(it)) } }
+        a.contacts.all.value.forEach { c -> v.read(File(File(a.filesDir, "ratchet"), ChatWire.fileName(c.chatKey)))?.let { ratchets.put(c.chatKey, SafeJson.obj(it)) } }
         val chats = JSONObject()
-        file("chats.json")?.let { t -> val o = JSONObject(t); o.keys().forEach { k -> chats.put(k, textOnly(o.getJSONArray(k))) } }
+        file("chats.json")?.let { t -> val o = SafeJson.obj(t); o.keys().forEach { k -> chats.put(k, textOnly(o.getJSONArray(k))) } }
         val groups = JSONArray(); val gchats = JSONObject()
-        file(Groups.FILE)?.let { t -> JSONObject(t).optJSONArray("groups")?.let { gs -> for (i in 0 until gs.length()) gs.getJSONObject(i).let {
+        file(Groups.FILE)?.let { t -> SafeJson.obj(t).optJSONArray("groups")?.let { gs -> for (i in 0 until gs.length()) gs.getJSONObject(i).let {
             if (it.optString("gone").isEmpty()) groups.put(JSONObject().put("s", it.getJSONObject("s")).put("h", it.optJSONArray("h") ?: JSONArray()))
         } } }
-        file(Groups.CHATS)?.let { t -> val o = JSONObject(t); o.keys().forEach { g -> gchats.put(g, JSONArray().apply {
+        file(Groups.CHATS)?.let { t -> val o = SafeJson.obj(t); o.keys().forEach { g -> gchats.put(g, JSONArray().apply {
             val l = o.getJSONArray(g)
             for (i in 0 until l.length()) l.getJSONObject(i).let { m ->
                 val text = when { m.optInt("vo") > 0 -> "Voice message"; m.optInt("vd") > 0 -> "Video message"; m.optString("ph").isNotEmpty() -> "Photo"; else -> m.optString("x") }
@@ -37,10 +37,10 @@ object MoveCommon {
                     .put("x", text).put("m", m.optBoolean("m")).put("t", m.optLong("t")).put("st", m.optString("st")))
             }
         }) } }
-        val folders = file("folders.json")?.let { JSONObject(it) } ?: JSONObject()
+        val folders = file("folders.json")?.let { SafeJson.obj(it) } ?: JSONObject()
         val me = JSONObject().put("name", a.identity.username).put("pub", a.identity.publicKey)
             .put("priv", ChatCrypto.b64(a.identity.keys.private.encoded)).put("nostr", a.identity.nostrSecret())
-        val profile = file("profile/me.json")?.let { try { JSONObject(it) } catch (e: Exception) { null } }?.let { p ->
+        val profile = file("profile/me.json")?.let { try { SafeJson.obj(it) } catch (e: Exception) { null } }?.let { p ->
             JSONObject().put("v", p.optLong("v")).put("col", p.optString("col")).put("pic", p.optString("pic")).put("st", p.optString("st")).put("cs", p.optString("cs"))
         }
         return JSONObject().put("v", 1).put("me", me).put("contacts", contacts).put("ratchets", ratchets).put("chats", chats)
@@ -89,8 +89,10 @@ object MoveCommon {
                 .put("st", p.optString("st")).put("cs", p.optString("cs")).toString())
         }
         // Settings stay this device's, with the identity and name of the one that moved here.
-        val prefs = JSONObject(Backup.prefsJson(a))
+        val prefs = SafeJson.obj(Backup.prefsJson(a))
         prefs.remove("chatPub")
+        // This device's mailbox isn't the one moving in (Backup.restore works it out from the secret).
+        prefs.remove("nostrPub")
         prefs.put("username", JSONObject().put("t", "s").put("v", me.optString("name").take(24).ifBlank { a.identity.username }))
         add(Backup.PREFS_ENTRY, prefs.toString())
         return out

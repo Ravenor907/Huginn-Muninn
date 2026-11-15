@@ -134,6 +134,10 @@ private:
     QString m_error;
     bool m_bluezUp = false;          // BlueZ answered on the system bus the last time we asked
     bool m_askingBluez = false;
+    // Linux: what BlueZ's own objects said a moment ago (asked without waiting): no adapter, off, or on. Qt's
+    // QBluetoothLocalDevice asks the same with blocking calls on the window's thread, so it isn't used there.
+    enum AdapterState { NoAdapter, AdapterOff, AdapterOn, AdapterSlow };
+    AdapterState m_adapter = NoAdapter;
     bool m_relaxed = false;
     quint64 m_nextId = 0;
     bool m_running = false;

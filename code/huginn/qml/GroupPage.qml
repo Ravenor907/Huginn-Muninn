@@ -1304,6 +1304,10 @@ Rectangle {
         items.push({ name: "About and rules", icon: "info", detail: about !== "" ? about.replace(/\n+/g, " · ") : admin ? "Add a description or rules" : "None", url: "about" })
         items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers + " people", url: "people" })
         items.push({ name: "Type", icon: "people", detail: l.typeName, url: "type" })
+        // A Family group gives Family trust on this computer only once you said yes (Chat.answerFamily).
+        if (!isTour && family && !readOnly && "familyOk" in info)
+            items.push({ name: "Family on this computer", icon: "shield", detail: info.familyOk ? "Yes: files arrive, direct calls, Family folder" : "No: treated as an ordinary group",
+                         url: "familyok", check: !!info.familyOk })
         items.push({ name: "How long messages stay", icon: "moon", detail: l.days + " days", url: "days" })
         // Who can invite: a switch (ticked: members too, else admins only).
         if (admin && l.links && invitePanel.has("setMembersInvite"))
@@ -1333,6 +1337,11 @@ Rectangle {
             else if (a === "about") editAbout(back)
             else if (a === "days") pickGroupLimit(back)
             else if (a === "type") pickGroupType(back)
+            else if (a === "familyok") {
+                if (info.familyOk) { Chat.answerFamily(g, false); Qt.callLater(back) }
+                else Ui.sure("Add " + info.name + " as Family?", PeopleActions.familyAskText, "Add as Family",
+                             () => { Chat.answerFamily(g, true); Qt.callLater(back) }, false, false, back)
+            }
             else if (a === "invite") {
                 const r = Chat.setMembersInvite(g, !invitePanel.membersCanInvite)
                 if (r) Ui.say(r, true)

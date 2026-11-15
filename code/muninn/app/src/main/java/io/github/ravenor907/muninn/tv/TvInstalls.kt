@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -88,7 +89,7 @@ object TvInstalls {
     }.toString()
 
     fun fromJson(s: String?): List<Ask> = try {
-        val a = JSONArray(s ?: "[]")
+        val a = SafeJson.arr(s ?: "[]")
         (0 until a.length()).mapNotNull { i ->
             val o = a.optJSONObject(i) ?: return@mapNotNull null
             val p = o.optJSONArray("parts") ?: JSONArray()

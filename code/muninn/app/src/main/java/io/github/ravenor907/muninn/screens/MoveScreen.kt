@@ -79,21 +79,29 @@ fun MoveSection(app: Muninn) {
 fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
     val code = remember { Move.showCode(app) }
     val inc by Move.incoming.collectAsState()
+    // This device has its own account already (contacts or groups): "They match" says first that it's all replaced.
+    val hasAccount = remember { try { app.ready.value && (app.contacts.all.value.isNotEmpty() || app.chat.groups.all.value.isNotEmpty()) } catch (_: Exception) { true } }
+    var replacing by remember { mutableStateOf(false) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     // Back is Cancel (once everything is here, there's nothing to cancel); a tap beside the dialog does nothing.
     AlertDialog(onDismissRequest = { if (inc?.state != "done") { Move.cancelHere(app); onDone() } }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
-        title = { Text(when (inc?.state) { "hello", "receiving" -> "Moving from ${inc?.from}"; "done" -> "Moved here"; else -> "Move here" }, style = Type.big) },
+        title = { Text(when (inc?.state) { "hello", "receiving" -> if (replacing) "Replace everything here?" else "Moving from ${inc?.from}"; "done" -> "Moved here"
+            "failed" -> "Couldn't move here"; else -> "Move here" }, style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                 val i = inc
                 when (i?.state) {
-                    "hello", "receiving" -> {
+                    "hello", "receiving" -> if (replacing && !i.confirmed) {
+                        Text("Everything on this device (its account, contacts, chats and settings) is replaced by what comes from ${i.from}. " +
+                            "A copy of what's here now is kept first.", style = Type.normal)
+                    } else {
                         Text("Same on both screens?", style = Type.normal)
                         Text(i.emoji, style = Type.big, modifier = Modifier.padding(vertical = 12.dp))
                         if (i.of > 0) Text("${i.have} of ${i.of} parts here", style = Type.small)
                         if (i.confirmed) Text("Almost done. Muninn reopens as you.", style = Type.small, textAlign = TextAlign.Center)
                     }
                     "done" -> Text("Done. Muninn reopens as you.", style = Type.normal)
+                    "failed" -> Text(i.note.ifEmpty { "Couldn't take it in. Nothing here changed." }, style = Type.normal)
                     else -> {
                         Text("Scan this on your old device.",
                             style = Type.small)
@@ -109,9 +117,12 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
         },
         confirmButton = {
             val i = inc
-            if ((i?.state == "hello" || i?.state == "receiving") && !i.confirmed) MButton("They match", kind = Kind.Accent) { Move.confirmHere(app) }
+            if ((i?.state == "hello" || i?.state == "receiving") && !i.confirmed) {
+                if (replacing) MButton("Replace everything here", kind = Kind.Danger) { replacing = false; Move.confirmHere(app) }
+                else MButton("They match", kind = Kind.Accent) { if (hasAccount) replacing = true else Move.confirmHere(app) }
+            }
         },
-        dismissButton = { if (inc?.state != "done") MButton("Cancel") { Move.cancelHere(app); onDone() } })
+        dismissButton = { if (inc?.state != "done") MButton(if (inc?.state == "failed") "Close" else "Cancel") { Move.cancelHere(app); onDone() } })
 }
 
 /**
@@ -137,6 +148,9 @@ fun MoveCover(app: Muninn): Boolean {
             dismissButton = { MButton("Don't link") { Move.answerLink(app, false) } })
     }
     val o = out ?: return false
+    // Locked (a restart mid-move, or too many wrong tries at Stop moving): the real lock screen shows, with its counted tries
+    // and waits; the move goes on once it's open.
+    if (o.state == "moving" && (vaultLocked || appLocked)) { unlocking = false; return false }
     if (unlocking) {
         // Stopping a move needs the person's own password or pattern.
         LockScreen(app, inApp = true) { ok -> unlocking = false; if (ok) Move.abort(app) }

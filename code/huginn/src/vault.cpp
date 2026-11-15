@@ -2224,6 +2224,15 @@ void applySettingsBlob(const QByteArray &blob)
 
 void Vault::restartHuginn(const QString &ifNot)
 {
+    // Steam's game mode: a copy started from here would run outside Steam, never seen. Saved and closed instead, and
+    // opened again from Steam.
+    if (SingleInstance::reopenFromSteam()) {
+        QString text = ifNot;
+        text.replace(QStringLiteral("Close Huginn and open it again"), QStringLiteral("Huginn closes now. Open it again from Steam"));
+        Q_EMIT notice(text);
+        QTimer::singleShot(4000, qApp, [] { QCoreApplication::exit(0); });   // past the window's close question
+        return;
+    }
     // The new copy waits until this one has saved and closed: the two never use the files at the same time.
     if (SingleInstance::startAgain()) {
         QTimer::singleShot(300, qApp, [] { QCoreApplication::exit(0); });   // past the window's close question

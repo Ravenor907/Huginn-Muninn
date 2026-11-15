@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import io.github.ravenor907.muninn.net.SafeJson
 import android.content.Context
 import io.github.ravenor907.muninn.Muninn
 import org.json.JSONObject
@@ -38,7 +39,7 @@ object KidReset {
     fun ownerIn(s: String?): OwnerSettings? {
         if (s.isNullOrEmpty()) return null
         return try {
-            val o = JSONObject(s)
+            val o = SafeJson.obj(s)
             val d = OwnerSettings()
             fun size(k: String) = o.optDouble(k, 1.0).toFloat().takeIf { it in 0.5f..3f } ?: 1f
             OwnerSettings(size("text"), size("size"), o.optBoolean("hc", d.hc), o.optString("cv", d.cv), o.optBoolean("still", d.still),

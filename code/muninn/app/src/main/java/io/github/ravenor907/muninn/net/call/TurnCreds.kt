@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.net.call
 
+import io.github.ravenor907.muninn.net.SafeJson
 import org.json.JSONObject
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -34,10 +35,10 @@ object TurnCreds {
         if (!RelayConfig.configured) return null
         val id = idOf(identityDer)
         val tok = tokenFor(try { store?.load() } catch (_: Exception) { null }, id, nowMs / 1000 + offsetS) ?: return null
-        val b = JSONObject(body(identityDer, nowMs / 1000 + offsetS, RelayConfig.APP_SECRET, tok)).put("mb", mb.coerceIn(0, 5000)).toString()
+        val b = SafeJson.obj(body(identityDer, nowMs / 1000 + offsetS, RelayConfig.APP_SECRET, tok)).put("mb", mb.coerceIn(0, 5000)).toString()
         val r = post(RelayConfig.WORKER_URL.trimEnd('/') + "/meter", b) ?: return null
         if (r.first != 200) return null
-        return try { JSONObject(r.second).getLong("mb") } catch (_: Exception) { null }
+        return try { SafeJson.obj(r.second).getLong("mb") } catch (_: Exception) { null }
     }
 
     /** A call renews its relay this long before the login ends (relay.md "Renewal"). */
@@ -47,7 +48,7 @@ object TurnCreds {
 
     /** How long a 429 says to wait ("retry", seconds), at least a minute and at most until the next UTC day; null without it (older Workers). */
     fun retryMs(text: String, nowMs: Long): Long? = try {
-        val o = JSONObject(text)
+        val o = SafeJson.obj(text)
         if (o.opt("retry") is Number) (o.getLong("retry") * 1000).coerceIn(60_000L, nextUtcDayMs(nowMs) - nowMs) else null
     } catch (e: Exception) { null }
 
@@ -94,7 +95,7 @@ object TurnCreds {
 
     /** The registration body: {"id", "t", "sig", "pow"}. */
     fun regBody(identityDer: ByteArray, tSec: Long, secret: String, pow: Long): String =
-        JSONObject(body(identityDer, tSec, secret)).put("pow", pow).toString()
+        SafeJson.obj(body(identityDer, tSec, secret)).put("pow", pow).toString()
 
     /** Where the install token is kept (outside the vault is fine: it only spends this install's own daily logins). */
     interface TokenStore { fun load(): String?; fun save(value: String?) }
@@ -110,22 +111,22 @@ object TurnCreds {
 
     /** {"tok", "exp"} in an answer, as kept by [store]; null when there's none. */
     fun tokenOf(text: String, id: String): String? = try {
-        val o = JSONObject(text)
+        val o = SafeJson.obj(text)
         val tok = o.optString("tok"); val exp = o.optLong("exp", 0)
         if (tok.isEmpty() || tok.contains('|') || exp <= 0) null else "$id|$tok|$exp"
     } catch (e: Exception) { null }
 
     /** The Worker's time in a 401 "stale" answer ({"error":"stale","now":...}), or null. */
     fun staleNow(text: String): Long? = try {
-        val o = JSONObject(text)
+        val o = SafeJson.obj(text)
         if (o.optString("error") == "stale" && o.opt("now") is Number) o.getLong("now") else null
     } catch (e: Exception) { null }
 
-    private fun errorOf(text: String): String = try { JSONObject(text).optString("error") } catch (e: Exception) { "" }
+    private fun errorOf(text: String): String = try { SafeJson.obj(text).optString("error") } catch (e: Exception) { "" }
 
     /** Reads a 200 answer; null if anything is missing. Only turn: and turns: URLs are kept. */
     fun parse(text: String, nowMs: Long): Login? = try {
-        val o = JSONObject(text)
+        val o = SafeJson.obj(text)
         val a = o.getJSONArray("urls")
         val urls = (0 until a.length()).mapNotNull { a.opt(it) as? String }.filter { it.startsWith("turn:") || it.startsWith("turns:") }
         val user = o.getString("username"); val pass = o.getString("credential")
