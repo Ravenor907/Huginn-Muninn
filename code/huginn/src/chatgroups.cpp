@@ -1942,7 +1942,8 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     if (q.size() >= 1000)
         return 429;
     q << now();
-    if (m_incoming.size() > 20 && !m_incoming.contains(key))
+    // Group members count as known here (the group's admins let them in): the shared places (Chat::incomingRoom).
+    if (!m_incoming.contains(key) && !incomingRoom(false))
         return 429;
     if (n > Photos::kMaxPieces && !m_incoming.contains(key) && bigIncoming())
         return 429;

@@ -11,7 +11,8 @@ package io.github.ravenor907.muninn.net
  * - "Delivered" for the same message goes back at most once every [RECEIPT_GAP_MS], and once per photo, not
  *   once per piece.
  * - A relay that drops waits 2 s, 4 s, 8 s ... up to a minute. Failures in a row across all relays slow down
- *   swapping too, so a phone with no signal doesn't try one relay after another without a pause.
+ *   swapping too, so a phone with no signal doesn't try one relay after another without a pause. One that keeps
+ *   failing while others are open rests longer, up to [MAX_REST_MS] (see [reconnectMs]).
  * - On connecting, a relay is asked only for what came since it last finished sending (less [SINCE_SLACK_S]
  *   for blurred times), never more than [SINCE_MAX_S] back.
  */
@@ -61,6 +62,23 @@ object NetLogic {
     /** Wait before connecting [url]'s relay again: the longer of its own wait and the swap wait. */
     fun reconnectMs(n: Int, streak: Int): Long = maxOf(retryMs(n), swapMs(streak))
 
+    /** Failed tries in a row before a relay that keeps failing while others are open rests longer than a minute. */
+    const val REST_AFTER = 6
+    /** The longest such a relay rests between tries. */
+    const val MAX_REST_MS = 15 * 60_000L
+
+    /**
+     * The same, knowing whether another relay is open ([othersLive]). A relay that keeps failing while others are open
+     * (one that's down, blocked, or refuses every connection) rests longer after [REST_AFTER] tries: 2, 4, 8 minutes, then
+     * every [MAX_REST_MS], instead of a new connection every minute all day. It carries nothing the open ones don't (every
+     * sender posts to every relay), and a network change tries it again at once. With none open, a minute at most as before.
+     */
+    fun reconnectMs(n: Int, streak: Int, othersLive: Boolean): Long {
+        val base = reconnectMs(n, streak)
+        if (!othersLive || n <= REST_AFTER) return base
+        return maxOf(base, minOf(MAX_REST_MS, MAX_BACKOFF_MS shl minOf(n - REST_AFTER, 4)))
+    }
+
     /**
      * Events can be backdated up to 10 minutes (see [Nostr.publish]), and the sender's clock may be off too (round 14;
      * 1.54: by hours, a dual-boot PC on the wrong time zone): look back 3 hours past the last finish. Whatever comes
@@ -80,6 +98,13 @@ object NetLogic {
         return if (kotlin.math.abs(mid) < CLOCK_TRUST_S) 0L else mid
     }
     const val CLOCK_TRUST_S = 60L
+
+    /**
+     * 1.55: a relay's clock less this device's (s) at [nowMs] (this device's clock), from [relayBaseMs]: the relay's time
+     * less [elapsedMs]'s clock (time since start, which no clock change moves) when it was read. A clock set right after
+     * the reading changes the answer at once.
+     */
+    fun offsetNow(relayBaseMs: Long, elapsedMs: Long, nowMs: Long): Long = (relayBaseMs + elapsedMs) / 1000 - nowMs / 1000
     /** This device's clock is this far (s) from the relays': the person is told it looks wrong. */
     const val CLOCK_WARN_S = 10 * 60L
 
@@ -107,6 +132,16 @@ object NetLogic {
 
     /** What to ask a relay for, in seconds: since it last finished sending ([eoseAt], 0: never) less the slack. */
     fun since(eoseAt: Long, nowS: Long): Long = maxOf(0L, nowS - SINCE_MAX_S, eoseAt - SINCE_SLACK_S)
+
+    /**
+     * A relay's read position moves a little with every keepalive answer. On its own it's written to storage only once it
+     * moved this far (s) from the copy there: after a restart a relay is asked from [SINCE_SLACK_S] before it anyway, and
+     * whatever comes again is dropped as seen. A newly seen event is written within half a minute as before.
+     */
+    const val CURSOR_SAVE_S = 15 * 60L
+
+    /** The read position [nowAt] is worth a write of its own, with [savedAt] the one in storage (null: none there). */
+    fun cursorWorthSaving(savedAt: Long?, nowAt: Long): Boolean = savedAt == null || nowAt - savedAt !in 0 until CURSOR_SAVE_S
 
     /**
      * A relay's EOSE cursor may move on: its inbox request finished ([subscribed]), nothing it handed over was left

@@ -118,7 +118,13 @@ class Identity(context: Context, private val vault: Vault) {
     }
 
     /** The Nostr secret (internet inbox). */
-    fun nostrSecret(): String = secret("nostrSecret") { Schnorr.hex(Schnorr.newSecret()) }
+    fun nostrSecret(): String = nostrNow ?: secret("nostrSecret") { Schnorr.hex(Schnorr.newSecret()) }.also { nostrNow = it }
+
+    /**
+     * The Nostr secret, in memory once read (like the chat keys): the relays ask for it on every keepalive check and every
+     * envelope sent, and each time cost a read and decrypt of secrets.json. Only handed out while unlocked (Muninn.nostr).
+     */
+    @Volatile private var nostrNow: String? = null
 
     /**
      * The call relay's id for this phone: random, made once. Not the chat key, so nobody who knows that key
@@ -270,7 +276,8 @@ class Identity(context: Context, private val vault: Vault) {
     var lockAfter: Long
         get() = prefs.getLong("lockAfter", io.github.ravenor907.muninn.ui.AppLock.DEFAULT_AFTER)
         set(v) = prefs.edit().putLong("lockAfter", v).apply()
-    val publicKey: String get() = ChatCrypto.b64(keys.public.encoded)
+    /** The chat key as text: worked out once (it's asked for on every message, and per member of every group row on screen). */
+    val publicKey: String by lazy { ChatCrypto.b64(keys.public.encoded) }
 
     /** The blocked list, in memory once read (it's asked about on every message). */
     @Volatile private var mutedNow: Set<String>? = null

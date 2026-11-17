@@ -388,6 +388,11 @@ object FileLink {
         fun logFile(where: String, name: String, size: Long, uri: String, mine: Boolean) {}
         /** Cap f3 (27.7): their app keeps a stopped file to go on from, and waits a day for a big file's answer. */
         fun resumes(peer: String): Boolean = false
+        /**
+         * 1.55: their app says done only once the file is checked and saved: true (Muninn 1.54 and newer), false (Huginn,
+         * an older Muninn: they say it three times the moment the last piece is in), null (not known yet, [AppVer.doneAfterSave]).
+         */
+        fun doneAfterSave(peer: String): Boolean? = null
         /** A file that asks Accept or Decline first: a notification, as a message gets ([where]: its chat). */
         fun offered(where: String, from: String, text: String) {}
         /** Cap f3: the kept parts' list (keptparts.json in the vault), so they last across a restart. Null: none. */
@@ -436,7 +441,9 @@ object FileLink {
                      /** A video's length in ms (its offer's "vid"), 0 for any other file. */
                      val vid: Int = 0,
                      /** The sender's message id for it in the chat ("bm", BigVideo.FIELD), or "". */
-                     val bm: String = "") {
+                     val bm: String = "",
+                     /** 1.55: from someone who isn't a contact, not for a group they're in ([askRoom]). */
+                     val stranger: Boolean = false) {
         val torSeq = java.util.concurrent.atomic.AtomicLong(TorFiles.SEQ_BASE)
         /** Accepted (by a tap or by itself): only these count against free space; an offer nobody answered reserves none. */
         @Volatile var taken = false
@@ -536,7 +543,10 @@ object FileLink {
             val until = o.optLong("until")
             val p = try { JSONObject(o.optString("p")) } catch (_: Exception) { null }
             if (p == null || until <= now || o.optString("from").isEmpty() || !ok(p) || p.optString("t") != "offer") { dropped = true; continue }
-            try { offer(o.optString("from"), p, until) } catch (_: Exception) {}
+            // 1.55: one that couldn't be made again leaves nothing behind: a half-made entry turned away every later
+            // offer of the same file until Muninn restarted.
+            val had = ins.containsKey(p.optString("id"))
+            try { offer(o.optString("from"), p, until) } catch (_: Exception) { if (!had) ins.remove(p.optString("id")) }
         }
         // Copies and parts nothing refers to any more (left by a crash): gone after a day.
         try {
@@ -592,9 +602,28 @@ object FileLink {
         return File(dir, "out-" + System.nanoTime())
     }
 
-    /** Offers waiting for Accept or Decline: at most this many from one person, and in all (more are declined at once). */
-    const val MAX_ASKS_PER_PEER = 5
+    /**
+     * Offers waiting for Accept or Decline: at most this many from one person, and in all (more are declined at once).
+     * 1.55: 20 from one person (5 declined a sixth file sent at once, as a Family member's files are with Data saver on).
+     */
+    const val MAX_ASKS_PER_PEER = 20
     const val MAX_ASKS = 40
+    /**
+     * 1.55: offers from people who aren't contacts (1:1, not for a group they're in): anyone can send one, over Tor too,
+     * so at most this many from one of them, and from all of them together, and two of them can't fill every place.
+     */
+    const val MAX_ASKS_STRANGER = 5
+    const val MAX_ASKS_STRANGERS = 10
+
+    /**
+     * Room for one more offer waiting for an answer from [from] ([stranger]: not a contact, nor for a group they're in),
+     * with [open] waiting now (who each is from, and whether that one is a stranger's).
+     */
+    fun askRoom(open: List<Pair<String, Boolean>>, from: String, stranger: Boolean): Boolean {
+        if (open.size >= MAX_ASKS) return false
+        if (open.count { it.first == from } >= (if (stranger) MAX_ASKS_STRANGER else MAX_ASKS_PER_PEER)) return false
+        return !stranger || open.count { it.second } < MAX_ASKS_STRANGERS
+    }
     /** Offers waiting for an answer, kept across a restart: id to who, the offer, until when. */
     private val asks = ConcurrentHashMap<String, Triple<String, String, Long>>()
     /** One thread for every ask's time limit (never a sleeping thread per offer). */
@@ -604,6 +633,20 @@ object FileLink {
     const val LIVE_SAVE_MS = 30_000L
     /** The longest a sender waits for DONE once every piece is there (the other side checks and saves a big file). */
     const val CHECK_MAX_MS = 30 * 60_000L
+    /**
+     * 1.55: heard from them this long after every piece was in: their app is checking it (from 1.54 an ack a second while
+     * it checks and saves; an older app, or Huginn, says nothing after its DONE).
+     */
+    const val CHECKING_MS = 2_000L
+
+    /**
+     * 1.55: the wait for their DONE ended without it (silence, or [CHECK_MAX_MS]): whether the file still counts as sent.
+     * [late]: their app says DONE only once it's checked and saved (true), at once (false), or isn't known yet (null:
+     * someone only in a group, or no version heard from them). Known to say it late: no, it didn't take there and the copy
+     * stays for Retry. Not known: yes (an older app's three DONEs can all be lost on the way), unless they went on
+     * [checking] after every piece was in, as only an app that says it late does.
+     */
+    fun sentWithoutDone(late: Boolean?, checking: Boolean): Boolean = late == false || (late == null && !checking)
 
     /** A file of mine already hashed (path, size, last change): Retry doesn't read it all again. */
     private val hashed = ConcurrentHashMap<String, Triple<Long, Long, String>>()
@@ -1086,9 +1129,10 @@ object FileLink {
         val id = p.getString("id")
         if (ins.containsKey(id) || id in answered) return
         // Not more open asks than this from one person, or in all: a flood of offers is declined at once (no cards,
-        // no notifications, no threads).
-        val open = ins.values.filter { !it.taken }
-        if (restoreUntil == 0L && (open.count { it.peer == from } >= MAX_ASKS_PER_PEER || open.size >= MAX_ASKS)) { answered.add(id); decline(from, id); return }
+        // no notifications, no threads). 1.55: fewer from people who aren't contacts ([askRoom]). A group's offer counts
+        // as known here: one for a group they aren't in is declined below, before it takes a place.
+        val stranger = p.optString("g").isEmpty() && !h.isContact(from)
+        if (restoreUntil == 0L && !askRoom(ins.values.filter { !it.taken }.map { it.peer to it.stranger }, from, stranger)) { answered.add(id); decline(from, id); return }
         // Round 19 (interop 3, K19-4): a Kids' Device takes no full-size video. "rules" at once, so the sender's
         // app sends the smaller relay copy now instead of waiting for an answer.
         if (p.has("vid") && h.isKidDevice()) { decline(from, id, "rules"); return }
@@ -1141,7 +1185,7 @@ object FileLink {
         val direct = if (trust) CallLogic.directOf(c) else emptyList()
         val theirs = listOfNotNull(lan) + direct
         val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay), vid,
-            (p.opt(BigVideo.FIELD) as? String)?.takeIf { BigVideo.idOk(it) }.orEmpty())
+            (p.opt(BigVideo.FIELD) as? String)?.takeIf { BigVideo.idOk(it) }.orEmpty(), stranger)
         ins[id] = inc
         val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
         val badge = h.badge(from)
@@ -1423,9 +1467,13 @@ object FileLink {
                 }
                 // Everything is there, but it counts as sent only once their DONE says it was checked and saved (an app
                 // from 1.54 sends it after both; older ones at once). Their acks a second keep the wait going; silence
-                // without DONE means it didn't take there, and this copy stays for Retry.
+                // without DONE means it didn't take there, and this copy stays for Retry. 1.55: only from an app that
+                // waits to say it: from the others (Huginn, older Muninn) every piece acked is done, as before 1.54, so
+                // their three DONEs lost on the way no longer fail it and send it all again. An app not known yet is
+                // waited for too, and its silence counts as done unless it went on checking ([sentWithoutDone]).
                 val to = peer
-                if (to != null && s.done && !gotDone && !toTor) {
+                val late = host?.doneAfterSave(o.peer)
+                if (to != null && s.done && !gotDone && !toTor && late != false) {
                     put(Progress(id, o.peer, o.name, o.size, true, "sending", o.size, note = "Being checked on their side", route = route, group = o.group))
                     val waitFrom = System.currentTimeMillis()
                     var heard = waitFrom
@@ -1441,7 +1489,9 @@ object FileLink {
                         } catch (_: java.net.SocketTimeoutException) {}
                     }
                     if (id in stopped) return
-                    if (!gotDone) { fail(id, "$who didn't confirm it arrived (maybe no space to save it). Retry sends it again."); return }
+                    if (!gotDone && !sentWithoutDone(late, heard - waitFrom >= CHECKING_MS)) {
+                        fail(id, "$who didn't confirm it arrived (maybe no space to save it). Retry sends it again."); return
+                    }
                 }
                 if (toTor && !s.done && !serveTor(id, o, key, s, raf)) return
             }

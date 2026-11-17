@@ -175,6 +175,16 @@ class ReliabilityTest {
         assertEquals(20_000, SeenIds.MAX)
     }
 
+    @Test
+    fun seenIdsSaveAsTheSameJsonInOneGo() {
+        val s = SeenIds()
+        assertEquals("[]", String(s.json()))
+        listOf("0000000000000001", "ffffffffffffffff", "0123456789abcdef", "8000000000000000").forEach { s.add(it + "ab".repeat(24)) }
+        val list = org.json.JSONArray(s.toList()).toString()
+        assertEquals(list, String(s.json()))
+        assertEquals("{\"seen\":$list}", String(s.json("{\"seen\":".toByteArray(), "}".toByteArray())))
+    }
+
     // ------------------------------------------------------------------ notifications
 
     @Test

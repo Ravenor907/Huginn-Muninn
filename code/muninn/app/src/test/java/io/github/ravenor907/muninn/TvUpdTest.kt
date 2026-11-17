@@ -161,6 +161,50 @@ class TvUpdTest {
         assertNull(TvUpd.fromUpdater("Muninn 1.34 is ready to install", false, 0f))
     }
 
+    /** 1.55: what holds an install. A TV with its screen off waits only for Muninn's own call. */
+    @Test fun installWaits() {
+        // Muninn's own call: always.
+        assertTrue(TvUpd.installWaits(inCall = true, tv = true, screenOn = false, musicActive = false, callMode = false))
+        assertTrue(TvUpd.installWaits(inCall = true, tv = false, screenOn = true, musicActive = false, callMode = false))
+        // Sound or another app's call on a TV in use, or on a tablet whatever its screen: waits.
+        assertTrue(TvUpd.installWaits(inCall = false, tv = true, screenOn = true, musicActive = true, callMode = false))
+        assertTrue(TvUpd.installWaits(inCall = false, tv = true, screenOn = true, musicActive = false, callMode = true))
+        assertTrue(TvUpd.installWaits(inCall = false, tv = false, screenOn = false, musicActive = true, callMode = false))
+        assertTrue(TvUpd.installWaits(inCall = false, tv = false, screenOn = false, musicActive = false, callMode = true))
+        // A TV asleep: a sound stream or call mode left open doesn't hold it for good.
+        assertFalse(TvUpd.installWaits(inCall = false, tv = true, screenOn = false, musicActive = true, callMode = true))
+        // Nothing going on: never.
+        assertFalse(TvUpd.installWaits(inCall = false, tv = true, screenOn = true, musicActive = false, callMode = false))
+        assertFalse(TvUpd.installWaits(inCall = false, tv = false, screenOn = true, musicActive = false, callMode = false))
+    }
+
+    /** 1.55: checks come due by the time since the last one, and a clock set back never stops them. */
+    @Test fun checksComeDue() {
+        val m = 60_000L
+        assertFalse(TvUpd.due(last = 1_000 * m, now = 1_020 * m, every = 30 * m))
+        assertTrue(TvUpd.due(last = 1_000 * m, now = 1_030 * m, every = 30 * m))
+        assertTrue(TvUpd.due(last = 0, now = 1_000 * m, every = 30 * m))
+        // The last check was saved at a time the clock has gone back from: due now, not in days.
+        assertTrue(TvUpd.due(last = 5_000 * m, now = 1_000 * m, every = 30 * m))
+    }
+
+    /** 1.55: Android's "aborted" for the session the next try abandoned isn't taken as that try's answer. */
+    @Test fun answersForOlderTriesAreLeftAlone() {
+        // The newest try's own answers count, a Cancel on Android's Install box (aborted) too.
+        assertFalse(TvUpd.staleResult(session = 7, newest = 7, success = false, aborted = true))
+        assertFalse(TvUpd.staleResult(session = 7, newest = 7, success = false, aborted = false))
+        // The old session, abandoned as the next try starts: left alone before the new one is committed and after.
+        assertTrue(TvUpd.staleResult(session = 6, newest = -1, success = false, aborted = true))
+        assertTrue(TvUpd.staleResult(session = 6, newest = 7, success = false, aborted = true))
+        assertTrue(TvUpd.staleResult(session = 6, newest = 7, success = false, aborted = false))
+        // An install that went in always counts.
+        assertFalse(TvUpd.staleResult(session = 6, newest = 7, success = true, aborted = false))
+        // Nothing committed in this run yet (Muninn restarted): a real answer counts, the abandoned leftovers' don't.
+        assertFalse(TvUpd.staleResult(session = 6, newest = -1, success = false, aborted = false))
+        // No session id in the answer: taken as before.
+        assertFalse(TvUpd.staleResult(session = -1, newest = 7, success = false, aborted = true))
+    }
+
     @Test fun wordingHasNoLongDashes() {
         val texts = listOf(TvUpd.NEEDS_FIRST, TvUpd.TV_PROMPT) + TvUpd.STATES.map { TvUpd.text(TvUpd.St("1.33", it, p = 5, why = "x")) }
         for (t in texts) assertFalse(t, t.contains('\u2014') || t.contains('\u2013'))

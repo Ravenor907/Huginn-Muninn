@@ -124,10 +124,12 @@ object ProfileWire {
     /** What's said when a contact's own name changes here. */
     fun renamedText(old: String, new: String): String = "$old is now called $new."
 
-    fun defaultColour(key: String): String {
+    fun defaultColour(key: String): String = defaults[key] ?: run {
         val h = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
-        return PALETTE[(h[0].toInt() and 0xFF) % PALETTE.size]
+        PALETTE[(h[0].toInt() and 0xFF) % PALETTE.size].also { if (defaults.size < 2_000) defaults[key] = it }
     }
+    /** Worked out once per key: every avatar of someone who never picked a colour asks on each recomposition. */
+    private val defaults = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /** A receiver keeps the highest version per sender. */
     fun takes(have: Long, new: Long) = new > have
@@ -580,7 +582,10 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         if (Move.locked) return
         val mine = me
         if (mine.v == 0L) return
-        val plain = ProfileWire.msg(mine.v, if (mine.pic.isEmpty()) "" else java.util.Base64.getEncoder().encodeToString(mine.pic), mine.col, chat.chosenName())
+        // Made only once someone needs it: this runs every minute, and nearly always everyone has it already.
+        val plain by lazy(LazyThreadSafetyMode.NONE) {
+            ProfileWire.msg(mine.v, if (mine.pic.isEmpty()) "" else java.util.Base64.getEncoder().encodeToString(mine.pic), mine.col, chat.chosenName())
+        }
         val blocked = chat.blocked.value
         val now = System.currentTimeMillis()
         var changed = false

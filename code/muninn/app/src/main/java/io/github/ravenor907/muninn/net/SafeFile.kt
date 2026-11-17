@@ -78,15 +78,24 @@ object SafeFile {
         syncDir(dir)
     }
 
+    /**
+     * Set once a hard link was refused (Android 9 and up deny them to apps): every later copy is written at once,
+     * without asking again on each write. A copy is always as good as a link, only slower.
+     */
+    @Volatile internal var noLinks = false
+
     private fun keepCopy(file: File, bak: File) {
         val next = File(bak.path + TMP)
         next.delete()
-        try {
+        var linked = false
+        if (!noLinks) try {
             java.nio.file.Files.createLink(next.toPath(), file.toPath())
+            linked = true
         } catch (_: Exception) {
+            noLinks = true
             next.delete()
-            writeSynced(next, file.readBytes())
         }
+        if (!linked) writeSynced(next, file.readBytes())
         if (!next.renameTo(bak)) { next.delete(); throw IOException("couldn't keep the last copy of ${file.name}") }
     }
 

@@ -7,6 +7,8 @@ import io.github.ravenor907.muninn.net.Proto06.State
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.KeyPair
@@ -260,6 +262,10 @@ class Groups(
     val all: StateFlow<Map<String, Group>> = _groups.asStateFlow()
     private val _chats = MutableStateFlow<Map<String, List<GMsg>>>(emptyMap())
     val messages: StateFlow<Map<String, List<GMsg>>> = _chats.asStateFlow()
+
+    /** One group's messages only: it changes only when that group's do, so a message or receipt elsewhere doesn't redraw it. */
+    fun messagesOf(g: String): kotlinx.coroutines.flow.Flow<List<GMsg>> =
+        _chats.map { it[g] ?: emptyList() }.distinctUntilChanged { a, b -> a === b }
     private val _invites = MutableStateFlow<List<Invite>>(emptyList())
     val pending: StateFlow<List<Invite>> = _invites.asStateFlow()
     private val _unread = MutableStateFlow<Set<String>>(emptySet())
@@ -1334,9 +1340,12 @@ class Groups(
         val mine = last[s.g]
         if (mine != null && (mine.op == "join" || mine.op == "add") && s.by != me) {
             // A join or add I made, lost to another admin's change made at the same time (whatever its version): made
-            // again on top of it until it shows, unless someone took them out on purpose, or they're banned now.
+            // again on top of it until it shows, unless someone took them out on purpose, or they're banned now. 1.55: a
+            // remove or leave at the same version as mine was made without my change (it can't be about them): mine goes
+            // again on top of it, as before 1.54.
+            val onPurpose = (takeOp == "remove" || takeOp == "leave") && s.v != mine.v
             when {
-                s.has(mine.a) || takeOp == "remove" || takeOp == "leave" || bannedLocked(s.g, mine.a) || !s.isAdmin(me) || gone.isNotEmpty() -> last.remove(s.g)
+                s.has(mine.a) || onPurpose || bannedLocked(s.g, mine.a) || !s.isAdmin(me) || gone.isNotEmpty() -> last.remove(s.g)
                 else -> changeLocked(s.g, mine)?.let { why ->
                     last.remove(s.g)
                     // Can't be made again (full now): they get the state that left them out, so they aren't in a ghost copy.

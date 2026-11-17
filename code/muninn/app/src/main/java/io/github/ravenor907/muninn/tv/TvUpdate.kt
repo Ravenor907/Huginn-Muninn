@@ -27,8 +27,8 @@ import java.util.concurrent.TimeUnit
  * and signature checks), and installs it with a PackageInstaller session that asks for no tap. Android asks once on
  * the TV (the first update, while another app is Muninn's installer of record): the TV then shows "Ask a grown-up:
  * press OK to update". After Muninn has installed itself once, Android 12 and newer let later updates go in without
- * asking. Never during a call or while sound or video plays. 1.45: on a TV it looks about every 30 minutes, screen
- * on or off ([TvUpdateService]); on Android 11 and older a download waits for the screen to turn on. A failed try comes back after 5 min, 15 min, 1 h, 4 h, then every 12 h.
+ * asking. Never during a call, or while sound or video plays (on a TV: with its screen on). 1.45: on a TV it looks
+ * about every 30 minutes, screen on or off ([TvUpdateService]); on Android 11 and older a download waits for the screen to turn on. A failed try comes back after 5 min, 15 min, 1 h, 4 h, then every 12 h.
  * The parents' phones hear how it goes (cap u1, [TvUpd]): on start, every day, and at each step.
  */
 object TvUpdate {
@@ -57,6 +57,22 @@ object TvUpdate {
 
     @Volatile private var daily: java.util.concurrent.ScheduledFuture<*>? = null
     @Volatile private var follow: kotlinx.coroutines.Job? = null
+    /**
+     * 1.55: the update session Android left waiting for OK on the TV. The next try abandons it before it makes a new
+     * one: each session holds a copy of the update, and Android allows an app only 50 open ones, so a prompt nobody
+     * answered (every 30 minutes, for days) used to fill the TV and then stop every install until Muninn restarted.
+     */
+    @Volatile private var tapSession = -1
+    /** 1.55: the session committed last (-1: none, or it was abandoned): Android's answers for any other are an older try's. */
+    @Volatile private var committed = -1
+    /** 1.55: install sessions being written and committed now (the background check waits for them, [TvUpdateWorker]). */
+    private val writing = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Kids' mode started this ([start]), so [periodic] checks. */
+    val isStarted: Boolean get() = started
+
+    /** An install session is being written or committed now. */
+    val installing: Boolean get() = writing.get() > 0
 
     /** Kids' mode only, once: hooks the installer, checks a minute after start, then every day. */
     fun start(app: Muninn) {
@@ -94,18 +110,20 @@ object TvUpdate {
                 val p = prefs(app)
                 // k7 (7.12): a parent who turned automatic checks off turns them off here too; otherwise they stay on.
                 val auto = KidTv.state.value.cfg?.upd ?: true
-                if (auto && (first || now - p.getLong("lastDailyCheck", 0L) >= every(app)) && app.power.charging()) {
+                if (auto && (first || TvUpd.due(p.getLong("lastDailyCheck", 0L), now, every(app))) && app.power.charging()) {
                     p.edit().putLong("lastDailyCheck", now).apply()
                     checkNow(app)
                 }
                 // Android 11 and older: one held for the screen, and the screen is on now.
                 if (afterScreen != null && screenIsOn(app)) screenOn(app)
-                if (first || now - p.getLong("lastReport", 0L) >= DAY) {
+                if (first || TvUpd.due(p.getLong("lastReport", 0L), now, DAY)) {
                     p.edit().putLong("lastReport", now).apply()
                     report(app, null)
                 }
                 first = false
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {
+                // 1.55: never out of this runnable, not even an Error: one would cancel the schedule for good, silently.
+            }
         }, 60_000, 10 * 60_000L, TimeUnit.MILLISECONDS)
     }
 
@@ -118,7 +136,7 @@ object TvUpdate {
         if (KidTv.state.value.cfg?.upd == false) return
         val p = prefs(app)
         val now = System.currentTimeMillis()
-        if (now - p.getLong("lastDailyCheck", 0L) < CHECK_MS - 2 * 60_000L) return
+        if (!TvUpd.due(p.getLong("lastDailyCheck", 0L), now, CHECK_MS - 2 * 60_000L)) return
         if (app.updater.state.value.busy) return
         p.edit().putLong("lastDailyCheck", now).apply()
         checkNow(app)
@@ -226,13 +244,19 @@ object TvUpdate {
         // Round 17: a group call (voice room) too, or one ringing.
         io.github.ravenor907.muninn.net.call.RoomManager.busy || io.github.ravenor907.muninn.net.call.RoomManager.ring.value != null
 
-    /** 1.45: a call (Muninn's or another app's) or sound or video playing: the install waits. */
+    /**
+     * 1.45: a call (Muninn's or another app's) or sound or video playing: the install waits. 1.55: on a TV with the screen
+     * off only Muninn's own call does ([TvUpd.installWaits]).
+     */
     private fun busy(c: Context): Boolean {
         if (inCall()) return true
-        return try {
+        val tv = KidMode.isTv(c)
+        val (music, callMode) = try {
             val am = c.getSystemService(android.media.AudioManager::class.java)
-            am != null && (am.isMusicActive || am.mode == android.media.AudioManager.MODE_IN_CALL || am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION)
-        } catch (_: Exception) { false }
+            if (am == null) false to false
+            else am.isMusicActive to (am.mode == android.media.AudioManager.MODE_IN_CALL || am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION)
+        } catch (_: Exception) { false to false }
+        return TvUpd.installWaits(false, tv, !tv || screenIsOn(c), music, callMode)
     }
 
     fun canInstall(c: Context) = Build.VERSION.SDK_INT < 26 || c.packageManager.canRequestPackageInstalls()
@@ -250,10 +274,16 @@ object TvUpdate {
             if (first) timer.schedule(object : Runnable {
                 override fun run() {
                     val held = afterCall ?: return
-                    if (busy(c)) { timer.schedule(this, 30, TimeUnit.SECONDS); return }
-                    afterCall = null
-                    // Round 17 (TV minor 9): a file Android cleared meanwhile is said (no space), never dropped silently.
-                    install(c, held)
+                    try {
+                        if (busy(c)) { timer.schedule(this, 30, TimeUnit.SECONDS); return }
+                        afterCall = null
+                        // Round 17 (TV minor 9): a file Android cleared meanwhile is said (no space), never dropped silently.
+                        install(c, held)
+                    } catch (_: Throwable) {
+                        // 1.55: this wait ended: the next try starts its own (else every later one only swapped the file
+                        // held here, and the update never went in until Muninn restarted).
+                        afterCall = null
+                    }
                 }
             }, 30, TimeUnit.SECONDS)
             return
@@ -267,10 +297,19 @@ object TvUpdate {
             setRemote(c, TvUpd.FAILED, why = TvUpd.NO_SPACE)
             return
         }
+        writing.incrementAndGet()
         Thread {
             var id = -1
             val pi = c.packageManager.packageInstaller
             try {
+                // An earlier try still waiting for OK on the TV: abandoned, so its copy goes and this one takes its place.
+                // Android answers "aborted" for it: that answer is the old try's, never this one's ([TvUpd.staleResult]).
+                val old = tapSession
+                tapSession = -1
+                if (old >= 0) {
+                    if (committed == old) committed = -1
+                    try { pi.abandonSession(old) } catch (_: Exception) {}
+                }
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                     setAppPackageName(c.packageName)
                     // Muninn stays the installer of record, so every later update can skip the prompt.
@@ -286,6 +325,7 @@ object TvUpdate {
                     s.openWrite("Muninn.apk", 0, apk.length()).use { os -> apk.inputStream().use { it.copyTo(os) }; s.fsync(os) }
                     val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
                     val done = PendingIntent.getBroadcast(c, id, Intent(c, TvInstallResult::class.java).setAction(ACTION).setPackage(c.packageName), flags)
+                    committed = id
                     s.commit(done.intentSender)
                 }
                 post(c, State(status = "Installing the new Muninn…", code = "installing"))
@@ -297,6 +337,8 @@ object TvUpdate {
                 post(c, State(status = if (space) "There isn't enough space for the update. It tries again later."
                     else "The update couldn't be installed. It tries again later.", code = "failed"))
                 setRemote(c, TvUpd.FAILED, why = if (space) TvUpd.NO_SPACE else "Couldn't start the install")
+            } finally {
+                writing.decrementAndGet()
             }
         }.start()
     }
@@ -308,8 +350,13 @@ object TvUpdate {
     }
 
     fun onResult(c: Context, i: Intent) {
-        when (i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
+        val session = i.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
+        val status = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        // 1.55: an older try's answer (one abandoned for a newer one, or replaced since) leaves this try's prompt be.
+        if (TvUpd.staleResult(session, committed, status == PackageInstaller.STATUS_SUCCESS, status == PackageInstaller.STATUS_FAILURE_ABORTED)) return
+        when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                if (session >= 0) tapSession = session
                 @Suppress("DEPRECATION") val confirm = (if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                     else i.getParcelableExtra(Intent.EXTRA_INTENT)) ?: return
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -344,6 +391,8 @@ object TvUpdate {
         val i = state.value.confirm
         if (i == null) { if (state.value.needsParent) open(c, "install"); return }
         state.value = state.value.copy(confirm = null)
+        // Android's Install box is up for that session now: the next try leaves it be (Install there still works).
+        tapSession = -1
         try { c.startActivity(i) } catch (_: Exception) {}
     }
 

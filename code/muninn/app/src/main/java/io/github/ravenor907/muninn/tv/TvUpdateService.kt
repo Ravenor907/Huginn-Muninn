@@ -108,11 +108,28 @@ class TvUpdateWorker(context: Context, params: WorkerParameters) : Worker(contex
         val app = applicationContext as Muninn
         if (!TvUpdateService.wanted(app)) return Result.success()
         TvUpdateService.start(app)
+        // 1.55: all of it ends within [MAX_MS] of the start, whatever each wait takes: Android stops a background job at
+        // 10 minutes (and counts that against the app).
+        val end = System.currentTimeMillis() + MAX_MS
+        // 1.55: this work may be what started Muninn (the TV's firmware can refuse the service): kids' mode starts on its
+        // own thread once the stores are open, and a check asked before that would be dropped.
+        val ready = System.currentTimeMillis() + 60_000L
+        while (!TvUpdate.isStarted && System.currentTimeMillis() < ready && !isStopped) Thread.sleep(1_000)
         try { TvUpdate.periodic(app) } catch (_: Exception) {}
-        // The work keeps the device awake: wait for the download (at most 9 minutes) so it finishes with the screen off.
-        val end = System.currentTimeMillis() + 9 * 60_000L
+        // The work keeps the device awake: wait for the download and then for the install session to be written and
+        // committed, so all of it finishes with the screen off. 1.55: the install starts on the main thread right after
+        // the download, so it counts as done only when idle twice in a row.
         Thread.sleep(3_000)
-        while (System.currentTimeMillis() < end && app.updater.state.value.busy) Thread.sleep(2_000)
+        var idle = 0
+        while (System.currentTimeMillis() < end && idle < 2 && !isStopped) {
+            idle = if (app.updater.state.value.busy || TvUpdate.installing) 0 else idle + 1
+            if (idle < 2) Thread.sleep(2_000)
+        }
         return Result.success()
+    }
+
+    companion object {
+        /** The longest one check runs, from its start: well under Android's 10 minutes for a background job. */
+        const val MAX_MS = 8 * 60_000L
     }
 }

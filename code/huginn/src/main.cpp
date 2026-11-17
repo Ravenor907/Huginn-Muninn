@@ -578,8 +578,12 @@ int main(int argc, char *argv[])
         });
     }
     auto *gamepad = new Gamepad(&app);
-    // Handheld mode's last fact: a controller there from the start (a handheld's own).
-    system->noteControllerAtStart(gamepad->connected());
+    // Handheld mode's last fact: a controller there from the start (a handheld's own), once the controller is started
+    // (Gamepad::start, below).
+    const auto startPad = [gamepad, system] {
+        gamepad->start();
+        system->noteControllerAtStart(gamepad->connected());
+    };
     auto *transfer = new Transfer(settings, &app);
     auto *localSend = new LocalSend(settings, &app);
     // Bluetooth first: Qt decides how to reach BlueZ the first time anything asks (see Ble).
@@ -1265,7 +1269,15 @@ int main(int argc, char *argv[])
     // The lock is off: Chat opens now, with everything above listening.
     vault->openWithoutLock();
     Platform::startStep(QStringLiteral("loading the main screen"));
+#ifdef Q_OS_WIN
+    startPad();
+#endif
     engine.loadFromModule("Huginn", "Main");
+#ifndef Q_OS_WIN
+    // Linux: SDL started looking for controllers beside everything above and the main screen being made; they are
+    // read from here, before the first frame. Only a change (a controller, so Handheld mode) is told to the screen.
+    startPad();
+#endif
     if (!engine.rootObjects().isEmpty()) {
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
         Platform::watchMainWindow(window);
@@ -1298,6 +1310,14 @@ int main(int argc, char *argv[])
     if (wifiSelf)
         WifiSelfTest::start(chat, localSend, sound->chime());
     QObject::connect(updater, &Updater::aboutToRestart, chat, &Chat::flushSaves);
+    // A call or voice room still going as Huginn closes (Close anyway, Restart now, logout's stop signal) ends here,
+    // while Chat, the vault and the call's signal hooks are all still there, and goes in the call history. Left to the
+    // call's own objects as they go, it ended after those were gone (they are made, and so let go of, first) and
+    // Huginn crashed on the way out.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, calls, [calls, rooms] {
+        rooms->leave();
+        calls->hangup();
+    });
     // A longer video still being kept or saved stops first (waited for, about 2 s), then everything is saved.
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::stopBigThreads);
     // Dictation's microphone closes and its recognizer is let go of on its own thread (about 2 s at most).

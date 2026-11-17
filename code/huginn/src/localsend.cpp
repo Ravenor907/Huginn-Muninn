@@ -280,6 +280,12 @@ QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected,
 
 void LocalSend::checkPeer(QNetworkReply *r, const QString &expected)
 {
+    // Every answer here is a little JSON. One that goes on and on (a device nearby that never stops sending) is cut
+    // off, never held in memory until it runs out: the transfer timeout only counts silence.
+    connect(r, &QNetworkReply::readyRead, this, [r] {
+        if (r->bytesAvailable() > 1024 * 1024)
+            r->abort();
+    });
     // Runs right after the handshake, before anything is sent: Qt documents aborting here as the
     // way to refuse a peer. The fingerprint seen is kept for scans, which have nothing to expect yet.
     connect(r, &QNetworkReply::encrypted, this, [r, expected] {
@@ -852,10 +858,31 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     d.chatName = o.value(QStringLiteral("chatName")).toString();
     d.app = o.value(QStringLiteral("chatApp")).toString();
     d.seen = QDateTime::currentDateTime();
+    // A home network has a handful of devices. Anyone on it can register over plain HTTP, as often as they like, with
+    // a new made-up fingerprint each time: the list never grows past this, and its names stay short. The device seen
+    // longest ago goes first, one that proved its chat key only when nothing else is left.
+    d.alias = d.alias.left(100);
+    d.model = d.model.left(100);
+    d.type = d.type.left(40);
+    d.chatName = d.chatName.left(100);
+    d.app = d.app.left(100);
+    // Heard again with nothing new (each device's announcement every minute, and askContacts): only the time it was seen
+    // moves, and nobody is told (each change works out every chat list and the open chat again).
+    const bool same = old != m_devices.constEnd() && old->alias == d.alias && old->model == d.model && old->type == d.type
+                      && old->ip == d.ip && old->port == d.port && old->protocol == d.protocol && old->chatKey == d.chatKey
+                      && old->chatName == d.chatName && old->app == d.app && old->proven == d.proven;
+    if (!m_devices.contains(id) && m_devices.size() >= 200) {
+        auto drop = m_devices.end();
+        for (auto it = m_devices.begin(); it != m_devices.end(); ++it)
+            if (drop == m_devices.end() || (drop->proven && !it->proven) || (drop->proven == it->proven && it->seen < drop->seen))
+                drop = it;
+        m_devices.erase(drop);
+    }
     m_devices.insert(id, d);
     if (d.proven)
         keepPeer(d.chatKey, d);   // only a route its chat key proved is asked again with Nearby off
-    Q_EMIT devicesChanged();
+    if (!same)
+        Q_EMIT devicesChanged();
 }
 
 QVariantList LocalSend::devices() const
@@ -1004,7 +1031,8 @@ void LocalSend::onData(QTcpSocket *s)
         // Never past the length the upload was accepted with: anything after it is not part of the file.
         if (chunk.size() > c.bodyLeft)
             chunk.truncate(qsizetype(qMax<qint64>(0, c.bodyLeft)));
-        c.file->write(chunk);
+        if (c.file->write(chunk) != chunk.size())
+            c.writeFailed = true;   // a full disk: the file is refused once it has all come (onBody)
         if (c.hash)
             c.hash->addData(chunk);
         c.bodyLeft -= chunk.size();
@@ -1077,10 +1105,13 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
     const QString path = c.path;
 
     if (c.file) {
+        // Every byte must have reached the disk: a file cut short (the disk filled up) is never kept as arrived, also
+        // when the sender gave no SHA-256 to check it by.
+        const bool written = !c.writeFailed && c.file->flush();
         c.file->close();
         auto f = m_session.files.find(c.fileId);
-        const bool shaOk = !c.hash || f == m_session.files.end() || f->sha.isEmpty()
-                           || QString::fromLatin1(c.hash->result().toHex()) == f->sha.toLower();
+        const bool shaOk = written && (!c.hash || f == m_session.files.end() || f->sha.isEmpty()
+                                       || QString::fromLatin1(c.hash->result().toHex()) == f->sha.toLower());
         delete c.file;
         c.file = nullptr;
         delete c.hash;

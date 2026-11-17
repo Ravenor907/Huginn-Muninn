@@ -22,16 +22,29 @@ class NearbyService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.getBooleanExtra(EXTRA_ON, false) != true) {
-            stopSelf()
+        // 1.55: always foreground first, even to stop at once: a service started with startForegroundService that stops
+        // before it went foreground closes Muninn (a transfer that failed right away used to do that).
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.channel_transfer), NotificationManager.IMPORTANCE_LOW))
+        } catch (_: Exception) {}
+        val n = build(this, "Transferring files", -1)
+        var foreground = false
+        try {
+            if (Build.VERSION.SDK_INT >= 29) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            else startForeground(ID, n)
+            foreground = true
+        } catch (_: Exception) {
+            // Android said no (from the background, or Android 15's 6 hours a day are used up): the transfer goes on
+            // while Muninn is open, as it did before this service. Android must still see startForeground once.
+            try { startForeground(ID, n); foreground = true } catch (_: Exception) {}
+        }
+        starting = false
+        if (!foreground || !wanted || intent?.getBooleanExtra(EXTRA_ON, false) != true) {
+            stopNow()
             return START_NOT_STICKY
         }
-        val nm = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.channel_transfer), NotificationManager.IMPORTANCE_LOW))
-        val n = build(this, "Transferring files", -1)
         running = true
-        if (Build.VERSION.SDK_INT >= 29) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        else startForeground(ID, n)
         // Awake for about 10 minutes at a time, renewed while the transfer moves: a stalled one lets the phone sleep.
         if (wake == null) wake = (getSystemService(Context.POWER_SERVICE) as PowerManager).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Muninn:transfer")
             .apply { setReferenceCounted(false) }
@@ -72,6 +85,10 @@ class NearbyService : Service() {
         private const val ID = 7
         @Volatile private var running = false
         @Volatile private var notedAt = 0L
+        /** 1.55: a transfer wants the service (the last [hold] said on). */
+        @Volatile private var wanted = false
+        /** 1.55: a foreground start is on its way and hasn't gone foreground yet: a stop now would close Muninn. */
+        @Volatile private var starting = false
 
         /** The ongoing notification: [text] ("Sending game.apk") and a bar at [percent] (below 0: none). */
         private fun build(c: Context, text: String, percent: Int) = NotificationCompat.Builder(c, CHANNEL).setSmallIcon(R.drawable.ic_notify)
@@ -99,12 +116,19 @@ class NearbyService : Service() {
             try { w.acquire(AWAKE_MS) } catch (_: Exception) {}
         }
 
+        /**
+         * 1.55: a transfer that ends right after it started (refused, no route) must not stop the service before it went
+         * foreground: the start on its way sees [wanted] off and stops by itself.
+         */
         fun hold(context: Context, on: Boolean) {
+            wanted = on
             try {
                 val i = Intent(context, NearbyService::class.java).putExtra(EXTRA_ON, on)
-                if (on) ContextCompat.startForegroundService(context, i) else context.stopService(i)
+                if (on) { starting = true; ContextCompat.startForegroundService(context, i) }
+                else if (!starting) context.stopService(i)
             } catch (_: Exception) {
                 // Android may refuse from the background; the transfer still runs while Muninn is open.
+                if (on) starting = false
             }
         }
     }

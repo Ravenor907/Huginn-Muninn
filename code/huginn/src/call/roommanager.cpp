@@ -62,9 +62,17 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
     connect(&m_beat, &QTimer::timeout, this, &RoomManager::heartbeat);
     m_ticker.setInterval(1000);
     connect(&m_ticker, &QTimer::timeout, this, &RoomManager::tick);
+    connect(this, &RoomManager::tick, this, &RoomManager::statusTextChanged);
+    connect(this, &RoomManager::changed, this, &RoomManager::statusTextChanged);
     // Presence ages out (25 minutes without news, or 20 s and 60 s for an app that sends heartbeats): look again often.
+    // Outside a room, only when someone's presence actually aged: every list of who's in a room (a group's rooms and
+    // members) is worked out again on each change.
     m_presenceTick.setInterval(5000);
     connect(&m_presenceTick, &QTimer::timeout, this, [this] {
+        QStringList shown = m_presence.shown(now());
+        if (!inRoom() && shown == m_presenceShown)
+            return;
+        m_presenceShown = std::move(shown);
         ++m_serial;
         Q_EMIT presenceChanged();
     });

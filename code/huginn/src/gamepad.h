@@ -8,6 +8,7 @@
 #include <QTimer>
 
 #include <cmath>
+#include <future>
 
 struct _SDL_GameController;
 class QQuickWindow;
@@ -59,6 +60,9 @@ class Gamepad : public QObject
 public:
     explicit Gamepad(QObject *parent = nullptr);
     ~Gamepad() override;
+    // Reads the controllers from here on, once SDL is ready (Linux: it starts beside the rest of the start, see the
+    // constructor). Called once by main before the first frame; connected() is false until then.
+    void start();
 
     // Any controller at all: every one plugged in is read, so a docked pad works beside the built-in one.
     bool connected() const { return !m_pads.isEmpty(); }
@@ -124,6 +128,7 @@ private:
     QTimer m_poll;
     QTimer m_repeat;
     QHash<qint32, Pad> m_pads;
+    std::future<QString> m_init;   // SDL starting: empty when it worked, else what went wrong
     bool m_sdlReady = false;
     QString m_style = QStringLiteral("xbox");
     QString m_repeatButton;

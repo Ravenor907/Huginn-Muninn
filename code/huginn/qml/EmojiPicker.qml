@@ -88,7 +88,7 @@ Rectangle {
         cellWidth: Theme.px(38)
         cellHeight: Theme.px(38)
         clip: true
-        model: picker.all
+        model: picker.visible ? picker.all : []
         boundsBehavior: Flickable.StopAtBounds
         delegate: Rectangle {
             readonly property bool on: picker.pad && picker.cur === picker.quickCount + index

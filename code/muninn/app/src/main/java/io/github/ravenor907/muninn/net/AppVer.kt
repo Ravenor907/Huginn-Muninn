@@ -54,6 +54,18 @@ object AppVer {
         return p.version.isNotEmpty() && Versions.compare(p.version, min) >= 0
     }
 
+    /**
+     * 1.55: their app says a file is done only once it's checked and saved: true for Muninn 1.54 and newer, false for
+     * Huginn and an older Muninn (they say it the moment the last piece is in), null while it isn't known (no version
+     * heard from them yet, or someone only in a group: their version is kept for contacts only).
+     */
+    fun doneAfterSave(theirs: String): Boolean? {
+        val p = parse(theirs) ?: return null
+        if (p.app == "Huginn") return false
+        if (p.version.isEmpty()) return null
+        return Versions.compare(p.version, "1.54") >= 0
+    }
+
     fun askText(theirs: String): String {
         val app = parse(theirs)?.app ?: "Muninn"
         return "Could you update $app? You're on an older version."

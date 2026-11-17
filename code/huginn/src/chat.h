@@ -665,6 +665,10 @@ private:
     QString sendBlob(const QString &key, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap());
     bool sendGifTo(const QString &key, const QByteArray &gif);   // cap a1: a cleaned GIF to a contact or "g:<group>:<channel>"
     bool bigIncoming() const;                                      // three GIFs over 3.2 MB already coming in
+    // Room for one more photo, GIF, voice or video message coming in pieces (m_incoming): kIncomingMax in all, of
+    // them at most kIncomingStrangers from people who aren't contacts.
+    bool incomingRoom(bool stranger) const;
+    static constexpr int kIncomingMax = 40, kIncomingStrangers = 4;
     bool groupGif(const QString &g, const QString &id) const;      // a group message of mine that is a GIF
     int groupVideoMs(const QString &g, const QString &id) const;   // a group message of mine that is a video: its length
     // Cap v3: one member as a picked video's sender sees them now, and everyone it would go to.
@@ -1063,7 +1067,8 @@ public:
     static bool relaysDue(qint64 heldAt, qint64 &publishedAt, qint64 now);
 private:
     QHash<QString, Tries> m_tries;
-    struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; QString file; };
+    // stranger: from someone who isn't a contact (met close by), on a 1:1 route.
+    struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; QString file; bool stranger = false; };
     QVariantMap m_uploads;
     void uploaded(const QString &id, double fraction);
     QHash<QString, Incoming> m_incoming;

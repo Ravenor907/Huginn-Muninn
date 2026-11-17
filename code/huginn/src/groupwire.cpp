@@ -404,6 +404,9 @@ QString GroupWire::checkState(const QJsonObject &s)
     if (!s.value(QStringLiteral("channels")).isArray())
         return QStringLiteral("channels");
     const QJsonArray channels = s.value(QStringLiteral("channels")).toArray();
+    // Counted first: the duplicate check below is quadratic, and a state can hold tens of thousands of them.
+    if (channels.size() > kMaxChannels)
+        return QStringLiteral("channels");
     QStringList ids;
     for (int i = 0; i < int(channels.size()); ++i) {
         if (!channels.at(i).isObject())

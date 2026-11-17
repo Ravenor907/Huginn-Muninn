@@ -49,7 +49,11 @@ class MessageService : Service() {
             // Android must see startForeground after startForegroundService, or it closes the app.
             try { startForeground(ID, n) } catch (_: Exception) {}
             try { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
-            stopSelf(); return START_NOT_STICKY
+            stopSelf()
+            // 1.55: Android (or the TV's own firmware) said no: a TV still listens for as long as Muninn runs, as it does
+            // while open, so a Kids' TV started in the background still gets messages, calls and Update now.
+            if (app.identity.stayConnected && tv(this)) try { app.listen() } catch (_: Exception) {}
+            return START_NOT_STICKY
         }
         if (!app.identity.stayConnected) { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY }
         running = true
@@ -68,9 +72,16 @@ class MessageService : Service() {
             val app = context.applicationContext as Muninn
             if (!app.identity.stayConnected) return
             // Quiet hours using a scheduled check: it takes over until "Right away" is back (Power starts it then).
-            if (app.power.effective() != PowerLogic.Check.LIVE && !app.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)) return
-            try { ContextCompat.startForegroundService(context, Intent(context, MessageService::class.java)) } catch (_: Exception) {}
+            if (app.power.effective() != PowerLogic.Check.LIVE && !tv(app)) return
+            try { ContextCompat.startForegroundService(context, Intent(context, MessageService::class.java)) }
+            catch (_: Exception) {
+                // 1.55: refused from the background (Android 12 and newer, some TVs' firmware): a TV listens anyway for as
+                // long as Muninn runs, as it does while open (a phone has its scheduled inbox check for this).
+                if (tv(app)) try { app.listen() } catch (_: Exception) {}
+            }
         }
+
+        private fun tv(c: Context) = try { c.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK) } catch (_: Exception) { false }
 
         /** The quiet "Waiting for new messages" channel, made before anything posts to it (this service, the inbox check). */
         fun ensureChannel(context: Context) {

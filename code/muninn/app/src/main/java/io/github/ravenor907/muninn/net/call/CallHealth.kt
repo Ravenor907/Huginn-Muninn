@@ -60,7 +60,7 @@ class CallHealth {
         if (secs < 8) return null
         val p = problems(secs)
         if (p.isEmpty() && !always) return null
-        val text = "TV call sound check (sent by Muninn): ${secs}s connected. " +
+        val text = "$PREFIX${secs}s connected. " +
             (if (p.isEmpty()) "Looks fine." else "Problem: ${p.joinToString(", ")}.") + "\n" +
             "Out: mic frames ${micFrames.get()}, sound ${micReal.get()}, zeros ${micZero.get()}${if (zerosSeen) " (zero run seen)" else ""}, " +
             "sent ${sent.get()}.\n" +
@@ -74,6 +74,8 @@ class CallHealth {
     }
 
     companion object {
+        /** How the note starts: the kids' own screen leaves these out (they're for the parents). */
+        const val PREFIX = "TV call sound check (sent by Muninn): "
         /** Well under a private message's 2000 characters. */
         const val MAX_CHARS = 1500
 

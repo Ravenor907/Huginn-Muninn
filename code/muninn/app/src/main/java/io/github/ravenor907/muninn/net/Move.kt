@@ -204,8 +204,11 @@ object Move {
                     .put("m", MoveWire.statusMac(k, st, h)).toString()
             }
             "link" -> {
-                // Only right after the move (10 minutes), and only once the person says yes to "Link [name]?".
-                if (s.optString("state") != "done" || System.currentTimeMillis() - s.optLong("at") > LINK_MS) { put(a, "in", null); _incoming.value = null; return 403 to "{}" }
+                // Only right after the move (10 minutes), and only once the person says yes to "Link [name]?". 1.55: asked
+                // before the move is done (anyone on this network can ask, nothing here is checked yet): refused, and the
+                // move going on is left as it is.
+                if (s.optString("state") != "done") return 409 to "{}"
+                if (System.currentTimeMillis() - s.optLong("at") > LINK_MS) { put(a, "in", null); _incoming.value = null; return 403 to "{}" }
                 val k = s.optString("k").ifEmpty { return 403 to "{}" }.let { ChatCrypto.b64d(it) }
                 val code = MoveWire.open(k, p.optString("d"), MoveWire.LINK_AAD)?.let { String(it) } ?: return 403 to "{}"
                 linkCode = code
@@ -392,7 +395,10 @@ object Move {
                 "failed" -> { abort(a, "${o.optString("to")} couldn't take everything in, so moving stopped. This device is yours again."); return }
                 "need" -> {
                     val m = st.optJSONArray("missing")
-                    val want = if (m == null || m.length() == 0) (0 until n).toList() else (0 until m.length()).map { m.getInt(it) }
+                    // 1.55: only part numbers this move has (the list isn't covered by the status's signature): anything else
+                    // used to throw on this thread and close Muninn mid-move.
+                    val want = if (m == null || m.length() == 0) (0 until n).toList()
+                        else (0 until m.length()).mapNotNull { (m.opt(it) as? Number)?.toLong()?.takeIf { i -> i in 0 until n }?.toInt() }.distinct().ifEmpty { (0 until n).toList() }
                     for (i in want) {
                         if (stop) return
                         val part = part(i) ?: run { abort(a, "This device couldn't read what it packed, so moving stopped. This device is yours again."); return }

@@ -461,6 +461,7 @@ Item {
         Accessible.name: field.placeholder
         TextInput {
             id: input
+            activeFocusOnTab: true   // Tab and Shift+Tab move between boxes, as in every other text box
             anchors.fill: parent; anchors.leftMargin: Theme.px(10); anchors.rightMargin: Theme.px(10)
             verticalAlignment: TextInput.AlignVCenter
             echoMode: TextInput.Password

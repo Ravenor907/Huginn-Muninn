@@ -285,7 +285,13 @@ internal fun videoFrame(bytes: ByteArray?): ImageBitmap? {
 /** A video message in a bubble: its first frame with a play mark and its length. Tap plays it. */
 @Composable
 internal fun VideoThumb(m: Chat.Msg, bytes: () -> ByteArray?) {
-    val frame by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { videoFrame(bytes()) } }
+    // Kept decoded (PhotoCache) by the stored file's size: scrolling back to a video doesn't decrypt the whole clip and
+    // look for its first frame again.
+    val ctx = LocalContext.current
+    val frame by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) {
+        val stored = (ctx.applicationContext as? io.github.ravenor907.muninn.Muninn)?.chat?.photoSize(m.photo) ?: 0L
+        if (stored > 0L) io.github.ravenor907.muninn.ui.PhotoCache.get(ctx, "${m.id}:frame:$stored") { videoFrame(bytes()) } else videoFrame(bytes())
+    } }
     // Round 17: shaped like the clip (a sideways one isn't cropped to its middle).
     val box = io.github.ravenor907.muninn.net.Videos.bubble(frame?.width ?: 0, frame?.height ?: 0)
     Box(Modifier.size(box.first.dp, box.second.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Color.Black), contentAlignment = Alignment.Center) {

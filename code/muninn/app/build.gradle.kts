@@ -58,6 +58,13 @@ android {
         targetSdk = 36
         versionCode = versionNumber
         versionName = betaLabel ?: versionText
+        // A test copy beside the real app (-PqaSuffix=.qa): its own id, data and name, so testing on a family device
+        // never touches the real Muninn there.
+        (project.findProperty("qaSuffix") as String?)?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            if (!Regex("""^\.[a-z][a-z0-9]*$""").matches(it)) error("qaSuffix must look like .qa, not \"$it\"")
+            applicationIdSuffix = it
+            resValue("string", "app_name", "Muninn QA")
+        }
         // Native code (libopus, the Kids' TV voice library) is built for phones, tablets and TVs (ARM). The debug
         // build adds x86_64 for emulators; -PciAbi=x86_64 builds only that one, for a fast test build.
         externalNativeBuild { cmake { arguments += listOf("-DOPUS_SRC=${opusSrc.absolutePath}", "-DANDROID_STL=c++_static",

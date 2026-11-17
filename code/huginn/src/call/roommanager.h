@@ -47,7 +47,7 @@ class RoomManager : public QObject
     // Push to talk (Settings): the microphone only sends while the key is held. talking: held now.
     Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY changed)
     Q_PROPERTY(bool talking READ talking NOTIFY changed)
-    Q_PROPERTY(QString statusText READ statusText NOTIFY changed)
+    Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(int elapsed READ elapsed NOTIFY tick)
     Q_PROPERTY(QString outputName READ outputName NOTIFY changed)
     Q_PROPERTY(QString note READ note NOTIFY changed)
@@ -174,6 +174,8 @@ public:
 Q_SIGNALS:
     void changed();
     void tick();
+    // The status line ("Connected · 1:05"): on any change and every second, so the time keeps counting in a quiet call.
+    void statusTextChanged();
     void presenceChanged();
     void incoming(const QString &name, const QString &group);
     void finished(const QString &text);   // for a toast
@@ -224,6 +226,7 @@ private:
     QSet<QString> m_rung, m_declined;
     RoomWire::Presence m_presence;
     int m_serial = 0;
+    QStringList m_presenceShown;   // m_presence.shown() at the last 5-second look
     AudioIO *m_audio = nullptr;
     AudioDsp::Speaking m_mySpeaking;
     // Voice activity, and the level shown in Settings.

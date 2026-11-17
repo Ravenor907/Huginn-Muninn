@@ -41,6 +41,10 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     @Volatile var keepAlive = false
     private val timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
     private val retries = ConcurrentHashMap<String, Int>()
+    /** Per relay: not opened again before this (elapsed ms) after it failed, not even by the keepalive check ([openLater]). */
+    private val nextTry = ConcurrentHashMap<String, Long>()
+    /** Per relay: which [openLater] wait may open it (the newest); an older one does nothing. */
+    private val retryTurn = ConcurrentHashMap<String, Int>()
     /** How many relays stay open (null: all, 0: none; see PowerLogic), and how often they're checked. */
     @Volatile private var keep: Int? = null
     @Volatile private var pingMs = PowerLogic.FAST_PING_MS
@@ -70,8 +74,19 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val askedAt = ConcurrentHashMap<String, Long>()
     /** Per relay: when it last finished sending what it held (EOSE, seconds), so a new connection asks only for what's newer. */
     private val eoseAt = ConcurrentHashMap<String, Long>()
-    /** Round 14: each relay's clock less this device's (s), from the Date of its last connection. */
-    private val relayOffsetS = ConcurrentHashMap<String, Long>()
+    /**
+     * Round 14: each relay's clock, from the Date of its last connection. 1.55: kept as its time less this device's time
+     * since start (ms, [NetLogic.offsetNow]), not less this device's clock: a clock set right meanwhile (by hand, as the
+     * warning asks, or by the network time) no longer stamps every event hours off until the relay connects again.
+     */
+    private val relayClock = ConcurrentHashMap<String, Long>()
+    /** Each relay's clock less this device's (s), now. */
+    private fun relayOffsetS(url: String): Long? =
+        relayClock[url]?.let { NetLogic.offsetNow(it, android.os.SystemClock.elapsedRealtime(), System.currentTimeMillis()) }
+    private fun relayOffsets(): List<Long> {
+        val up = android.os.SystemClock.elapsedRealtime(); val now = System.currentTimeMillis()
+        return relayClock.values.map { NetLogic.offsetNow(it, up, now) }
+    }
     /** Relays whose inbox request finished at least once on the socket open now. */
     private val subscribed = ConcurrentHashMap<String, Boolean>()
     /**
@@ -84,9 +99,14 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val relayPings = ConcurrentHashMap<String, Int>()
     private val relayMs = ConcurrentHashMap<String, Long>()
     private val liveSince = ConcurrentHashMap<String, Long>()
-    /** The seen list and the cursors, in their own small file, written at most every [SAVE_EVERY_S] seconds. */
+    /**
+     * The seen list and the cursors, in their own small file, written at most every [SAVE_EVERY_S] seconds, and only when
+     * something worth it changed (a newly seen event, or a cursor that moved [NetLogic.CURSOR_SAVE_S]).
+     */
     private val stateFile = java.io.File(context.filesDir, "nostr-state.json")
     private val saving = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** The cursors as last written to [stateFile]. */
+    private val savedEose = ConcurrentHashMap<String, Long>()
 
     /** What [onEnvelope] did with an envelope. */
     enum class Took {
@@ -205,7 +225,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     val connected: StateFlow<Int> = _connected.asStateFlow()
 
     val relays: List<String>
-        get() = prefs.getString("relays", null)?.split('\n')?.filter { it.startsWith("wss://") } ?: DEFAULT_RELAYS
+        get() = relaysFrom(prefs.getString("relays", null))
 
     /** This phone's Nostr secret (in the vault); null while Muninn is locked. */
     private val secret: ByteArray? get() = secretHex()?.let { Schnorr.unhex(it) }
@@ -252,12 +272,14 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         UltraPrivacy.onReadyAgain { try { reconnectNow() } catch (_: Exception) {} }
         try {
             if (stateFile.exists()) {
-                val o = (SafeFile.read(stateFile) { b -> SafeJson.obj(String(b)) } as? SafeFile.Read.Ok)?.value ?: JSONObject()
-                o.optJSONArray("seen")?.let { a -> for (i in 0 until a.length()) seen.add(a.getString(i)) }   // full ids (before 1.54) or 16 characters
-                // The read positions are for one mailbox ("pub"): kept for another one (a restore came after), they're left out.
-                val box = o.optString("pub")
-                if (box.isEmpty() || box == prefs.getString("nostrPub", null))
-                    o.optJSONObject("eose")?.let { e -> e.keys().forEach { eoseAt[it] = e.optLong(it) } }
+                // Read here, on the main thread while Muninn starts: up to 20000 ids, so without a JSON value for each (readState).
+                (SafeFile.read(stateFile) { b -> readState(b) } as? SafeFile.Read.Ok)?.value?.let { st ->
+                    seen.addKeys(st.seen, st.count)   // full ids (before 1.54) or 16 characters
+                    // The read positions are for one mailbox ("pub"): kept for another one (a restore came after), they're left out.
+                    if (st.pub.isEmpty() || st.pub == prefs.getString("nostrPub", null))
+                        st.eose?.let { e -> e.keys().forEach { eoseAt[it] = e.optLong(it) } }
+                }
+                savedEose.putAll(eoseAt)
             } else {
                 // No state file: take the seen list from the settings ("nostrSeen") and clear it there.
                 prefs.getString("nostrSeen", "")!!.split(',').filter { it.isNotEmpty() }.forEach { seen.add(it) }
@@ -274,11 +296,10 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             saving.set(false)
             if (stateDropped) return@Runnable
             try {
-                val o = JSONObject()
-                o.put("seen", JSONArray(seen.toList()))
-                o.put("eose", JSONObject(HashMap<String, Long>(eoseAt) as Map<*, *>))
-                prefs.getString("nostrPub", null)?.let { o.put("pub", it) }
-                SafeFile.write(stateFile, o.toString().toByteArray())
+                val eose = HashMap<String, Long>(eoseAt)
+                SafeFile.write(stateFile, stateJson(seen, eose, prefs.getString("nostrPub", null)))
+                savedEose.keys.retainAll(eose.keys)
+                savedEose.putAll(eose)
             } catch (_: Exception) {}
         }, SAVE_EVERY_S, TimeUnit.SECONDS)
     }
@@ -295,7 +316,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     }
 
     private fun health(all: List<String>) = all.associateWith {
-        PowerLogic.Health(retries[it] ?: 0, connectMs[it], live[it] == true, NetLogic.perHour(relayPings[it] ?: 0, relayMs[it] ?: 0L))
+        PowerLogic.Health(retries[it] ?: 0, connectMs[it], live[it] == true, NetLogic.perHour(relayPings[it] ?: 0, relayMs[it] ?: 0L), it in NEWER_RELAYS)
     }
 
     fun connect() { for (url in targets()) open(url); tick() }
@@ -433,7 +454,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         var asked = false
         for (url in targets()) {
             val ws = sockets[url]
-            if (ws == null) { if (online()) open(url); continue }
+            // A relay waiting out its back-off isn't dialled early: one that's down would cost a new connection every check.
+            if (ws == null) { if (now >= (nextTry[url] ?: 0L) && online()) open(url); continue }
             if (live[url] != true) continue
             val before = askedAt[url] ?: 0L
             val heard = heardAt[url] ?: 0L
@@ -517,6 +539,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         _connected.value = 0
         synchronized(senders) { for (s in senders.values) s.ws?.cancel(); senders.clear() }
         retries.clear()
+        nextTry.clear()
         streak.set(0)
         if (keepAlive) connect()
         for (url in bursting) open(url)
@@ -530,6 +553,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         for (url in targets()) if (live[url] != true) {
             synchronized(sockets) { sockets.remove(url)?.let { ended(url, it); it.cancel() } }
             retries.remove(url)
+            nextTry.remove(url)
             open(url)
         }
         // Sockets that look open may have died with the old network: ask now (a socket that doesn't answer
@@ -635,11 +659,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 // Round 17: one reading per relay; the device's time follows what several agree on.
                 io.github.ravenor907.muninn.tv.KidTv.heardTime(d.time, "relay:$url")
                 // Round 14: this relay's clock against ours, so its EOSE cursor is kept in its own time.
-                relayOffsetS[url] = d.time / 1000 - System.currentTimeMillis() / 1000
+                relayClock[url] = d.time - android.os.SystemClock.elapsedRealtime()
                 // 1.54: this device's clock is far from what the relays agree on: say so (sending is corrected meanwhile).
-                if (kotlin.math.abs(NetLogic.clockOffset(relayOffsetS.values)) >= NetLogic.CLOCK_WARN_S && relayOffsetS.size >= 2) clockOff()
+                if (kotlin.math.abs(NetLogic.clockOffset(relayOffsets())) >= NetLogic.CLOCK_WARN_S && relayClock.size >= 2) clockOff()
             } } catch (_: Exception) {}
             connectMs[url] = now - (openedAt[url] ?: now)
+            nextTry.remove(url)
             heardAt[url] = now
             spread.reached(url)
             live[url] = true
@@ -690,8 +715,11 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                     // next time ask only for what's newer. Not while something had to stay on the relays (locked, with the
                     // locked store full): it must come again after unlocking. Nor while older pages are still coming.
                     if (sockets[url] === webSocket && NetLogic.cursorMoves(url, subscribed[url] == true, refused, paging.paging(url))) {
-                        eoseAt[url] = NetLogic.cursor(System.currentTimeMillis() / 1000, relayOffsetS[url])
-                        saveSoon()
+                        val at = NetLogic.cursor(System.currentTimeMillis() / 1000, relayOffsetS(url))
+                        eoseAt[url] = at
+                        // Every keepalive answer moves it a little: written with the next change that matters, or once it
+                        // moved far enough, not every half minute all day.
+                        if (NetLogic.cursorWorthSaving(savedEose[url], at)) saveSoon()
                     }
                 }
                 // The relay ended the inbox request (it may ask to sign in first): what's newer isn't known to be read.
@@ -736,10 +764,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             _connected.value = live.size
             ended(url, webSocket)
             if (!keepAlive || url !in targets()) return
-            // Try again: 2 s, 4 s, 8 s ... up to a minute between tries.
+            // Try again: 2 s, 4 s, 8 s ... up to a minute between tries; longer for one that keeps failing while others are open.
             val n = (retries[url] ?: 0) + 1
             retries[url] = n
-            val s = streak.incrementAndGet()
+            // One relay failing while others are open isn't a bad signal: it doesn't slow the others' reconnects down.
+            val othersLive = live.keys.any { it != url }
+            val s = if (othersLive) streak.get() else streak.incrementAndGet()
             counted(RECONNECT)
             // No network at all: nothing to try. Muninn connects again as soon as one is back (reconnectNow).
             if (!online()) return
@@ -752,14 +782,19 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 for (u in now) if (u != url) openLater(u, wait)
                 if (url !in now) return
             }
-            openLater(url, NetLogic.reconnectMs(n, s))
+            openLater(url, NetLogic.reconnectMs(n, s, othersLive))
         }
     }
 
-    /** Opens [url] after [ms] (at once for 0), if it's still wanted then. */
+    /**
+     * Opens [url] after [ms] (at once for 0), if it's still wanted then. The keepalive check doesn't open it sooner, and
+     * only the newest wait opens it: one set before an early reopen (a network change) that failed again does nothing.
+     */
     private fun openLater(url: String, ms: Long) {
-        if (ms <= 0L) { open(url); return }
-        timer.schedule({ if (keepAlive && url in targets() && online()) open(url) }, ms, TimeUnit.MILLISECONDS)
+        if (ms <= 0L) { nextTry.remove(url); open(url); return }
+        nextTry[url] = android.os.SystemClock.elapsedRealtime() + ms
+        val turn = retryTurn.merge(url, 1, Int::plus)
+        timer.schedule({ if (keepAlive && retryTurn[url] == turn && url in targets() && online()) open(url) }, ms, TimeUnit.MILLISECONDS)
     }
 
     /** Some network is there (Wi-Fi, mobile data, Ethernet). */
@@ -1000,7 +1035,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
         // 1.54: in the relays' time when this device's clock is off, so relays take it and receivers' requests find it.
-        val createdAt = System.currentTimeMillis() / 1000 + NetLogic.clockOffset(relayOffsetS.values) - Random.nextLong(0, BLUR_S)
+        val createdAt = System.currentTimeMillis() / 1000 + NetLogic.clockOffset(relayOffsets()) - Random.nextLong(0, BLUR_S)
         // NIP-40: relays may drop it once the longest message limit has passed (it's gone from both phones by then). Taken
         // from the blurred time and rounded up to a whole day, so it shows neither the sending time nor the chat's limit.
         if (days > 0) tags.put(JSONArray().put("expiration").put(expiration(createdAt).toString()))
@@ -1081,7 +1116,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     }
 
     /** The id of an outbox entry (["EVENT", {...}]), or "" when it can't be read. */
-    private fun idOfMsg(msg: String): String = try { SafeJson.arr(msg).getJSONObject(1).optString("id") } catch (_: Exception) { "" }
+    private fun idOfMsg(msg: String): String = msgId(msg)
 
     /** Events sent in the last [RECENT_MS]: a relay that connects meanwhile gets them too, even once another said OK. */
     private val recent = ArrayDeque<Pair<Long, String>>()
@@ -1125,7 +1160,28 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         private const val SEND_SECONDS = 20L
         /** How long a sent event is also given to relays that connect afterwards (the conversation window opening). */
         private const val RECENT_MS = 60_000L
-        val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")
+        val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nos.social")
+        /**
+         * The default until relay.nostr.band stopped answering (relay.nos.social took its place). Older apps still use this
+         * list: they share the other four, so messages between versions meet on those (see [NEWER_RELAYS]).
+         */
+        private val OLD_DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")
+        /**
+         * Relays older apps don't use: while saving battery Muninn keeps one of the shared ones open rather than one of
+         * these, so what an older app sends still arrives live (PowerLogic.pick).
+         */
+        val NEWER_RELAYS = setOf("wss://relay.nos.social")
+
+        /**
+         * The relays to use from the saved setting [saved] (one per line; none saved: [DEFAULT_RELAYS]). A saved list that is
+         * still the old default (relay.nostr.band among the same five, from an older install or a backup) gets the new one in
+         * its place; any other list is someone's own and stays exactly as it is.
+         */
+        fun relaysFrom(saved: String?): List<String> {
+            val list = saved?.split('\n')?.filter { it.startsWith("wss://") } ?: return DEFAULT_RELAYS
+            if (list.size != OLD_DEFAULT_RELAYS.size || list.toSet() != OLD_DEFAULT_RELAYS.toSet()) return list
+            return list.map { if (it == OLD_DEFAULT_RELAYS.last()) DEFAULT_RELAYS.last() else it }
+        }
         /** An event's created_at is up to this many seconds before the real time (section 20.3). */
         const val BLUR_S = 600L
         /** A linked device's frames waiting for a relay, at most (apart from real messages). */
@@ -1154,6 +1210,96 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         fun expiration(createdAt: Long): Long {
             val at = createdAt + BLUR_S + Limits.LONGEST * 86_400L
             return (at + 86_399L) / 86_400L * 86_400L
+        }
+
+        private const val EVENT_HEAD = "[\"EVENT\",{\"id\":\""
+
+        /** What nostr-state.json holds: the seen ids ([SeenIds.key]s, the first [count] of [seen]), the cursors and the mailbox. */
+        class State(val seen: LongArray, val count: Int, val eose: JSONObject?, val pub: String)
+
+        /**
+         * nostr-state.json read back ([stateJson] writes it; every version put the seen list first). The seen list, up to
+         * 20000 ids, is read straight from the text; anything not quite as expected is read as plain JSON instead, the same
+         * way as before. Throws when it isn't readable at all (its last good copy is tried then).
+         */
+        fun readState(b: ByteArray): State {
+            fastState(b)?.let { return it }
+            val o = SafeJson.obj(String(b))
+            val a = o.optJSONArray("seen")
+            val keys = LongArray(a?.length() ?: 0)
+            var n = 0
+            if (a != null) for (i in 0 until a.length()) SeenIds.key(a.optString(i))?.let { keys[n++] = it }
+            return State(keys, n, o.optJSONObject("eose"), o.optString("pub"))
+        }
+
+        private val STATE_HEAD = "{\"seen\":[".toByteArray()
+
+        /** One hex digit's value, or -1. */
+        private fun hex(b: Byte): Int {
+            val c = b.toInt()
+            return if (c in 48..57) c - 48 else if (c in 97..102) c - 87 else if (c in 65..70) c - 55 else -1
+        }
+
+        /** {"seen":["16 or 64 hex",...] then the rest: the ids straight from the bytes, or null to read it all as JSON. */
+        private fun fastState(t: ByteArray): State? {
+            if (t.size <= STATE_HEAD.size || (STATE_HEAD.indices).any { t[it] != STATE_HEAD[it] }) return null
+            val quote = '"'.code.toByte()
+            var keys = LongArray(1024)
+            var n = 0
+            var i = STATE_HEAD.size
+            if (t[i] == ']'.code.toByte()) i++
+            else while (true) {
+                if (i >= t.size || t[i] != quote) return null
+                var v = 0L
+                for (k in 1..16) {
+                    val d = if (i + k < t.size) hex(t[i + k]) else -1
+                    if (d < 0) return null
+                    v = (v shl 4) or d.toLong()
+                }
+                var j = i + 17
+                while (j < t.size && t[j] != quote) { if (hex(t[j]) < 0) return null; j++ }
+                if (j >= t.size) return null
+                if (n == keys.size) keys = keys.copyOf(n * 2)
+                keys[n++] = v
+                i = j + 1
+                if (i >= t.size) return null
+                if (t[i] == ','.code.toByte()) { i++; continue }
+                if (t[i] == ']'.code.toByte()) { i++; break }
+                return null
+            }
+            val rest = String(t, i, t.size - i)
+            val o = when {
+                rest == "}" -> JSONObject()
+                rest.startsWith(",") -> SafeJson.obj("{" + rest.substring(1))
+                else -> return null
+            }
+            return State(keys, n, o.optJSONObject("eose"), o.optString("pub"))
+        }
+
+        /**
+         * The id of an outbox entry (["EVENT", {...}]), or "" when it can't be read. Every relay's OK looks through the
+         * waiting entries (a piece of a photo is up to 64 KB): the ones made here ([event] puts the id first) are read
+         * straight off the front instead of being parsed whole each time.
+         */
+        fun msgId(msg: String): String {
+            val end = EVENT_HEAD.length + 64
+            if (msg.length > end && msg.startsWith(EVENT_HEAD) && msg[end] == '"') {
+                val id = msg.substring(EVENT_HEAD.length, end)
+                if (HEX64.matches(id)) return id
+            }
+            return try { SafeJson.arr(msg).getJSONObject(1).optString("id") } catch (_: Exception) { "" }
+        }
+
+        /**
+         * nostr-state.json: {"seen":[...],"eose":{relay: cursor},"pub":mailbox}. The seen list (up to 20000 ids) is written
+         * straight into the bytes ([SeenIds.json]) rather than built as 20000 strings and a JSON array first.
+         */
+        fun stateJson(seen: SeenIds, eose: Map<String, Long>, pub: String?): ByteArray {
+            val rest = JSONObject().put("eose", JSONObject(eose as Map<*, *>))
+            if (pub != null) rest.put("pub", pub)
+            // {"seen":[...],"eose":{...},"pub":"..."}: the rest's own braces come off, the seen list goes before it.
+            val r = rest.toString()
+            return seen.json("{\"seen\":".toByteArray(), ("," + r.substring(1)).toByteArray())
         }
 
         /** NIP-01: the event id is the SHA-256 of [0, pubkey, created_at, kind, tags, content] as compact JSON. */

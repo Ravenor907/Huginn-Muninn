@@ -58,16 +58,18 @@ Gamepad::Gamepad(QObject *parent)
 {
     m_clock.start();
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-    if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0) {
-        qWarning() << "Controller support is off:" << SDL_GetError();
-        return;
-    }
-    m_sdlReady = true;
-    openAll();
-    connect(&m_poll, &QTimer::timeout, this, &Gamepad::poll);
-    m_poll.start(pollInterval());
-    // Read as often as a frame while Huginn is in front, much less behind other windows.
-    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this] { retime(); });
+    const auto init = [] { return SDL_Init(SDL_INIT_GAMECONTROLLER) == 0 ? QString() : QString::fromUtf8(SDL_GetError()); };
+#ifdef Q_OS_LINUX
+    // SDL opens every input device once to find the controllers among them, and closing each one waits on the kernel
+    // (about 10 ms a device: a quarter of a second with twenty keyboards, mice and buttons). Its own thread does that
+    // while the rest of Huginn and its window are made; start() waits for it. Every other SDL call stays on this thread.
+    m_init = std::async(std::launch::async, init);
+#else
+    // Windows: SDL's device notices go to the thread that started it, so it starts on the one that reads it.
+    std::promise<QString> done;
+    done.set_value(init());
+    m_init = done.get_future();
+#endif
 
     m_repeat.setSingleShot(false);
     connect(&m_repeat, &QTimer::timeout, this, [this] {
@@ -80,8 +82,27 @@ Gamepad::Gamepad(QObject *parent)
     });
 }
 
+void Gamepad::start()
+{
+    if (!m_init.valid())
+        return;   // started already
+    const QString error = m_init.get();
+    if (!error.isEmpty()) {
+        qWarning() << "Controller support is off:" << error;
+        return;
+    }
+    m_sdlReady = true;
+    openAll();
+    connect(&m_poll, &QTimer::timeout, this, &Gamepad::poll);
+    m_poll.start(pollInterval());
+    // Read as often as a frame while Huginn is in front, much less behind other windows.
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this] { retime(); });
+}
+
 Gamepad::~Gamepad()
 {
+    if (m_init.valid())
+        m_sdlReady = m_init.get().isEmpty();   // never started (Huginn closing early): SDL still stops
     for (const Pad &p : std::as_const(m_pads))
         SDL_GameControllerClose(p.ctl);
     m_pads.clear();

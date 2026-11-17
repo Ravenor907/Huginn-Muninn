@@ -29,6 +29,9 @@ import io.github.ravenor907.muninn.R
  * size scales everything, text scales only text, high contrast brightens text and outlines, Color vision remaps every
  * color that means something ([ColorVision]), and reduce motion turns animations off.
  */
+/** A "#RRGGBB" color: made once (every avatar and chat color asks, on every recomposition). */
+private val HEX_COLOR = Regex("^#[0-9A-Fa-f]{6}$")
+
 object Access {
     var size by androidx.compose.runtime.mutableFloatStateOf(1f)
     var text by androidx.compose.runtime.mutableFloatStateOf(1f)
@@ -75,7 +78,7 @@ object Accents {
     }
 
     /** A "#RRGGBB" color. */
-    fun valid(v: String?): Boolean = v != null && Regex("^#[0-9A-Fa-f]{6}$").matches(v.trim())
+    fun valid(v: String?): Boolean = v != null && HEX_COLOR.matches(v.trim())
 
     /** A saved accent: a name, a valid "#RRGGBB", else gold. */
     fun choice(v: String?): String = when {
@@ -402,7 +405,7 @@ object Palette {
     /** A color someone picked ("#RRGGBB"), or null when it isn't one. */
     fun parse(hex: String?): Color? {
         val h = hex?.trim() ?: return null
-        if (!Regex("^#[0-9A-Fa-f]{6}$").matches(h)) return null
+        if (!HEX_COLOR.matches(h)) return null
         return Color(0xFF000000L or h.substring(1).toLong(16))
     }
     /** Text that reads on [bg]: near-black on a light disc, cream on a dark one. */

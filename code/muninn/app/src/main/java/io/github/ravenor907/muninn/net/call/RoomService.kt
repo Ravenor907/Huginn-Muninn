@@ -46,7 +46,9 @@ class RoomService : Service() {
             try { if (Build.VERSION.SDK_INT >= 30) { ServiceCompat.startForeground(this, RoomRinger.ONGOING_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE); foreground = true } }
             catch (e2: Exception) {}
         }
-        if (ui == null || !foreground) {
+        // 1.55: a room left while this start was on its way didn't stop the service (see stop): looked at again now.
+        starting = false
+        if (RoomManager.room.value == null || !foreground) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -60,9 +62,21 @@ class RoomService : Service() {
 
     companion object {
         private const val UPDATE = "io.github.ravenor907.muninn.room.UPDATE"
-        fun start(c: Context) { try { ContextCompat.startForegroundService(c, Intent(c, RoomService::class.java)) } catch (_: Exception) {} }
+        /** 1.55: a foreground start is on its way and hasn't gone foreground yet. */
+        @Volatile private var starting = false
+        fun start(c: Context) {
+            starting = true
+            try { ContextCompat.startForegroundService(c, Intent(c, RoomService::class.java)) } catch (_: Exception) { starting = false }
+        }
         fun update(c: Context) { try { c.startService(Intent(c, RoomService::class.java).setAction(UPDATE)) } catch (_: Exception) {} }
-        fun stop(c: Context) { try { c.stopService(Intent(c, RoomService::class.java)) } catch (_: Exception) {} }
+        /**
+         * 1.55: a room left right after it was joined must not stop the service before it went foreground (Android then
+         * closes Muninn): the start on its way sees the room gone and stops by itself.
+         */
+        fun stop(c: Context) {
+            if (starting) return
+            try { c.stopService(Intent(c, RoomService::class.java)) } catch (_: Exception) {}
+        }
     }
 }
 

@@ -414,7 +414,10 @@ class MainActivity : ComponentActivity() {
         recents()
         intentChose = false
         io.github.ravenor907.muninn.ui.Picking.since = 0L
-        io.github.ravenor907.muninn.net.Drafts.load(app)
+        // The drafts (two vault reads and a key pair the first time): off the main thread, as unlocking reads them too.
+        // A chat that asks for its draft meanwhile reads them itself.
+        if (!io.github.ravenor907.muninn.net.Drafts.isLoaded && !app.vault.locked.value)
+            Thread { try { io.github.ravenor907.muninn.net.Drafts.load(app) } catch (_: Exception) {} }.start()
         // Kids' TV: a call that came in over a show just ended; the show goes on, not Muninn.
         // A Kids' Device with a call ringing or on (Home was pressed mid-call, or it rang over a show and nothing came up):
         // opening Muninn goes straight back to the call, where Answer or Hang up is.
@@ -732,7 +735,9 @@ class MainActivity : ComponentActivity() {
             if (tab != "files") io.github.ravenor907.muninn.screens.TransferStrip(app, skipPeer = if (full) ChatNav.open else "") { show("files") }
             Box(Modifier.weight(1f)) {
                 TabContent(tab)
-                Toast(toast, Modifier.align(Alignment.BottomCenter))
+                // While the first-run tour points at + and Share nearby (at the bottom), a notice shows at the top so it
+                // never covers what the tour is pointing at.
+                Toast(toast, Modifier.align(if (io.github.ravenor907.muninn.screens.Setup.touring) Alignment.TopCenter else Alignment.BottomCenter))
             }
             if (!full) BottomTabs()
         }
@@ -888,7 +893,7 @@ class MainActivity : ComponentActivity() {
                         ColumnHeader(title(tab), onRaven = if (tab == "settings") ({ io.github.ravenor907.muninn.screens.Labs.tap(app) }) else null)
                         Box(Modifier.weight(1f).fillMaxWidth()) { TabContent(tab) }
                     }
-                    Toast(toast, Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp))
+                    Toast(toast, Modifier.align(if (io.github.ravenor907.muninn.screens.Setup.touring) Alignment.TopCenter else Alignment.BottomCenter).widthIn(max = 560.dp))
                 }
             }
         }

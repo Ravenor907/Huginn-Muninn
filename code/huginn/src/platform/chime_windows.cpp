@@ -16,9 +16,13 @@ const Chime *s_playing = nullptr;
 
 QString Platform::resource(const QString &name)
 {
-    const QString usual = QStringLiteral(":/qt/qml/Huginn/assets/") + name;
-    if (QFileInfo::exists(usual))
-        return usual;
+    // Where the build puts the module's assets (qml/assets/, as in the source), or the short alias. Looking through
+    // every resource took about 20 ms each time, and seven sounds are made at start.
+    for (const QLatin1String dir : {QLatin1String(":/qt/qml/Huginn/qml/assets/"), QLatin1String(":/qt/qml/Huginn/assets/")}) {
+        const QString path = dir + name;
+        if (QFileInfo::exists(path))
+            return path;
+    }
     QDirIterator it(QStringLiteral(":/"), {name}, QDir::Files, QDirIterator::Subdirectories);
     return it.hasNext() ? it.next() : QString();
 }

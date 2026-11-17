@@ -118,7 +118,11 @@ fun BackupFlow(app: Muninn, onClose: () -> Unit) {
                 }
             }
             pw1 = ""; pw2 = ""
-            result.onSuccess { saved = it; step = "saved" }
+            result.onSuccess {
+                saved = it; step = "saved"
+                // A backup made: the chat list's "Back up so a new phone keeps…" reminder has done its job.
+                try { ctx.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().putBoolean("backupNudged", true).apply() } catch (_: Exception) {}
+            }
                 .onFailure { error = "The backup couldn't be saved. ${if (it is OutOfMemoryError) "Too big for this phone: leave files and pictures out." else it.message ?: ""}".trim(); step = "password" }
         }
     }

@@ -346,21 +346,24 @@ object PowerLogic {
     fun saves(from: Plan, to: Plan): Boolean = rank(to) < rank(from)
 
     /**
-     * What Muninn knows about a relay: failed tries in a row, how long it took to connect, open right now, and how
-     * often it checks on the phone by itself (pings an hour, each waking the radio).
+     * What Muninn knows about a relay: failed tries in a row, how long it took to connect, open right now, how
+     * often it checks on the phone by itself (pings an hour, each waking the radio), and whether only newer apps use it
+     * ([Nostr.NEWER_RELAYS]: an older app's messages never go there).
      */
-    data class Health(val failures: Int = 0, val connectMs: Long? = null, val live: Boolean = false, val pingsPerHour: Int = 0)
+    data class Health(val failures: Int = 0, val connectMs: Long? = null, val live: Boolean = false, val pingsPerHour: Int = 0,
+                      val newer: Boolean = false)
 
     /**
-     * The [n] relays to keep open (null: all), in the order they are listed. Fewest failures first,
-     * then ones already open (no churn), then the fewest pings of their own, then the quickest to connect, then
-     * list order.
+     * The [n] relays to keep open (null: all), in the order they are listed. Fewest failures first, then ones older
+     * apps post to as well (so a message from someone on an older version still arrives live), then ones already open
+     * (no churn), then the fewest pings of their own, then the quickest to connect, then list order.
      */
     fun pick(relays: List<String>, health: Map<String, Health>, n: Int?): List<String> {
         if (n == null || n >= relays.size) return relays
         if (n <= 0) return emptyList()
         val chosen = relays.withIndex().sortedWith(compareBy(
             { health[it.value]?.failures ?: 0 },
+            { if (health[it.value]?.newer == true) 1 else 0 },
             { if (health[it.value]?.live == true) 0 else 1 },
             { health[it.value]?.pingsPerHour ?: 0 },
             { health[it.value]?.connectMs ?: UNKNOWN_CONNECT_MS },

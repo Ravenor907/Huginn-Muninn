@@ -149,13 +149,45 @@ class SeenIds(private val max: Int = MAX) {
         return true
     }
     @Synchronized fun remove(id: String) { key(id)?.let { ids.remove(it) } }
+    /** The first [n] of [keys] (already [key]s, oldest first), as when they were saved. */
+    @Synchronized fun addKeys(keys: LongArray, n: Int = keys.size) {
+        for (i in 0 until n) ids.add(keys[i])
+        val it = ids.iterator()
+        while (ids.size > max && it.hasNext()) { it.next(); it.remove() }
+    }
     @Synchronized fun size(): Int = ids.size
     @Synchronized fun clear() { ids.clear() }
     /** For saving: oldest first, 16 hex characters each. */
     @Synchronized fun toList(): List<String> = ids.map { java.lang.Long.toHexString(it).padStart(16, '0') }
 
+    /**
+     * The same as a JSON array of strings (["0123456789abcdef",...]), written straight into one byte array between
+     * [head] and [tail]: 20000 ids are about 380 KB, and making a String (and a JSON value) for each one first cost
+     * some 60000 objects and a few MB on every save.
+     */
+    @Synchronized fun json(head: ByteArray = ByteArray(0), tail: ByteArray = ByteArray(0)): ByteArray {
+        val n = ids.size
+        val body = if (n == 0) 2 else n * 19 + 1   // "16 hex", each with a comma but the last, and the brackets
+        val out = ByteArray(head.size + body + tail.size)
+        head.copyInto(out)
+        var i = head.size
+        out[i++] = '['.code.toByte()
+        var first = true
+        for (v in ids) {
+            if (!first) out[i++] = ','.code.toByte()
+            first = false
+            out[i++] = '"'.code.toByte()
+            for (shift in 60 downTo 0 step 4) out[i++] = HEX[((v ushr shift) and 0xf).toInt()]
+            out[i++] = '"'.code.toByte()
+        }
+        out[i++] = ']'.code.toByte()
+        tail.copyInto(out, i)
+        return out
+    }
+
     companion object {
         const val MAX = 20_000
+        private val HEX = "0123456789abcdef".toByteArray()
         /** The first 16 hex characters of an event id as a number, or null when it isn't one. */
         fun key(id: String): Long? =
             if (id.length < 16) null else try { java.lang.Long.parseUnsignedLong(id.substring(0, 16), 16) } catch (_: NumberFormatException) { null }

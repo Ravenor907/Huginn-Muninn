@@ -672,6 +672,7 @@ Item {
         border.color: input.activeFocus ? Theme.accent : setup.lit(field.focusId) ? Theme.text : Theme.line
         TextInput {
             id: input
+            activeFocusOnTab: true   // Tab and Shift+Tab move between boxes, as in every other text box
             FieldMenu {}   // right click: Cut, Copy, Paste, Select all
             anchors.fill: parent; anchors.leftMargin: Theme.px(10); anchors.rightMargin: Theme.px(10)
             verticalAlignment: TextInput.AlignVCenter

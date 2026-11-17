@@ -73,6 +73,19 @@ class DeliveryTest {
         assertFalse(NetLogic.timeRefused("rate-limited: slow down"))
     }
 
+    /** 1.55: a relay's reading follows this device's clock being set right afterwards (no stale hour on every event). */
+    @Test fun clockReadingFollowsAClockSetRight() {
+        val relayNow = 1_800_000_000_000L
+        val upAtReading = 50_000L
+        val localThen = relayNow - 3_600_000L                   // this device an hour behind
+        val base = relayNow - upAtReading                      // what's kept
+        assertEquals(3_600L, NetLogic.offsetNow(base, upAtReading, localThen))
+        // A minute later the clock is set right: the offset is gone at once.
+        assertEquals(0L, NetLogic.offsetNow(base, upAtReading + 60_000L, relayNow + 60_000L))
+        // Not set right: still an hour, a minute later.
+        assertEquals(3_600L, NetLogic.offsetNow(base, upAtReading + 60_000L, localThen + 60_000L))
+    }
+
     /** The biggest preview that may go with the longest text still pads to 48 KB at most, sealed and wrapped twice. */
     @Test fun previewsStayUnder64K() {
         val text = "😀".repeat(2000)

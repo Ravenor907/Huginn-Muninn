@@ -176,9 +176,13 @@ object TvMic {
             return true
         }
 
-        /** One decoded 20 ms frame of the call into [out] ([playFrame] samples) for the speaker. Returns its length. */
+        /**
+         * One decoded 20 ms frame of the call into [out] ([playFrame] samples) for the speaker. Returns its length; 0
+         * without [TvVoice] (1.55: the call's player stretches the plain frame to its speaker's rate itself; converting
+         * here filled all of [out], which is sized for 48 kHz, and played the call at a third of its speed).
+         */
         fun render(pcm: ShortArray, out: ShortArray): Int {
-            val p = proc ?: return convert(pcm, pcm.size, out)
+            val p = proc ?: return 0
             return p.render(pcm, pcm.size, out)   // as in 1.44
         }
 

@@ -604,21 +604,25 @@ void Ble::onReady(Link *l)
     // link waits (unused) until sayHello() runs at unlock.
     const QByteArray hello = helloFor(l);
     if (!hello.isEmpty()) {
-        queue(l, hello);
+        // Marked first: a write Qt refuses on the spot (an inbox that doesn't take writes) drops the link, and l with
+        // it, before queue() returns.
         l->said = true;
+        queue(l, hello);
     }
     Q_EMIT changed();
 }
 
 void Ble::sayHello()
 {
-    for (Link *l : std::as_const(m_links))
-        if (l->ready && !l->said) {
+    // A copy: a link can be dropped (and deleted) inside queue() when Qt refuses the write at once.
+    const QList<Link *> links = m_links.values();
+    for (Link *l : links)
+        if (alive(l) && l->ready && !l->said) {
             const QByteArray hello = helloFor(l);
             if (hello.isEmpty())
                 return;
-            queue(l, hello);
             l->said = true;
+            queue(l, hello);
         }
     Q_EMIT changed();
 }

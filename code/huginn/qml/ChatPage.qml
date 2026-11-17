@@ -290,6 +290,8 @@ Rectangle {
         // Labs: where the person is, for the activity log (a chat by a short id, never its name).
         Labs.note("screen", openKey === "" ? "dms > Nearby room" : "dms > chat " + Labs.shortId(openKey.slice(-12)))   // the key's end: every key starts the same
         sel = -1; Voice.stop(); finder.close()
+        // A photo open full size was the last chat's: it closes (it stayed over the new chat until clicked).
+        viewing = ""
         // A voice message held on Y (or the microphone) belongs to the chat it started in: another chat (a tap in the
         // list, a notification) throws it away, never sends it here.
         if (Voice.recording) { Voice.cancel(); Ui.say("Recording cancelled.") }

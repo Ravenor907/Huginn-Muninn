@@ -24,6 +24,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import io.github.ravenor907.muninn.net.Photos
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -156,7 +158,6 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import io.github.ravenor907.muninn.ui.IconAction
 import io.github.ravenor907.muninn.ui.hcBorder
-import java.util.Calendar
 import java.text.DateFormat
 import java.util.Date
 
@@ -239,7 +240,8 @@ private fun BackupNudge(first: String?, modifier: Modifier) {
     val prefs = remember { context.getSharedPreferences("muninn", Context.MODE_PRIVATE) }
     var seen by remember { mutableStateOf(prefs.getBoolean("backupNudged", false)) }
     val kids = remember { (context.applicationContext as? Muninn)?.let { io.github.ravenor907.muninn.tv.KidMode.on(it) } ?: false }
-    if (seen || first == null || kids) return
+    // Read again on every redraw too: a backup made from Settings puts the reminder away as well.
+    if (seen || prefs.getBoolean("backupNudged", false) || first == null || kids) return
     fun done() { seen = true; prefs.edit().putBoolean("backupNudged", true).apply() }
     Panel(modifier) {
         Text("Back up so a new phone keeps $first and your chats.", style = Type.normal.copy(color = Palette.text))
@@ -307,13 +309,27 @@ private val tinyStyle get() =TextStyle(fontFamily = Type.body, fontSize = 12.sp,
 private val bodyStyle get() = TextStyle(fontFamily = Type.body, fontSize = 16.sp, color = Palette.text)
 private val labelStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 1.5.sp, color = Palette.textMuted)
 
-private fun clock(t: Long) = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(t))
-private fun dayIndex(t: Long): Long {
-    val c = Calendar.getInstance().apply { timeInMillis = t }
-    return c.get(Calendar.YEAR) * 400L + c.get(Calendar.DAY_OF_YEAR)
+/**
+ * A date format made once per language (a new one for every bubble and chat row, on every recomposition, was a heavy
+ * object each time), set to the time zone in use whenever it's used.
+ */
+private class Fmt(private val make: () -> DateFormat) {
+    private var locale: java.util.Locale? = null
+    private var f: DateFormat? = null
+    @Synchronized fun format(t: Long): String {
+        val l = java.util.Locale.getDefault()
+        val cur = f?.takeIf { l == locale } ?: make().also { f = it; locale = l }
+        cur.timeZone = java.util.TimeZone.getDefault()
+        return cur.format(Date(t))
+    }
 }
+private val clockFmt = Fmt { DateFormat.getTimeInstance(DateFormat.SHORT) }
+private val dateFmt = Fmt { DateFormat.getDateInstance(DateFormat.SHORT) }
+private fun clock(t: Long) = clockFmt.format(t)
+/** The local day [t] falls on, as a number (only ever compared): no Calendar for each message on each recomposition. */
+private fun dayIndex(t: Long): Long = Math.floorDiv(t + java.util.TimeZone.getDefault().getOffset(t), 86_400_000L)
 /** The chat list's time: the clock today, the date before that. */
-private fun when_(t: Long) = if (dayIndex(t) == dayIndex(System.currentTimeMillis())) clock(t) else DateFormat.getDateInstance(DateFormat.SHORT).format(Date(t))
+private fun when_(t: Long) = if (dayIndex(t) == dayIndex(System.currentTimeMillis())) clock(t) else dateFmt.format(t)
 private fun dayLabel(t: Long): String {
     val now = System.currentTimeMillis()
     return when (dayIndex(t)) {
@@ -765,14 +781,14 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             val grp = groups[c.group]
             val msgs = gmsgs[c.group].orEmpty()
             val last = msgs.lastOrNull()
-            val otherMembers = grp?.state?.members.orEmpty().filter { it.k != app.identity.publicKey }
-            val others = otherMembers.map { memberName(app, it) }
+            val me = app.identity.publicKey
+            val others = grp?.state?.members.orEmpty().filter { it.k != me }
             PersonRow(c.name, last?.let { groupPreview(app, it) } ?: when {
                     grp?.readOnly == true -> "You're not in it any more"
                     others.isEmpty() -> "Just you so far: invite people"
                     else -> "${others.size + 1} people"
                 }, last?.let { when_(it.time) } ?: "",
-                if (c.group in gunread) groupUnread(msgs) else if (c.key in flagState.unread) 1 else 0, false, { GroupAvatar(c.name, otherMembers, 48.dp) },
+                if (c.group in gunread) groupUnread(msgs) else if (c.key in flagState.unread) 1 else 0, false, { GroupAvatar(c.name, others, 48.dp) },
                 muted = (flagState.muted[c.key] ?: 0L) > System.currentTimeMillis(),
                 onLong = { ChatNav.menuGroup = ""; ChatNav.holdFromList = true; ChatNav.hold = c.key }, modifier = rowMod, onDrag = onDrag, onDrop = onDrop) { ChatNav.openGroup(c.group) }
         } else {
@@ -1168,10 +1184,9 @@ private fun Conversation(app: Muninn, key: String) {
     var query by remember { mutableStateOf(Drafts.search[key].orEmpty()) }
     var matchAt by remember { mutableStateOf(0) }
     androidx.compose.runtime.SideEffect { keepOpen(key, searching, query, camera) }
-    val typingMap by app.chat.typing.collectAsState()
-    val activeMap by app.chat.active.collectAsState()
-    val typingNow = key in typingMap
-    val activeNow = key in activeMap
+    // Only whether this person is typing or active: someone else's typing ping (every few seconds) doesn't redraw this chat.
+    val typingNow by remember(key) { app.chat.typing.map { key in it }.distinctUntilChanged() }.collectAsState(key in app.chat.typing.value)
+    val activeNow by remember(key) { app.chat.active.map { key in it }.distinctUntilChanged() }.collectAsState(key in app.chat.active.value)
     val me = app.identity.publicKey
     // Cap v3: a video picked from the phone, full size if they're close by, else a smaller copy.
     // The video send sheet (V) that Saved media and the camera open; Saved media itself (A).
@@ -1600,8 +1615,16 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     val onImageNow by rememberUpdatedState(onImage)
     // [sent] counts Enter sends, so the box is matched to [text] after each one even when [text] looks unchanged.
     var sent by remember { mutableStateOf(0) }
+    // What the box last reported out, and the Enter send last matched: [text] coming back as the box's own report is
+    // not a change from outside. Put back, it was a frame old and wiped letters typed since (fast typing on a slower
+    // phone lost about one letter in five).
+    val out = remember { arrayOfNulls<String>(1) }
+    val matched = remember { intArrayOf(0) }
     LaunchedEffect(text, sent) {
         val want = text
+        val afterSend = sent != matched[0]
+        matched[0] = sent
+        if (!afterSend && want == out[0]) return@LaunchedEffect
         if (field.text.toString() != want) field.edit { replace(0, length, want) }
     }
     // After an Enter send, the box's report of the sent text is not typing, and an IME's letters put back into the
@@ -1611,7 +1634,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     LaunchedEffect(field) {
         snapshotFlow { field.text.toString() }.collect {
             when (echo.seen(it, textNow, android.os.SystemClock.uptimeMillis())) {
-                BoxEcho.PASS -> onTextNow(it.take(Drafts.KEEP_MAX))
+                BoxEcho.PASS -> { out[0] = it; onTextNow(it.take(Drafts.KEEP_MAX)) }
                 BoxEcho.CLEAR -> field.edit { replace(0, length, "") }
                 else -> {}
             }
@@ -1625,6 +1648,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
         if (now.isNotBlank()) {
             echo.send(now, android.os.SystemClock.uptimeMillis())
             field.edit { replace(0, length, now) }
+            out[0] = now
             if (now != textNow) onTextNow(now)
             onSendNow()
             sent++
@@ -1803,6 +1827,15 @@ private fun AddSomeone(app: Muninn) {
     val start = remember { ChatNav.addMode.also { ChatNav.addMode = "" } }
     // "": the camera; "paste": typing or pasting a code or invite link.
     var mode by remember { mutableStateOf(if (start == "pick") "pick" else "") }
+    // A link tapped while this screen is already open (from a message, a web page or another app): taken now. Before,
+    // only the first one was read, so the screen stayed as it was.
+    val handed = ChatNav.incoming
+    LaunchedEffect(handed) {
+        if (handed.isNotEmpty()) {
+            if (!io.github.ravenor907.muninn.net.Link.isCode(handed)) { text = handed; mode = "" }
+            ChatNav.incoming = ""
+        }
+    }
     val found = Contacts.parse(text)
     val invite = GroupLinks.parse(app, text)
     BackHandler(enabled = text.isNotEmpty() || mode.isNotEmpty()) { if (text.isNotEmpty()) text = "" else mode = "" }
@@ -1823,6 +1856,14 @@ private fun AddSomeone(app: Muninn) {
             }
             // Joining from a copied invite ("choose + then Join a group"): the button is at the top, above the camera.
             if (text.isBlank() && mode.isEmpty()) MButton("Join a group", Modifier.fillMaxWidth().padding(top = 12.dp), if (people.isEmpty()) Kind.Accent else Kind.Normal, icon = "people") { mode = "join" }
+            // One code box for typing and for "That isn't a Muninn code": two boxes swapped the box out after the first
+            // letter typed, so it lost the keyboard and the rest of what was typed went nowhere.
+            val notCode = text.isNotBlank() && invite == null && !io.github.ravenor907.muninn.net.Link.isCode(text) && found == null
+            if ((text.isBlank() && mode.isNotEmpty()) || notCode) {
+                Field(text, { text = it }, if (mode == "join") "Paste the invite link or code" else "Paste a code or invite link",
+                    Modifier.padding(vertical = 12.dp), single = false)
+                if (notCode) Text("That isn't a Muninn code.", style = Type.small.copy(color = Palette.danger))
+            }
             when {
                 text.isBlank() && mode.isEmpty() -> {
                     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp)) {
@@ -1837,17 +1878,13 @@ private fun AddSomeone(app: Muninn) {
                     }
                     Text(if (start == "tv") "Point at the code on the Kids' Device." else "Point at their code.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
                 }
-                text.isBlank() -> Field(text, { text = it }, if (mode == "join") "Paste the invite link or code" else "Paste a code or invite link",
-                    Modifier.padding(vertical = 12.dp), single = false)
+                text.isBlank() -> {}   // the code box above
                 invite != null -> Panel(Modifier.padding(top = 12.dp)) { JoinCard(app, invite) { text = ""; if (!invite.expired) ChatNav.open = "" } }
                 io.github.ravenor907.muninn.net.Link.isCode(text) -> MButton("Link this device", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "link") {
                     val code = text
                     LockGate.ask(app, "Link this device") { LinkUi.take(code)?.let { Ui.say(it, true) } ?: run { text = ""; ChatNav.open = "" } }
                 }
-                found == null -> {
-                    Field(text, { text = it }, "Paste a code or link", Modifier.padding(vertical = 10.dp), single = false)
-                    Text("That isn't a Muninn code.", style = Type.small.copy(color = Palette.danger))
-                }
+                found == null -> {}   // the code box above, with "That isn't a Muninn code"
                 Contacts.expires(text) in 1 until System.currentTimeMillis() -> CodeEnded(found.name)
                 found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 12.dp))
                 else -> Panel(Modifier.padding(top = 12.dp)) {
@@ -2035,9 +2072,12 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                         isPhoto -> Column(Modifier.padding(4.dp)) {
                             Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
                             // Kept decoded (PhotoCache), keyed by its size too so a photo still arriving is decoded again once whole.
+                            // The stored file's size is known without decrypting it, so one already decoded isn't read again.
                             val photoCtx = LocalContext.current
                             val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) {
-                                photo!!()?.let { b -> io.github.ravenor907.muninn.ui.PhotoCache.get(photoCtx, "${m.id}:720:${b.size}") { decode(b, 720) } } } }
+                                val stored = (photoCtx.applicationContext as? io.github.ravenor907.muninn.Muninn)?.chat?.photoSize(m.photo) ?: 0L
+                                if (stored > 0L) io.github.ravenor907.muninn.ui.PhotoCache.get(photoCtx, "${m.id}:720:f$stored") { photo!!()?.let { decode(it, 720) } }
+                                else photo!!()?.let { b -> io.github.ravenor907.muninn.ui.PhotoCache.get(photoCtx, "${m.id}:720:${b.size}") { decode(b, 720) } } } }
                             val pic = io.github.ravenor907.muninn.ui.Corner
                             Box(Modifier.widthIn(max = 260.dp).fillMaxWidth().aspectRatio(260f / 170f).clip(pic).background(Palette.groundDeep),
                                 contentAlignment = Alignment.Center) {
@@ -2715,7 +2755,8 @@ internal fun CallSomeDialog(app: Muninn, s: Proto06.State, done: () -> Unit) {
 @Composable
 private fun GroupConversation(app: Muninn, g: String) {
     val all by app.chat.groups.all.collectAsState()
-    val chats by app.chat.groups.messages.collectAsState()
+    // Only this group's messages: a message or receipt in another group doesn't redraw this one.
+    val gList by remember(g) { app.chat.groups.messagesOf(g) }.collectAsState(app.chat.groups.messages.value[g].orEmpty())
     @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()   // names follow nicknames
     val grp = all[g]
     if (grp == null) { NoGroup(); return }
@@ -2725,7 +2766,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     val ch = shownChannel(app, g)
     val chName = s.channel(ch)?.n ?: "general"
     // A removed channel's messages show in main.
-    val msgs = chats[g].orEmpty().filter { it.ch == ch || (ch == Proto06.MAIN && s.channel(it.ch)?.t != "text") }
+    val msgs = remember(gList, ch, s.channels) { gList.filter { it.ch == ch || (ch == Proto06.MAIN && s.channel(it.ch)?.t != "text") } }
     // Each channel keeps its own half-typed message and what it answers or edits (Drafts).
     val draftKey = Drafts.groupKey(g, ch)
     val draftRev by Drafts.revision.collectAsState()
@@ -2775,7 +2816,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     fun whoOf(m: Groups.GMsg) = if (m.mine) "You" else app.chat.contacts.contact(m.from)?.shown ?: m.name
     fun quoteOf(re: String): Pair<String, String>? {
         if (re.isEmpty()) return null
-        val q = chats[g].orEmpty().firstOrNull { it.id == re } ?: return "Message" to "Not here any more"
+        val q = gList.firstOrNull { it.id == re } ?: return "Message" to "Not here any more"
         return whoOf(q) to groupPreview(app, q).substringAfter(": ")
     }
     fun jumpTo(id: String) {
@@ -2855,10 +2896,10 @@ private fun GroupConversation(app: Muninn, g: String) {
     var flash by remember { mutableStateOf("") }
     val mediaActs = MediaActions(io.github.ravenor907.muninn.net.Sharing.folderFor("Muninn", s.name),
         show = { m ->
-            val gm = chats[g].orEmpty().firstOrNull { it.id == m.id }
+            val gm = gList.firstOrNull { it.id == m.id }
             // A removed channel's messages are in main.
             if (gm != null) { if (texts.any { it.id == gm.ch }) { ChatNav.channel[g] = gm.ch } else { ChatNav.channel.remove(g) } }
-            val here = chats[g].orEmpty().filter { gm == null || it.ch == gm.ch }.map { asMsg(app, it) }
+            val here = gList.filter { gm == null || it.ch == gm.ch }.map { asMsg(app, it) }
             val head = albumsOf(here).second.entries.firstOrNull { e -> e.value.any { it.id == m.id } }?.key ?: m.id
             viewing = null; shared = false; flash = head
         },
@@ -2875,7 +2916,7 @@ private fun GroupConversation(app: Muninn, g: String) {
         return
     }
     if (shared) {
-        SharedMedia("Media and files · ${s.name}", chats[g].orEmpty().map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it },
+        SharedMedia("Media and files · ${s.name}", gList.map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it },
             files = { mod -> ChatFilesList(app, "g:$g", mod) }, startFiles = sharedFiles, actions = mediaActs) { shared = false }
         return
     }

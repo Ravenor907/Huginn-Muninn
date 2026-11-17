@@ -171,6 +171,22 @@ object TvUpd {
         else -> null
     }
 
+    /**
+     * 1.55: whether an install waits. Muninn's own call ([inCall]) always holds it. Sound playing ([musicActive]) or a call
+     * mode ([callMode], another app's call) holds it too, except on a TV ([tv]) whose screen is off ([screenOn]): nobody
+     * watches or talks there then, and some TVs keep a sound stream open (or a call mode an app left set) for good, which
+     * held every update for days.
+     */
+    fun installWaits(inCall: Boolean, tv: Boolean, screenOn: Boolean, musicActive: Boolean, callMode: Boolean): Boolean =
+        inCall || ((!tv || screenOn) && (musicActive || callMode))
+
+    /**
+     * 1.55: whether a check (or report) [every] ms after the [last] one is due at [now]. A last one "in the future" (the
+     * clock was set back, as a TV's can be before it finds the network time) is due at once: else checks stopped until
+     * the clock caught up again.
+     */
+    fun due(last: Long, now: Long, every: Long): Boolean = last > now || now - last >= every
+
     /** The reason a parent reads when the device has no room for an update. */
     const val NO_SPACE = "Not enough space on the device"
 
@@ -182,6 +198,16 @@ object TvUpd {
 
     /** Room for an install of an APK of [apkBytes] with [free] bytes free: Android copies it and unpacks it (2.5 times). */
     fun roomFor(apkBytes: Long, free: Long): Boolean = apkBytes <= 0L || free >= apkBytes * 5 / 2
+
+    /**
+     * 1.55: Android's answer for install session [session] belongs to an older try and is left alone. [newest]: the session
+     * this run committed last (-1: none yet, or it was just abandoned). A try abandons the one still waiting for OK before
+     * it makes its own, and Android then answers "aborted" ([aborted]) for the old one: taken as this try's, it cleared the
+     * TV's "press OK" and started a quick try again, which abandoned the very session the grown-up was about to confirm.
+     * An install that went in ([success]) always counts; so does an answer without a session id.
+     */
+    fun staleResult(session: Int, newest: Int, success: Boolean, aborted: Boolean): Boolean =
+        !success && session >= 0 && session != newest && (newest >= 0 || aborted)
 
     /** True when an error's [message] says the disk is full (ENOSPC). */
     fun isNoSpace(message: String?): Boolean = message != null && (message.contains("ENOSPC") || message.contains("No space left", ignoreCase = true))

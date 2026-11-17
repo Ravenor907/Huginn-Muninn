@@ -186,15 +186,22 @@ uint notifyCall(uint replaces, const QString &title, const QString &body, std::f
     QObject::connect(w, &QDBusPendingCallWatcher::finished, c, [c, handle, asked, onAction = std::move(onAction)](QDBusPendingCallWatcher *w) mutable {
         w->deleteLater();
         const QDBusMessage r = w->reply();
-        if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty())
-            return;
-        const uint id = r.arguments().constFirst().toUInt();
         auto it = c->callNotes.find(handle);
-        // Closed meanwhile, or a newer one asked for since: this one goes.
-        if (it == c->callNotes.end() || it->close || it->asked != asked) {
-            if (it != c->callNotes.end() && it->close && it->asked == asked)
+        // This was the newest ask for a handle closed meanwhile: the handle goes (also when the desktop said no).
+        const bool closedNewest = it != c->callNotes.end() && it->close && it->asked == asked;
+        if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty()) {
+            if (closedNewest)
                 c->callNotes.erase(it);
-            if (it == c->callNotes.end() || it->real != id)
+            return;
+        }
+        const uint id = r.arguments().constFirst().toUInt();
+        // Closed meanwhile, or a newer one asked for since: this one goes. (Read before the erase: the iterator is
+        // no longer valid after it.)
+        if (it == c->callNotes.end() || it->close || it->asked != asked) {
+            const bool stillShown = it != c->callNotes.end() && it->real == id;
+            if (closedNewest)
+                c->callNotes.erase(it);
+            if (!stillShown)
                 QDBusConnection::sessionBus().asyncCall(message(QStringLiteral("CloseNotification"), {id}));
             return;
         }

@@ -161,6 +161,7 @@ Item {
                     Icon { id: customIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "thread"; size: Theme.px(14); color: Theme.textMuted }
                     TextInput {
                         id: customInput
+                        activeFocusOnTab: true   // Tab and Shift+Tab move between boxes, as in every other text box
                         FieldMenu {}   // right click: Cut, Copy, Paste, Select all
                         anchors.left: customIcon.right; anchors.leftMargin: Theme.px(8)
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)

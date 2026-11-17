@@ -2545,6 +2545,22 @@ bool Chat::bigIncoming() const
     return big >= 3;
 }
 
+bool Chat::incomingRoom(bool stranger) const
+{
+    // A piece refused here over the relays isn't asked for again: it only comes back when the sender sends it to the
+    // relays again, an hour later. So there is room for a catch-up after being away (every album and voice message
+    // that waited comes in at once, their pieces mixed together), and people who aren't contacts share only a few
+    // places: one met close by can't fill them all and hold off every contact's photos.
+    if (m_incoming.size() >= kIncomingMax)
+        return false;
+    if (!stranger)
+        return true;
+    int strangers = 0;
+    for (const Incoming &inc : m_incoming)
+        strangers += inc.stranger ? 1 : 0;
+    return strangers < kIncomingStrangers;
+}
+
 QString Chat::photoUrl(const QString &id)
 {
     // QML shows pictures from a URL: a data URL keeps it in memory, never on disk unencrypted.
@@ -2755,7 +2771,7 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     if (q.size() >= 1000)
         return 429;   // about 15 MB a minute at most
     q << now();
-    if (m_incoming.size() > 20 && !m_incoming.contains(id))
+    if (!m_incoming.contains(id) && !incomingRoom(!contact))
         return 429;
     if (n > Photos::kMaxPieces && !m_incoming.contains(id) && bigIncoming())
         return 429;   // three GIFs over 3.2 MB already coming in: memory stays bounded
@@ -2766,6 +2782,7 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     Incoming &inc = m_incoming[id];
     if (inc.parts.isEmpty()) {
         inc.from = fromKey;
+        inc.stranger = !contact;
         inc.started = now();
         if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file") && FileLink::nameOk(o.value(QStringLiteral("fn"))))
             inc.file = o.value(QStringLiteral("fn")).toString();

@@ -16,6 +16,9 @@ import Huginn
 Item {
     id: more
     property string where: ""
+    // Another chat opened: a photo shown full size or a video message playing was the last chat's, so it closes
+    // (it stayed over the new chat until clicked).
+    onWhereChanged: { photos = []; photoAt = 0; if (videoId !== "") closeVideo() }
     property string title: ""
     property bool tour: false
     property var photos: []          // an album open full size

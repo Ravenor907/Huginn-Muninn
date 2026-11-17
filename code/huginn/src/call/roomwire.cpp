@@ -167,6 +167,18 @@ QHash<QString, QStringList> RoomWire::Presence::rooms(const QString &g, qint64 n
     return out;
 }
 
+QStringList RoomWire::Presence::shown(qint64 now) const
+{
+    QStringList out;
+    for (auto it = m_entries.cbegin(); it != m_entries.cend(); ++it) {
+        const int st = it->in ? heard(now - it->seen, it->beats) : 0;
+        if (st != 0)
+            out << it.key() + QLatin1Char(' ') + QString::number(st);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 void RoomWire::Presence::forgetGroup(const QString &g)
 {
     for (auto it = m_entries.begin(); it != m_entries.end();)
@@ -261,6 +273,10 @@ bool RoomWire::selfTest(const QString &vectorsPath)
         QJsonObject next = join;
         next.insert(QStringLiteral("ts"), double(t0 + kHeartbeatMs));
         expect(hb.apply(who, next, t0 + 55000, true, true) && hb.state(jg, jch, who, t0 + 70000) == 1, QStringLiteral("a heartbeat keeps them in"));
+        // What the 5-second look compares: the same while nothing aged, different once someone goes quiet or leaves.
+        expect(hb.shown(t0 + 56000) == hb.shown(t0 + 70000) && hb.shown(t0 + 70000).size() == 1
+                   && hb.shown(t0 + 55000 + kQuietMs + 1) != hb.shown(t0 + 70000) && hb.shown(t0 + 55000 + kGoneMs + 1).isEmpty(),
+               QStringLiteral("presence shown changes only as it ages"));
         Presence late;
         expect(late.apply(who, join, t0, true, false) && late.state(jg, jch, who, t0) == 0, QStringLiteral("a late copy brings nobody back"));
         Presence old;

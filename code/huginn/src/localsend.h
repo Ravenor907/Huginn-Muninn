@@ -183,6 +183,7 @@ private:
         QString fileId;
         QCryptographicHash *hash = nullptr;
         bool replied = false;
+        bool writeFailed = false;          // a piece of the file couldn't be written (a full disk)
         qint64 opened = 0, lastData = 0;   // ms: a slow or silent connection can't hold a place for long
     };
     struct InFile {

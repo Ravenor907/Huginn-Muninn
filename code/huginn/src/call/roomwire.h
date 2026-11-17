@@ -62,6 +62,8 @@ public:
     QStringList in(const QString &g, const QString &ch, qint64 nowMs) const;
     // Rooms of g with anyone in them: ch -> sorted keys.
     QHash<QString, QStringList> rooms(const QString &g, qint64 nowMs) const;
+    // Everyone in any room and how (1 in, 2 reconnecting), sorted: the same while nobody's presence has aged.
+    QStringList shown(qint64 nowMs) const;
     void forgetGroup(const QString &g);
     void clear() { m_entries.clear(); }
 

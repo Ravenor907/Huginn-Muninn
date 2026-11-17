@@ -5,6 +5,7 @@
 #include <QString>
 
 class QSoundEffect;
+class QTimer;
 
 namespace Platform
 {
@@ -33,8 +34,11 @@ public:
     static int volume();
 
 private:
+    QSoundEffect *effect();           // Linux: made when wanted, let go of a little after it last played
     QByteArray m_wav;                 // Windows: the file itself, kept while it may be playing; Linux: its header
     QByteArray m_scaled;              // Windows: the copy at the volume in use (empty at 100%), kept while it may be playing
     int m_scaledAt = 100;
-    QSoundEffect *m_effect = nullptr; // Linux
+    QString m_source;                 // Linux: the file, as QSoundEffect wants it
+    QSoundEffect *m_effect = nullptr; // Linux: only while it plays (and for 10 seconds after)
+    QTimer *m_letGo = nullptr;        // Linux
 };

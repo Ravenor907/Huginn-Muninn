@@ -446,9 +446,18 @@ class Power(private val app: Muninn) {
     private var checks = prefs.getInt("reportChecks", 0)
     private val netCounts = IntArray(NET_KEYS.size) { prefs.getInt(NET_KEYS[it], 0) }
 
+    /** The local day [reportDay] was last worked out for (ms, from and until): only a new day makes a date format again. */
+    private var dayFrom = 0L
+    private var dayUntil = 0L
+
     /** Adds the time since the last count to its kind, starting over each day. */
     @Synchronized private fun count(now: Long, next: Int) {
-        val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date(now))
+        // Called on every relay check and reconnect: the date format (a heavy object) is only needed once a day.
+        val today = if (now in dayFrom until dayUntil) reportDay else {
+            dayFrom = midnight(now)
+            dayUntil = java.util.Calendar.getInstance().apply { timeInMillis = dayFrom; add(java.util.Calendar.DAY_OF_MONTH, 1) }.timeInMillis
+            java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date(now))
+        }
         if (reportDay != today) {
             reportDay = today
             connectedMs = 0; savingMs = 0; openMs = 0; checks = 0

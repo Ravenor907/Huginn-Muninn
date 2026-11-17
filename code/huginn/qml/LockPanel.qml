@@ -241,6 +241,8 @@ Item {
     }
     onUsePatternChanged: if (visible) Qt.callLater(focusField)
     onVisibleChanged: if (visible) { wait = Vault.waitSeconds; Qt.callLater(focusField) }
+    // Already showing when Huginn starts locked: the password box takes the keyboard then too, so typing unlocks at once.
+    Component.onCompleted: if (visible) Qt.callLater(focusField)
 
     Column {
         id: intro
@@ -479,6 +481,7 @@ Item {
         border.color: input.activeFocus ? Theme.accent : Theme.line
         TextInput {
             id: input
+            activeFocusOnTab: true   // Tab and Shift+Tab move between boxes, as in every other text box
             FieldMenu {}   // right click: Cut, Copy, Paste, Select all
             anchors.fill: parent; anchors.leftMargin: Theme.px(10); anchors.rightMargin: Theme.px(10)
             verticalAlignment: TextInput.AlignVCenter

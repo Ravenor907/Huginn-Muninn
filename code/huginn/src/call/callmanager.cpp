@@ -52,6 +52,8 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
     });
     m_ticker.setInterval(1000);
     connect(&m_ticker, &QTimer::timeout, this, &CallManager::tick);
+    connect(this, &CallManager::tick, this, &CallManager::statusTextChanged);
+    connect(this, &CallManager::changed, this, &CallManager::statusTextChanged);
     // A video shared into the call: its pictures go out in the camera's place, with the camera's profile and bitrate.
     m_share = new CallShare(this);
     connect(m_share, &CallShare::frame, this, [this](const QVideoFrame &f) {

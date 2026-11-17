@@ -129,6 +129,14 @@ public:
     // Failed connections in a row before a relay rests, and for how long, so one dead relay never costs a connection a message.
     static constexpr int kRelayDownAfter = 3;
     static constexpr qint64 kRelayDownMs = 10 * 60 * 1000;
+    // The wait before a relay's listening socket connects again after its n-th failure in a row: 2 s, 4 s, 8 s ... up to a
+    // minute. One that keeps failing while another relay is open (othersLive: it's down, blocked, or refuses every
+    // connection) rests longer after kRestAfter tries: 2, 4, 8 minutes, then every kMaxRestMs, instead of a new connection
+    // every minute all day. It carries nothing the open ones don't (every sender posts to every relay), and a network
+    // change tries it again at once (reconnectNow). With none open, a minute at most. The same rule as Muninn's NetLogic.
+    static qint64 reconnectMs(int n, bool othersLive);
+    static constexpr int kRestAfter = 6;
+    static constexpr qint64 kMaxRestMs = 15 * 60 * 1000;
     // "Messages are delayed": something of mine has waited this long for any route, or waits while a relay asked us to slow
     // down limitedAgoMs ago (either -1: none).
     static bool delayed(qint64 oldestWaitingMs, qint64 limitedAgoMs);
@@ -214,6 +222,7 @@ private:
     void flushSeen();
     void noteSeen(const QByteArray &id);
     bool m_seenDirty = false;
+    bool m_seenNew = false;       // m_seen has an id the vault's copy doesn't
     bool m_cursorsHeld = false;   // round 18: cursors not written while holdCursors() said so
     qint64 m_takenAt = 0;
     QList<QByteArray> m_seen;           // what is kept in the vault (the relay thread has its own copy to skip by)

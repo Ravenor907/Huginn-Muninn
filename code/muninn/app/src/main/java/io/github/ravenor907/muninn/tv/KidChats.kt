@@ -67,7 +67,9 @@ internal object KidChats {
 
     /** The messages of conversation [k], from the private ones [convs] or the groups' [gmsgs]. */
     fun msgs(k: String, convs: Map<String, List<Chat.Msg>>, gmsgs: Map<String, List<Groups.GMsg>>): List<Chat.Msg> =
-        if (isGroup(k)) groupMsgs(gid(k), gmsgs[gid(k)].orEmpty()) else convs[k].orEmpty().filter { it.unsent.isEmpty() }
+        if (isGroup(k)) groupMsgs(gid(k), gmsgs[gid(k)].orEmpty())
+        // The TV's call sound check goes to the parents; it isn't shown on the kids' own screen as something they sent.
+        else convs[k].orEmpty().filter { it.unsent.isEmpty() && !(it.mine && it.text.startsWith(io.github.ravenor907.muninn.net.call.CallHealth.PREFIX)) }
 
     /** New messages in [k]: a group's are counted from the newest message of this device's. */
     fun unread(k: String, msgs: List<Chat.Msg>, unreadPeople: Set<String>, unreadGroups: Set<String>): Int =

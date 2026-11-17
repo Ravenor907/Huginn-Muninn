@@ -56,9 +56,12 @@ class GroupsTest {
     private val b = Phone("Moose", KeyPair(ChatCrypto.publicFrom(chat.getString("pubB")), ChatCrypto.privateFrom(chat.getString("privB"))), "b2".repeat(32))
     private val c = Phone("Bear", P256.keyPair(BigInteger(1, ByteArray(32) { 0x33 })), "c3".repeat(32))
     private val phones = listOf(a, b, c)
+    /** A fourth phone, in no group until someone adds it. */
+    private val d = Phone("Wolf", P256.keyPair(BigInteger(1, ByteArray(32) { 0x44 })), "d4".repeat(32))
+    private val everyone = phones + d
 
     init {
-        phones.forEach { it.start() }
+        everyone.forEach { it.start() }
         // A and B are contacts; C knows nobody.
         a.contacts.add(b.key); b.contacts.add(a.key)
     }
@@ -70,7 +73,7 @@ class GroupsTest {
             val now = wire.toList(); wire.clear()
             log?.addAll(now)
             for ((from, o) in now) {
-                val to = phones.first { it.key == o.to }
+                val to = everyone.first { it.key == o.to }
                 if (!to.online) continue
                 if (o.room == "gphoto") to.groups.receivedBlob(from.key, from.name, o.g, o.ch, o.id, "blob-" + o.id, o.voice)
                 else to.groups.receive(o.room, from.key, from.name, from.mailbox, JSONObject(o.plain))
@@ -256,6 +259,22 @@ class GroupsTest {
         assertNull(a.state(g).channel(news))
         assertNull(a.groups.removeChannel(g, Proto06.MAIN))   // main can't go: nothing changes
         assertNotNull(a.state(g).channel(Proto06.MAIN))
+    }
+
+    /** 1.55: an admin adds someone while the owner removes someone else at the same moment: the add isn't lost. */
+    @Test
+    fun sameMomentRemoveKeepsAnAdd() {
+        val g = family()
+        assertNull(a.groups.setAdmin(g, b.key, true)); pump()
+        val v = a.state(g).v
+        assertNull(a.groups.remove(g, c.key))
+        assertNull(b.groups.addDirect(g, d.key, "Wolf", d.mailbox))
+        pump()
+        same(g, a, b)
+        val s = a.state(g)
+        assertTrue(s.v > v)
+        assertFalse(s.has(c.key))
+        assertTrue("the add made again on top of the owner's remove", s.has(d.key))
     }
 
     @Test

@@ -2275,6 +2275,7 @@ void FileLink::onDatagram(Xfer *x)
         quint16 port = 0;
     };
     QList<Raw> batch;
+    const QString xid = x->id;
     while (x->sock && x->sock->hasPendingDatagrams()) {
         const QNetworkDatagram d = x->sock->receiveDatagram(2048);
         Busy::count("file link datagrams received");
@@ -2283,8 +2284,13 @@ void FileLink::onDatagram(Xfer *x)
         const QByteArray bytes = d.data();
         const QHostAddress from = d.senderAddress();
         const quint16 port = quint16(d.senderPort());
-        if (x->probe && x->probe->take(bytes, from, port))
+        if (x->probe && x->probe->take(bytes, from, port)) {
+            // The STUN answer runs what waited for it at once, and that can end the transfer (no route left, the
+            // part file couldn't be made): x is deleted then, and nothing more of it may be read.
+            if (m_x.value(xid) != x)
+                return;
             continue;
+        }
         if (x->key.isEmpty())
             continue;
         batch.append(Raw{bytes, from, port});

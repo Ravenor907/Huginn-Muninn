@@ -664,8 +664,12 @@ QPair<int, QByteArray> Move::handle(const QByteArray &body)
         return {200, compact({{QStringLiteral("state"), st}, {QStringLiteral("missing"), m}, {QStringLiteral("m"), MoveWire::mac(k, QStringLiteral("status|") + st + QLatin1Char('|') + h)}})};
     }
     if (t == QLatin1String("link")) {
-        // Only right after the move (10 minutes), and only once the person says yes to "Link [name]?".
-        if (!done || QDateTime::currentMSecsSinceEpoch() - s.value(QStringLiteral("at")).toInteger() > kLinkMs) {
+        // Only right after the move (10 minutes), and only once the person says yes to "Link [name]?". Asked before the
+        // move is done (anyone on this network can ask, nothing here is checked yet): refused, and the move going on
+        // is left as it is.
+        if (!done)
+            return {409, "{}"};
+        if (QDateTime::currentMSecsSinceEpoch() - s.value(QStringLiteral("at")).toInteger() > kLinkMs) {
             store(QStringLiteral("in"), {});
             return {403, "{}"};
         }

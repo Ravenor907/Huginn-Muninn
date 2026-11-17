@@ -20,5 +20,13 @@ class AppVerTest {
         assertEquals("Could you update Muninn? You're on an older version.", AppVer.askText("Muninn 1.4 · Android TV"))
         assertEquals(listOf("GIFs"), AppVer.missing(setOf("g1", "k1"), setOf("g1", "a1", "k2")))
         assertEquals(emptyList<String>(), AppVer.missing(emptySet(), setOf("a1")))
+        // 1.55: who says a file is done only once it's saved, and who isn't known yet.
+        assertEquals(true, AppVer.doneAfterSave("Muninn 1.54 · Android phone/tablet"))
+        assertEquals(true, AppVer.doneAfterSave("Muninn 1.55 · Android TV"))
+        assertEquals(false, AppVer.doneAfterSave("Muninn 1.53 · Android phone/tablet"))
+        assertEquals(false, AppVer.doneAfterSave("Huginn 1.55 · Windows/Linux"))
+        assertEquals(false, AppVer.doneAfterSave("Huginn · Linux"))
+        assertNull(AppVer.doneAfterSave("Muninn · Android phone/tablet"))
+        assertNull(AppVer.doneAfterSave(""))
     }
 }

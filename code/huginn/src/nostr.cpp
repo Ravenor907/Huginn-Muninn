@@ -215,8 +215,10 @@ QJsonObject Nostr::event(int kind, const QJsonArray &tags, const QString &conten
 
 QStringList Nostr::defaultRelays()
 {
+    // The fifth was relay.nostr.band until it stopped answering. Older apps still list it, and they share the other four:
+    // every sender posts to every relay on its list, so messages between versions still meet on those.
     return {QStringLiteral("wss://relay.damus.io"), QStringLiteral("wss://nos.lol"), QStringLiteral("wss://relay.primal.net"),
-            QStringLiteral("wss://nostr.mom"), QStringLiteral("wss://relay.nostr.band")};
+            QStringLiteral("wss://nostr.mom"), QStringLiteral("wss://relay.nos.social")};
 }
 
 // ------------------------------------------------------------------ the relay thread
@@ -341,6 +343,7 @@ private:
     QHash<QString, Link> m_links;      // exactly one socket per relay
     QSet<QString> m_live;              // relays whose socket is open
     QHash<QString, int> m_retries;
+    QHash<QString, quint32> m_retryTurn;   // per relay: which wait (gone) may open it again; older ones do nothing
     QHash<QString, Sender> m_senders;
     QList<Out> m_outbox;
     QHash<QString, int> m_relayFails;           // failed connections in a row, per relay
@@ -569,11 +572,14 @@ void NostrWorker::gone(const QString &url, QWebSocket *ws)
     if (!m_keepAlive || m_down)
         return;
     Busy::count(QStringLiteral("relay reconnects: ") + hostOf(url));
-    // Try again: 2 s, 4 s, 8 s ... up to a minute between tries.
+    // Try again: 2 s, 4 s, 8 s ... up to a minute between tries; longer for one that keeps failing while others are open.
     const int n = m_retries.value(url) + 1;
     m_retries.insert(url, n);
-    QTimer::singleShot(qMin(60, 1 << qMin(n, 6)) * 1000, this, [this, url] {
-        if (m_keepAlive && !m_down)
+    // Only the newest wait opens it: one set before an early reopen (reconnectNow, a send with no relay open) that failed
+    // again never opens it ahead of its new wait.
+    const quint32 turn = ++m_retryTurn[url];
+    QTimer::singleShot(int(Nostr::reconnectMs(n, !m_live.isEmpty())), this, [this, url, turn] {
+        if (m_keepAlive && !m_down && m_retryTurn.value(url) == turn)
             open(url);
     });
 }
@@ -788,11 +794,20 @@ void NostrWorker::commitCursors()
     if (m_cursorWait.isEmpty() || !m_working.isEmpty())
         return;
     if (!m_refused) {
-        for (auto it = m_cursorWait.cbegin(); it != m_cursorWait.cend(); ++it)
+        // A relay that reconnects with nothing new brings the same cursor back: nothing to tell (or save).
+        bool moved = false;
+        for (auto it = m_cursorWait.cbegin(); it != m_cursorWait.cend(); ++it) {
+            const auto was = m_eoseAt.constFind(it.key());
+            if (was != m_eoseAt.cend() && was.value() == it.value())
+                continue;
             m_eoseAt.insert(it.key(), it.value());
-        m_batch.eose = m_eoseAt;
-        m_batch.eoseChanged = true;
-        deliverSoon();
+            moved = true;
+        }
+        if (moved) {
+            m_batch.eose = m_eoseAt;
+            m_batch.eoseChanged = true;
+            deliverSoon();
+        }
     }
     m_cursorWait.clear();
 }
@@ -1056,9 +1071,10 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
             }
             s->open = true;
             relayReached(url);
-            for (const QString &m : std::as_const(s->queue))
+            // Taken out first: a write that fails at once drops this sender (and its entry) before the loop ends.
+            const QStringList queued = std::exchange(s->queue, QStringList());
+            for (const QString &m : queued)
                 ws->sendTextMessage(m);
-            s->queue.clear();
         });
         connect(ws, &QWebSocket::disconnected, this, [this, url, ws] {
             Busy::ThreadScope busy("relay thread: sending");
@@ -1088,12 +1104,19 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
         });
         it = m_senders.insert(url, Sender{ws, {}, false, closer});
         ws->open(QUrl(url));
+        // open() can fail on the spot (no TLS on this computer: OpenSSL didn't load), and its error handler has then
+        // dropped this sender, entry and all: `it` points at nothing. The outbox sends it again later.
+        it = m_senders.find(url);
+        if (it == m_senders.end() || it->ws != ws)
+            return;
     }
     if (it->closer)
         it->closer->start();   // starts the few minutes again
     if (it->open && it->ws) {
+        // The socket itself, not `it`: a write that fails at once drops the sender (and its entry) mid-loop.
+        QWebSocket *ws = it->ws;
         for (const QString &m : msgs)
-            it->ws->sendTextMessage(m);
+            ws->sendTextMessage(m);
     } else {
         it->queue << msgs;
     }
@@ -1300,6 +1323,14 @@ qint64 Nostr::spreadRetryMs(int round)
     return round >= 0 && round < int(sizeof(waits) / sizeof(waits[0])) ? waits[round] : -1;
 }
 
+qint64 Nostr::reconnectMs(int n, bool othersLive)
+{
+    const qint64 base = qMin<qint64>(60000, qint64(1000) << qBound(1, n, 6));
+    if (!othersLive || n <= kRestAfter)
+        return base;
+    return qMax(base, qMin(kMaxRestMs, qint64(60000) << qMin(n - kRestAfter, 4)));
+}
+
 bool Nostr::refusedForGood(const QString &reason)
 {
     for (const char *p : {"blocked", "invalid", "pow", "restricted", "error"}) {
@@ -1466,12 +1497,14 @@ void Nostr::flushSeen()
 {
     if (!m_seenDirty && !m_cursorsHeld)
         return;
-    const bool seenDirty = m_seenDirty;
+    const bool seenDirty = m_seenDirty && m_seenNew;
     m_seenDirty = false;
     if (!seenDirty) {
-        // Only the held cursors are due.
+        // Only the cursors are due (held ones, or a relay's that moved): the list of up to 20000 taken events is
+        // written again only when it has a new one.
     } else if (keepSeenLater) {
         // Made into JSON and written on the saving thread, from a copy of the list taken now.
+        m_seenNew = false;
         const QList<QByteArray> seen = m_seen;
         keepSeenLater([seen] {
             QJsonArray ids;
@@ -1480,6 +1513,7 @@ void Nostr::flushSeen()
             return QJsonDocument(QJsonObject{{QStringLiteral("seen"), ids}}).toJson(QJsonDocument::Compact);
         });
     } else if (keepSeen) {
+        m_seenNew = false;
         QJsonArray ids;
         for (const QByteArray &id : std::as_const(m_seen))
             ids.append(QString::fromLatin1(id.toHex()));
@@ -1512,16 +1546,19 @@ void Nostr::restoreSeen(const QByteArray &stored)
             all << id;
         }
     }
-    // Then what came while the vault was locked.
+    // Then what came while the vault was locked (written with the next save).
     for (const QByteArray &id : std::as_const(m_seen))
         if (!have.contains(id)) {
             have.insert(id);
             all << id;
+            m_seenNew = true;
         }
     while (all.size() > kMaxSeen)
         have.remove(all.takeFirst());
     m_seen = all;
     m_seenSet = have;
+    if (m_seenNew)
+        noteSeenSoon();
     post([all](NostrWorker *w) { w->restoreSeen(all); });
 }
 
@@ -1531,6 +1568,7 @@ void Nostr::noteSeen(const QByteArray &id)
         return;
     m_seen << id;
     m_seenSet.insert(id);
+    m_seenNew = true;
     while (m_seen.size() > kMaxSeen)
         m_seenSet.remove(m_seen.takeFirst());
 }
@@ -1918,6 +1956,11 @@ bool Nostr::threadSelfTest()
             });
             waitFor([&] { return n.m_eoseAt.contains(slow); }, 3000);
             check("the cursor never runs ahead of the newest event", n.m_eoseAt.value(slow) == then && !n.m_eoseAt.contains(empty));
+            // The same relay again with nothing new (a reconnect): the same cursor, so nothing is handed over or saved.
+            const int was = n.m_batches;
+            n.post([slow, eose](NostrWorker *w) { w->feed(slow, eose); });
+            waitFor([] { return false; }, 400);
+            check("a cursor that didn't move is not handed over again", n.m_batches == was && n.m_eoseAt.value(slow) == then);
         }
 
         // A page EOSE with no page asked for is ignored: it never moves a relay's cursor.
@@ -1931,6 +1974,15 @@ bool Nostr::threadSelfTest()
         check("each relay is sent a message again until it stores it", spreadRetryMs(0) == 10000 && spreadRetryMs(4) == 900000 &&
               spreadRetryMs(5) == -1 && spreadRetryMs(-1) == -1);
         check("what nobody waits on gets fewer tries", kSpreadLightRounds < kSpreadRounds && spreadRetryMs(kSpreadRounds) == -1);
+        // A relay that keeps failing: the first tries as quick as ever (2 s ... a minute), then, while another relay is
+        // open, 2, 4, 8 minutes and every 15 minutes at most; with none open, a minute at most (as Muninn's NetLogicTest).
+        bool rests = true;
+        for (int i = 1; i <= kRestAfter; ++i)
+            rests = rests && reconnectMs(i, true) == reconnectMs(i, false);
+        check("a relay that keeps failing while others are open rests up to 15 minutes", rests && reconnectMs(1, true) == 2000 &&
+              reconnectMs(5, true) == 32000 && reconnectMs(6, true) == 60000 && reconnectMs(7, true) == 2 * 60000 &&
+              reconnectMs(8, true) == 4 * 60000 && reconnectMs(9, true) == 8 * 60000 && reconnectMs(10, true) == kMaxRestMs &&
+              reconnectMs(1000, true) == kMaxRestMs && reconnectMs(1000, false) == 60000 && reconnectMs(7, false) == 60000);
         check("the delayed line shows after a wait, or while a relay asks us to slow down", delayed(20000, -1) && !delayed(19999, -1) &&
               delayed(1000, 5000) && !delayed(1000, 120000) && !delayed(-1, 5000));
         check("only a lasting refusal stops a relay being sent it", refusedForGood(QStringLiteral("blocked: no 1059")) &&

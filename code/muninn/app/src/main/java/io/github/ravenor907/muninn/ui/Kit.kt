@@ -331,7 +331,11 @@ fun Field(value: String, onChange: (String) -> Unit, hint: String, modifier: Mod
     Box(modifier.fillMaxWidth().clip(Corner).background(Palette.groundDeep).border(1.dp, Palette.lineMuted, Corner).padding(12.dp)) {
         if (value.isEmpty()) Text(hint, style = Type.normal.copy(color = Palette.textFaint))
         BasicTextField(value, onChange, singleLine = single,
-            keyboardOptions = if (done != null) keyboard.copy(imeAction = androidx.compose.ui.text.input.ImeAction.Done) else keyboard,
+            // A password box with nothing to submit (the first of two): the keyboard's key goes on to the next box,
+            // where before it typed nothing and stayed, so "Type it again" had to be found by hand.
+            keyboardOptions = if (done != null) keyboard.copy(imeAction = androidx.compose.ui.text.input.ImeAction.Done)
+                else if (secret && single && (keyboard.imeAction == androidx.compose.ui.text.input.ImeAction.Default || keyboard.imeAction == androidx.compose.ui.text.input.ImeAction.Unspecified)) keyboard.copy(imeAction = androidx.compose.ui.text.input.ImeAction.Next)
+                else keyboard,
             keyboardActions = if (done != null) androidx.compose.foundation.text.KeyboardActions(onDone = { done() }) else androidx.compose.foundation.text.KeyboardActions.Default,
             textStyle = Type.normal.copy(color = Palette.text),
             cursorBrush = SolidColor(Palette.accent),

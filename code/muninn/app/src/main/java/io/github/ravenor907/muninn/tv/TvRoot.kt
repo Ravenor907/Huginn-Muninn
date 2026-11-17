@@ -357,22 +357,24 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     val person = cfg.contacts.firstOrNull { it.k == open } ?: KidChats.groups(app, groupsAll, null).firstOrNull { it.k == open }
     val context = LocalContext.current
     // What's still off on the TV, checked every few seconds (a parent's request may have opened Android's settings):
-    // an update waiting for "install" goes in once it's allowed, and a change is reported to the parents' phones.
-    LaunchedEffect(Unit) {
-        var last: Set<String>? = null
-        while (true) {
-            val now = TvUpdate.needs(context).map { it.id }.toSet()
-            if ("install" !in now) TvUpdate.resume(context)
-            if (last != null && now != last) KidTv.permsChanged(app)
-            last = now
-            delay(3000)
-        }
+    // an update waiting for "install" goes in once it's allowed, and a change is reported to the parents' phones. Only
+    // while Muninn is on screen (at once on the way back from Android's settings): with the TV asleep or another app
+    // open it asked Android about the microphone and three permissions every 3 seconds all day. The hourly update check
+    // still installs a waiting update meanwhile.
+    val lastNeeds = remember { arrayOfNulls<Set<String>>(1) }
+    io.github.ravenor907.muninn.ui.EveryWhileShown(3000) {
+        val now = TvUpdate.needs(context).map { it.id }.toSet()
+        if ("install" !in now) TvUpdate.resume(context)
+        val last = lastNeeds[0]
+        if (last != null && now != last) KidTv.permsChanged(app)
+        lastNeeds[0] = now
     }
     val tv = remember { KidMode.isTv(context) }
     // k11 (7.18): a quiet time on now (checked every half minute): only the parents show, and only they get through.
     // Round 17: looked at every few seconds (it was half a minute), so a quiet time starts on time, also right after the
-    // device wakes.
-    val quiet by produceState(KidTv.quietNow(), cfg) { while (true) { value = KidTv.quietNow(); delay(5_000) } }
+    // device wakes. While Muninn is on screen, and at once on the way back.
+    var quiet by remember(cfg) { mutableStateOf(KidTv.quietNow()) }
+    io.github.ravenor907.muninn.ui.EveryWhileShown(5_000, cfg) { quiet = KidTv.quietNow() }
     val shown = person?.takeIf { KidRules.passes(it.k, cfg.parents, quiet) }
     if (person != null && shown == null) LaunchedEffect(person.k) { TvNav.home() }
     var parent by remember { mutableStateOf(false) }

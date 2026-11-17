@@ -334,6 +334,53 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         FileLink.relayed(id, f, false)   // its card in Transfers follows the message
     }
 
+    // 1.55: declared before init, which already uses them (Kotlin sets properties in the order they're written): further
+    // down they were still null at start, so the first relay events could throw and be lost, and file offers kept from
+    // before a restart came back half made.
+    /**
+     * 1.54: reactions and edits that came before their message (the relays hand the newest over first): held here for
+     * [MxPending.HOLD_MS] and applied when the message lands ([addPrivate]).
+     */
+    private val mxPending = MxPending()
+    private val familyLock = Any()
+    /**
+     * 1.54: true while an envelope the relays (or the locked store) held is handled: after being offline or locked, a
+     * sender's messages all come at once, so the per-sender limits are [BACKLOG_RATE] times higher for them.
+     */
+    private val backlog = ThreadLocal.withInitial { false }
+    /** Someone joining a group by code, not a contact yet: the caps their envelope said. */
+    private val envCaps = ConcurrentHashMap<String, Set<String>>()
+    // "Always from this person" (cap f2, on this phone only): their files arrive without asking.
+    private val alwaysStore = File(context.filesDir, "files-always.json")
+    private val always: MutableSet<String> by lazy {
+        java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>()).also { set ->
+            try { vault.read(alwaysStore)?.let { SafeJson.arr(it) }?.let { a -> for (i in 0 until a.length()) set.add(a.getString(i)) } } catch (_: Exception) {}
+        }
+    }
+
+    // 1.55: these too. Each is used while an envelope is taken in (or by the file host, or the minute's sweep), and init
+    // already lets envelopes in (the Wi-Fi port, Bluetooth, the relays) on other threads: declared further down they were
+    // still null then, so an early piece or message hit one, threw, and was marked seen and lost.
+    private val _blocked = MutableStateFlow(id.muted())
+    val blocked: StateFlow<Set<String>> = _blocked.asStateFlow()
+    private val incoming = ConcurrentHashMap<String, Incoming>()
+    private val pieceTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
+    /** One video id kept at a time (two copies arriving at once never undo each other). */
+    private val bigLocks = ConcurrentHashMap<String, Any>()
+    private val UUID_FORM = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    /** What the call relay carried this month (MediaRoute), this device's count and the one all devices report to the Worker. */
+    val meter by lazy { RelayMeter(context) }
+    private val filesStore = File(context.filesDir, "files-log.json")
+    private val _files = MutableStateFlow<List<SharedFile>>(emptyList())
+    /** Every chat's Files, oldest first, kept as long as the longest a chat keeps messages (on this phone only). */
+    val sharedFiles: StateFlow<List<SharedFile>> = _files.asStateFlow()
+    private var filesLoaded = false
+    /** Relay files turned down (sender|message id), and when each sender was last told why. */
+    private val oldFilesSeen: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val oldFilesTold = ConcurrentHashMap<String, Long>()
+    /** When [sweepCache] last ran. */
+    @Volatile private var cacheSwept = 0L
+
     init {
         load()
         // My longer videos still "sending" when Muninn closed: Not sent, until a kept copy goes again (that clears it).
@@ -444,6 +491,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun logFile(where: String, name: String, size: Long, uri: String, mine: Boolean) = this@Chat.logFile(where, name, size, uri, mine)
             // Cap f3 (27.7): resume and long waits.
             override fun resumes(peer: String) = FileLink.RESUME_CAP in capsOf(peer) || envCaps[peer]?.contains(FileLink.RESUME_CAP) == true
+            override fun doneAfterSave(peer: String): Boolean? = try { AppVer.doneAfterSave(contacts.get(peer)?.app.orEmpty()) } catch (_: Exception) { null }
             // A big file waiting for Accept or Decline: a notification as a message gets (it waits up to a day).
             override fun offered(where: String, from: String, text: String) {
                 // A 1:1 offer from someone who isn't a contact: their chosen name is marked, never shown as a contact's.
@@ -1088,9 +1136,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
-    private val _blocked = MutableStateFlow(id.muted())
-    val blocked: StateFlow<Set<String>> = _blocked.asStateFlow()
-
     /** Removes a contact (and anyone met close by) for good; the chat stays unless deleted too. */
     fun removeContact(peerKey: String) {
         val was = contacts.get(peerKey)
@@ -1732,10 +1777,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         /** When its last piece came: one that stops coming lets its place go after [PIECES_QUIET_MS]. */
         @Volatile var touched = started
     }
-    private val incoming = ConcurrentHashMap<String, Incoming>()
-    private val pieceTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
 
     fun photo(photoId: String): ByteArray? = vault.readBytes(File(photosDir, photoId))
+
+    /**
+     * How big [photoId]'s stored file is (0: not there, or not written yet): a picture already decoded from it is found
+     * by this, without reading and decrypting the whole file again each time its bubble scrolls into view.
+     */
+    fun photoSize(photoId: String): Long = if (photoId.isEmpty()) 0L else try { File(photosDir, photoId).length() } catch (_: Exception) { 0L }
 
     // ------------------------------------------------------------------ longer videos in the chat (Family and trusted)
 
@@ -1825,15 +1874,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             } finally { if (theirs != null) bigLocks.remove(theirs) }
         }
     }
-    /** One video id kept at a time (two copies arriving at once never undo each other). */
-    private val bigLocks = ConcurrentHashMap<String, Any>()
     /**
      * A kept picture, voice or video by its id; null for an id that isn't a plain name (it could reach outside the
      * folder). Every id that comes in is checked where it arrives too; this is the second line.
      */
     private fun blobFile(id: String): File? = if (ChatWire.blobIdOk(id)) File(photosDir, id) else null
-    private val UUID_FORM = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-
 
     /** My own longer video, in the chat at once ("sending" until a copy arrives). Its id, or null when it can't be kept. */
     fun ownBigVideo(peerOrGroup: String, group: Boolean, file: File, ms: Int): String? {
@@ -1906,8 +1951,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun mediaRouteOf(chat: String): String? = flags.all.value.routes[chat]
     fun setMediaRoute(chat: String, c: String?) = flags.setRoute(chat, c)
     private fun mediaRoute(chat: String) = MediaRoute.chosen(mediaRouteOf(chat), mediaRouteAll)
-    /** What the call relay carried this month (MediaRoute), this device's count and the one all devices report to the Worker. */
-    val meter by lazy { RelayMeter(context) }
 
     fun sendFile(peerKey: String, file: File, name: String, id: String? = null): String? {
         val clean = cleanFileName(name)
@@ -1966,13 +2009,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         FileLink.failed(k, name, file.length(), FileLink.noPathWhy(k).let { if (it == FileLink.NO_PATH) "$it. Try again when you're on the same Wi-Fi or online." else it }, card, g, retry = file.takeIf { it.isFile })
     }
 
-    // "Always from this person" (cap f2, on this phone only): their files arrive without asking.
-    private val alwaysStore = File(context.filesDir, "files-always.json")
-    private val always: MutableSet<String> by lazy {
-        java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>()).also { set ->
-            try { vault.read(alwaysStore)?.let { SafeJson.arr(it) }?.let { a -> for (i in 0 until a.length()) set.add(a.getString(i)) } } catch (_: Exception) {}
-        }
-    }
     fun filesAlways(k: String) = k in always
     fun setFilesAlways(k: String, on: Boolean) {
         if ((if (on) always.add(k) else always.remove(k))) try { vault.write(alwaysStore, JSONArray(always.toList()).toString()) } catch (_: Exception) {}
@@ -1980,11 +2016,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** One file in a chat's Files: sent or received there, and where it is ([uri], empty for a file I sent). */
     data class SharedFile(val where: String, val name: String, val size: Long, val uri: String, val mine: Boolean, val time: Long)
-    private val filesStore = File(context.filesDir, "files-log.json")
-    private val _files = MutableStateFlow<List<SharedFile>>(emptyList())
-    /** Every chat's Files, oldest first, kept as long as the longest a chat keeps messages (on this phone only). */
-    val sharedFiles: StateFlow<List<SharedFile>> = _files.asStateFlow()
-    private var filesLoaded = false
     private fun loadFiles() = synchronized(filesStore) {
         if (filesLoaded) return@synchronized
         filesLoaded = true
@@ -2142,10 +2173,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (n > Photos.MAX_PIECES && !incoming.containsKey(msgId) && bigIncoming()) return 429 to "{}"
         return opened(o, fromKey, dup) { part -> takePiece(o, fromKey, name, via, msgId, n, i, mailbox, part) }
     }
-
-    /** Relay files turned down (sender|message id), and when each sender was last told why. */
-    private val oldFilesSeen: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-    private val oldFilesTold = ConcurrentHashMap<String, Long>()
 
     /** An older app's relay file ([fn]) from [fromKey]: a card says why here, and a contact is told once in 6 hours. */
     private fun oldRelayFile(fromKey: String, msgId: String, fn: String, contact: Boolean): Boolean {
@@ -2561,12 +2588,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (done) linkChanged(peerKey, msgId)
         return null
     }
-
-    /**
-     * 1.54: reactions and edits that came before their message (the relays hand the newest over first): held here for
-     * [MxPending.HOLD_MS] and applied when the message lands ([addPrivate]).
-     */
-    private val mxPending = MxPending()
 
     /** A reaction or edit from them, already checked (Rich.check). */
     private fun takeMx(fromKey: String, name: String, p: JSONObject) {
@@ -3157,7 +3178,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (from.size != f0 || drop.isNotEmpty()) try { vault.write(fromFile, JSONArray().apply { from.forEach { put(it) } }.toString()) } catch (_: Exception) {}
         Unit
     }
-    private val familyLock = Any()
 
     /** Invites a contact to group [g]. Null when sent, else what to tell the person. */
     fun inviteToGroup(g: String, peerKey: String): String? {
@@ -3419,11 +3439,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return true
     }
 
-    /**
-     * 1.54: true while an envelope the relays (or the locked store) held is handled: after being offline or locked, a
-     * sender's messages all come at once, so the per-sender limits are [BACKLOG_RATE] times higher for them.
-     */
-    private val backlog = ThreadLocal.withInitial { false }
     private fun rate(max: Int) = if (backlog.get() == true) max * BACKLOG_RATE else max
 
     private fun receiveGroupPiece(o: JSONObject, fromKey: String, name: String): Pair<Int, String> {
@@ -3562,9 +3577,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** A chat was opened: anything past its limit goes now, off the main thread. */
     fun pruneSoon() = bg { prune() }
 
-    /** Someone joining a group by code, not a contact yet: the caps their envelope said. */
-    private val envCaps = ConcurrentHashMap<String, Set<String>>()
-
     fun hasD1(peerKey: String) = contacts.get(peerKey)?.caps?.contains(Limits.CAP) == true
 
     /** In my Family or Work folder: I may keep our chat longer than 7 days. */
@@ -3599,7 +3611,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** Pictures and files made for sending or opening (camera shots, files on their way): gone after 7 days. */
-    @Volatile private var cacheSwept = 0L
     private fun sweepCache() {
         val now = System.currentTimeMillis()
         // Once an hour is plenty (it rides on the minute's prune).

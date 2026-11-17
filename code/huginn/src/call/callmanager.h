@@ -35,7 +35,7 @@ class CallManager : public QObject
     Q_PROPERTY(bool inCall READ inCall NOTIFY changed)
     Q_PROPERTY(QString peerKey READ peerKey NOTIFY changed)
     Q_PROPERTY(QString peerName READ peerName NOTIFY changed)
-    Q_PROPERTY(QString statusText READ statusText NOTIFY changed)
+    Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(int elapsed READ elapsed NOTIFY tick)
     Q_PROPERTY(bool muted READ muted NOTIFY changed)
     Q_PROPERTY(bool peerMuted READ peerMuted NOTIFY changed)
@@ -153,6 +153,8 @@ public:
 Q_SIGNALS:
     void changed();
     void tick();
+    // The status line ("Connected · 1:05"): on any change and every second, so the time keeps counting in a quiet call.
+    void statusTextChanged();
     void historyChanged();
     void shareChanged();
     // A 1:1 call ended and went into the history (result: "answered", "missed" or how it ended): main.cpp puts it in

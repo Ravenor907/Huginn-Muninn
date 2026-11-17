@@ -908,7 +908,9 @@ class CallMedia(
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { health.tried(src, "no open"); try { rec?.release() } catch (_: Exception) {}; return null }
         if (!live(g)) { try { rec.release() } catch (_: Exception) {}; return null }
         // Kids' TV: echo canceller, noise suppression and gain (TvVoice), or a louder microphone without it.
-        val a = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId, micRate, trackRate, Opus.RATE, g)
+        // 1.55: the speaker is made after the first microphone: until then its planned rate (as 1.53), so TvVoice's own
+        // resampler serves the call rather than the plain stretch.
+        val a = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId, micRate, if (track == null) playRate else trackRate, Opus.RATE, g)
         if (!live(g)) {
             io.github.ravenor907.muninn.tv.TvMic.release(a)
             try { rec.release() } catch (_: Exception) {}
@@ -946,6 +948,10 @@ class CallMedia(
     private fun micLoop(first: AudioRecord?, g: Long) {
         var rec = first
         var idx = 0
+        // 1.55: kept for the whole call, not made again with each recorder: the zeros' longer runs and the most reopens
+        // per call (and the read errors' gap) only hold that way. A quiet TV room used to reopen it every 4 seconds.
+        val errors = CallLogic.MicErrors()
+        val zeros = CallLogic.ZeroRun()
         try {
             while (live(g)) {
                 if (rec == null) {
@@ -955,7 +961,7 @@ class CallMedia(
                     record = rec
                     tvGain?.delay(echoDelay())
                 }
-                val why = captureLoop(rec, g)
+                val why = captureLoop(rec, g, errors, zeros)
                 try { rec.stop() } catch (_: Exception) {}
                 try { rec.release() } catch (_: Exception) {}
                 if (record === rec) record = null
@@ -975,7 +981,7 @@ class CallMedia(
         }
     }
 
-    private fun captureLoop(rec: AudioRecord, g: Long): MicEnd {
+    private fun captureLoop(rec: AudioRecord, g: Long, errors: CallLogic.MicErrors, zeros: CallLogic.ZeroRun): MicEnd {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         val enc = try { Opus.Encoder() } catch (e: Throwable) { return MicEnd.STOPPED }
         val pcm = ShortArray(Opus.FRAME)
@@ -988,8 +994,6 @@ class CallMedia(
         val tv = tvGain
         val tvMic = tv != null || io.github.ravenor907.muninn.tv.TvMic.active || tvRoute
         val raw = if (tv != null && tv.captureFrame != Opus.FRAME) ShortArray(tv.captureFrame) else pcm
-        val errors = CallLogic.MicErrors()
-        val zeros = CallLogic.ZeroRun()
         try {
             // Already recording: openMic started it to know the source works.
             while (live(g)) {
@@ -1101,7 +1105,7 @@ class CallMedia(
                 var len = if (tv != null && tv.playRate == rate) tv.render(pcm, out) else 0
                 // No processor (or it closed, or runs at another rate): the plain frame, stretched to the speaker's rate.
                 if (len <= 0) {
-                    if (tv != null) tv.render(pcm, ShortArray(tv.playFrame))   // the echo canceller still hears it
+                    if (tv != null && tv.processed) tv.render(pcm, ShortArray(tv.playFrame))   // the echo canceller still hears it
                     len = stretch(pcm, out, want)
                 }
                 val w = try { t.write(out, 0, len) } catch (_: Exception) { AudioTrack.ERROR_DEAD_OBJECT }   // blocking: the audio clock paces this loop

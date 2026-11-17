@@ -123,4 +123,33 @@ class FileLinkTest {
         s.ack(below, bits)
         assertEquals(300, s.due(0).first())
     }
+
+    /** 1.55: their DONE didn't come: counted as sent only for an app not known yet that didn't go on checking. */
+    @Test fun silenceAfterEveryPieceWasAcked() {
+        // Muninn 1.54 and newer says it after saving: no DONE means it didn't take there.
+        assertFalse(FileLink.sentWithoutDone(late = true, checking = false))
+        assertFalse(FileLink.sentWithoutDone(late = true, checking = true))
+        // Huginn or an older Muninn (never waited for, as before 1.54).
+        assertTrue(FileLink.sentWithoutDone(late = false, checking = false))
+        // Not known yet (someone only in a group): its DONEs may all have been lost, unless it went on checking.
+        assertTrue(FileLink.sentWithoutDone(late = null, checking = false))
+        assertFalse(FileLink.sentWithoutDone(late = null, checking = true))
+    }
+
+    /** 1.55: offers waiting for an answer: people who aren't contacts can't fill every place. */
+    @Test fun strangersCantFillEveryOfferPlace() {
+        fun open(vararg who: Pair<String, Int>, stranger: Boolean) = who.flatMap { (k, n) -> List(n) { k to stranger } }
+        // A contact: up to 20 of their own.
+        assertTrue(FileLink.askRoom(open("mum" to 19, stranger = false), "mum", false))
+        assertFalse(FileLink.askRoom(open("mum" to 20, stranger = false), "mum", false))
+        // Someone who isn't a contact: 5 of their own, and 10 from all such people together.
+        assertTrue(FileLink.askRoom(open("x" to 4, stranger = true), "x", true))
+        assertFalse(FileLink.askRoom(open("x" to 5, stranger = true), "x", true))
+        val strangers = open("x" to 5, "y" to 5, stranger = true)
+        assertFalse(FileLink.askRoom(strangers, "z", true))
+        // Their places taken, a contact's file still has room, up to 40 in all.
+        assertTrue(FileLink.askRoom(strangers, "mum", false))
+        assertTrue(FileLink.askRoom(strangers + open("mum" to 20, "dad" to 9, stranger = false), "gran", false))
+        assertFalse(FileLink.askRoom(strangers + open("mum" to 20, "dad" to 10, stranger = false), "gran", false))
+    }
 }

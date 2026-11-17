@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn
 
 import io.github.ravenor907.muninn.net.Limits
 import io.github.ravenor907.muninn.net.NetLogic
+import io.github.ravenor907.muninn.net.Nostr
 import io.github.ravenor907.muninn.net.PowerLogic
 import io.github.ravenor907.muninn.net.RelaySpread
 import org.junit.Assert.assertEquals
@@ -79,6 +80,33 @@ class NetLogicTest {
     }
 
     @Test
+    fun aCursorThatMovedALittleIsntWrittenOnItsOwn() {
+        val t = 1_761_500_000L
+        assertTrue(NetLogic.cursorWorthSaving(null, t))                               // nothing saved for this relay yet
+        assertFalse(NetLogic.cursorWorthSaving(t, t + 30))                            // the next keepalive answer
+        assertFalse(NetLogic.cursorWorthSaving(t, t + NetLogic.CURSOR_SAVE_S - 1))
+        assertTrue(NetLogic.cursorWorthSaving(t, t + NetLogic.CURSOR_SAVE_S))
+        assertTrue(NetLogic.cursorWorthSaving(t, t - 1))                              // moved back (the relay's clock)
+        // Far less than what a relay is asked for again after a restart anyway.
+        assertTrue(NetLogic.CURSOR_SAVE_S * 10 <= NetLogic.SINCE_SLACK_S)
+    }
+
+    @Test
+    fun aRelayThatKeepsFailingWhileOthersAreOpenRests() {
+        // The first tries are as quick as ever, others open or not.
+        for (n in 1..NetLogic.REST_AFTER) assertEquals(NetLogic.reconnectMs(n, 0), NetLogic.reconnectMs(n, 0, othersLive = true))
+        // Then 2, 4, 8 minutes, and every 15 minutes at most: not a new connection every minute all day.
+        assertEquals(2 * 60_000L, NetLogic.reconnectMs(7, 0, othersLive = true))
+        assertEquals(4 * 60_000L, NetLogic.reconnectMs(8, 0, othersLive = true))
+        assertEquals(8 * 60_000L, NetLogic.reconnectMs(9, 0, othersLive = true))
+        assertEquals(NetLogic.MAX_REST_MS, NetLogic.reconnectMs(10, 0, othersLive = true))
+        assertEquals(NetLogic.MAX_REST_MS, NetLogic.reconnectMs(1_000, 0, othersLive = true))
+        // Nothing else open (no signal, or every relay down): a minute at most, so messages come back soon.
+        assertEquals(60_000L, NetLogic.reconnectMs(1_000, 0, othersLive = false))
+        assertEquals(60_000L, NetLogic.reconnectMs(1_000, 50, othersLive = false))
+    }
+
+    @Test
     fun refusedHoldsOnlyThatRelaysCursor() {
         val refused = setOf("wss://a")
         assertFalse(NetLogic.cursorMoves("wss://a", true, refused, false))   // it held something back
@@ -148,6 +176,22 @@ class NetLogicTest {
         // Fewer failures and staying open still come first.
         assertEquals(listOf("a"), PowerLogic.pick(relays, health + ("b" to PowerLogic.Health(failures = 1, pingsPerHour = 0)) +
             ("c" to PowerLogic.Health(live = false)), 1))
+    }
+
+    @Test
+    fun keepsARelayOlderAppsPostToWhenSavingBattery() {
+        // The newer relay is open, the quickest and the quietest, but an older app's messages never go there: one of the
+        // shared relays is kept, so those arrive live, not only at the next inbox check.
+        val all = Nostr.DEFAULT_RELAYS
+        val newer = all.single { it in Nostr.NEWER_RELAYS }
+        val health = all.associateWith { PowerLogic.Health(live = true, pingsPerHour = 60, connectMs = 1_500L, newer = it == newer) } +
+            (newer to PowerLogic.Health(live = true, pingsPerHour = 0, connectMs = 300L, newer = true))
+        assertEquals(listOf(all[0]), PowerLogic.pick(all, health, 1))
+        // Every shared relay failing: the newer one is kept rather than none that works.
+        val failing = health.mapValues { (url, h) -> if (url == newer) h else h.copy(failures = 1, live = false) }
+        assertEquals(listOf(newer), PowerLogic.pick(all, failing, 1))
+        // Keeping every relay is unchanged.
+        assertEquals(all, PowerLogic.pick(all, health, null))
     }
 
     @Test

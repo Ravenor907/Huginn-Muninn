@@ -42,8 +42,6 @@ class CallService : Service() {
     private var foreground = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Cleared before the call is looked at: a hang-up from here on stops the service as usual (see stop).
-        starting = false
         val ui = CallManager.call.value
         val hidden = CallPrivacy.lockedNow(applicationContext as? Muninn, false)
         if (intent?.action == UPDATE && foreground && lastPhase == ui?.phase && lastHidden == hidden) return START_NOT_STICKY
@@ -65,7 +63,12 @@ class CallService : Service() {
                 try { ServiceCompat.startForeground(this, Ringer.ONGOING_ID, n, t); foreground = true } catch (_: Exception) {}
             }
         }
-        if (ui == null || ui.phase == CallSession.Phase.ENDED || !foreground) {
+        // Cleared only once it went foreground (1.55: building the notification can take half a second, and a hang-up
+        // then stopped the service before that, which closed Muninn), then the call is looked at again: a hang-up from
+        // here on stops the service as usual (see stop).
+        starting = false
+        val now = CallManager.call.value
+        if (now == null || now.phase == CallSession.Phase.ENDED || !foreground) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
         }

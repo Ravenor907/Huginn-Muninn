@@ -35,6 +35,8 @@ object Drafts {
     /** Round 17: goes up when a photo or video finished after its camera screen went (a fold, a new window), so the new one shows it. */
     val cameraRev = kotlinx.coroutines.flow.MutableStateFlow(0)
     @Volatile private var loaded = false
+    /** The saved drafts were read (see [load]). */
+    val isLoaded: Boolean get() = loaded
     @Volatile private var dirty = false
     private val lock = Any()
 

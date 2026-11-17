@@ -146,11 +146,18 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
             Spacer(Modifier.weight(1f))
             return@Column
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+        // A smaller phone (or larger text) with two rows of buttons once the call is on: the picture and the gaps shrink
+        // so the name and the time always show; before, they scrolled out of sight under a clipped picture.
+        BoxWithConstraints(Modifier.weight(1f)) {
+        val tight = maxHeight < 380.dp
+        val top = if (tight) 12.dp else 56.dp
+        val below = if (tight) 16.dp else 36.dp
+        val pic = (maxHeight - top - below - 96.dp).coerceIn(96.dp, 176.dp)
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
             val name = CallPrivacy.title(c.name, hideName, c.phase == Phase.INCOMING, c.videoCall)
-            Spacer(Modifier.height(56.dp))
-            Avatar(if (hideName) "" else c.peerKey, name, c.peerSpeaking && c.phase == Phase.LIVE)
-            Spacer(Modifier.height(36.dp))
+            Spacer(Modifier.height(top))
+            Avatar(if (hideName) "" else c.peerKey, name, c.peerSpeaking && c.phase == Phase.LIVE, pic)
+            Spacer(Modifier.height(below))
             Text(name, style = Type.title.copy(fontSize = 30.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold), maxLines = 1,
                 overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 340.dp))
             Spacer(Modifier.height(6.dp))
@@ -164,6 +171,7 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
             }
             if (c.note.isNotEmpty() && c.phase != Phase.ENDED) Text(c.note, style = Type.small.copy(color = Palette.danger), textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 10.dp))
+        }
         }
         Buttons(c, video, onMessage, onAnswer, onAnswerVideo, onCamera, 30.dp)
     }
@@ -425,12 +433,12 @@ private fun clock(s: Long) = if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 
 
 /** The person's picture or initial ([key] "" while the name is hidden: a plain disc, no picture). Two soft rings; the inner one brightens while they speak. */
 @Composable
-private fun Avatar(key: String, name: String, speaking: Boolean) {
-    Box(Modifier.size(176.dp).clip(CircleShape).background(CallColors.ring2), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(156.dp).clip(CircleShape).background(if (speaking) Palette.goldTint else CallColors.ring1), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(136.dp).clip(CircleShape).semantics { contentDescription = if (speaking) "$name is speaking" else name },
+private fun Avatar(key: String, name: String, speaking: Boolean, size: Dp = 176.dp) {
+    Box(Modifier.size(size).clip(CircleShape).background(CallColors.ring2), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(size * (156f / 176f)).clip(CircleShape).background(if (speaking) Palette.goldTint else CallColors.ring1), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(size * (136f / 176f)).clip(CircleShape).semantics { contentDescription = if (speaking) "$name is speaking" else name },
                 contentAlignment = Alignment.Center) {
-                io.github.ravenor907.muninn.ui.Avatar(key, name, 136.dp)
+                io.github.ravenor907.muninn.ui.Avatar(key, name, size * (136f / 176f))
             }
         }
     }
