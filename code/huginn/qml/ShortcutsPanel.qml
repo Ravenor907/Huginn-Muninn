@@ -123,13 +123,17 @@ Item {
                                     model: modelData.keys
                                     Item {
                                         width: parent.width
-                                        height: Theme.px(34)
+                                        // Taller for a name on two lines ("Push to talk (Settings › Calls › Voice rooms)" was cut).
+                                        height: Math.max(Theme.px(34), keyName.implicitHeight + Theme.px(10), cap.height + Theme.px(10))
                                         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.seam }
                                         Text {
+                                            id: keyName
                                             textFormat: Text.PlainText
                                             anchors.left: parent.left
                                             anchors.right: cap.left; anchors.rightMargin: Theme.px(10)
                                             anchors.verticalCenter: parent.verticalCenter
+                                            wrapMode: Text.Wrap
+                                            maximumLineCount: 3
                                             elide: Text.ElideRight
                                             text: modelData[0]
                                             color: Theme.textSoft

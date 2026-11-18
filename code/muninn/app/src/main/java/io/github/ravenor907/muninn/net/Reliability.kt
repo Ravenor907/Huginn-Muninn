@@ -80,6 +80,35 @@ object NetBackoff {
 }
 
 /**
+ * NIP-42 sign-in requests (a relay's "AUTH" challenge), per socket. A relay may send its challenge again with every request
+ * it refuses: relay.damus.io asks for a sign-in on every inbox request and then can't take one ("relay needs serviceUrl").
+ * Answering each challenge with sign-ins and the inbox asked again brought one more challenge per request, without end: a
+ * full core busy all day, with the radio. So a challenge is answered once per socket, and the inbox is asked for again after
+ * a sign-in once per socket (as Huginn does). A refused inbox request is still asked again now and then ([NetLogic.reask]).
+ */
+class SignIns {
+    enum class Answer {
+        /** This challenge was answered on this socket already: nothing more. */
+        NONE,
+        /** A new challenge: sign in with it. */
+        SIGN_IN,
+        /** The first one on this socket: sign in, then ask for the inbox again (it may only be handed out now). */
+        SIGN_IN_AND_ASK
+    }
+    private val answered = HashMap<Any, String>()
+    private val asked = HashSet<Any>()
+
+    /** [challenge] came on [socket]: what to do about it. */
+    @Synchronized fun challenge(socket: Any, challenge: String): Answer {
+        if (answered.put(socket, challenge) == challenge) return Answer.NONE
+        return if (asked.add(socket)) Answer.SIGN_IN_AND_ASK else Answer.SIGN_IN
+    }
+
+    /** The socket ended. */
+    @Synchronized fun ended(socket: Any) { answered.remove(socket); asked.remove(socket) }
+}
+
+/**
  * Asking a relay for the inbox in pages, as Huginn's nostr.cpp does: a relay hands over at most its own limit of
  * stored events (some cap well below 100), so any answer with events in it is followed by a request for the ones
  * before its oldest (`until`), until a page brings nothing older. Only then is the relay's EOSE cursor moved on.

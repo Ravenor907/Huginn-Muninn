@@ -178,8 +178,10 @@ Window {
     }
     // The rail's +: the same three rows as the chat list's + (and Muninn's): New chat, New group, Add someone (its page
     // has My code, One-time link, Paste a code and Join a group).
+    // Join a group here too: a copied invite says "choose + then Join a group" (it was only under Add someone).
     readonly property var plusItems: [{ name: "New chat", icon: "thread", url: "newchat" },
                                       { name: "New group", icon: "people", url: "group" },
+                                      { name: "Join a group", icon: "forward", url: "join" },
                                       { name: "Add someone", icon: "plus", url: "addpage" }]
     function plusMenu() { Ui.pickFrom("Add", [{ header: "", items: plusItems }], a => plusAction(a)) }
     function plusAction(a) {
@@ -188,6 +190,7 @@ Window {
         if (a === "group") newGroup()
         else if (a === "newchat") { openPage("dms", {}); later("newChat") }
         else if (a === "addpage") { openPage("dms", {}); later("addPage") }
+        else if (a === "join") { openPage("dms", {}); later("joinGroup") }
     }
     function newGroup() {
         if (!Vault.exists) { Ui.say("Set a lock first.", true); openPage("dms", {}); return }

@@ -3122,7 +3122,8 @@ bool FileLink::canCancel(const QString &id) const
 
 bool FileLink::canRetry(const QString &id) const
 {
-    if (m_x.contains(id))
+    // Still running (a failed one is shown just before it's let go: its Retry shows then too).
+    if (const Xfer *x = m_x.value(id); x && x->state != QLatin1String("failed"))
         return false;
     for (const QVariantMap &e : m_list)
         if (e.value(QStringLiteral("id")).toString() == id)
@@ -3133,7 +3134,7 @@ bool FileLink::canRetry(const QString &id) const
 
 void FileLink::retry(const QString &id)
 {
-    if (!canRetry(id))
+    if (m_x.contains(id) || !canRetry(id))
         return;
     QString peer, path, group, bigChat, bigMsg;
     int vid = 0;
@@ -3254,16 +3255,23 @@ bool FileLink::showInFolder(const QString &path) const
 
 // ------------------------------------------------------------------ pause, always, and each chat's Files (cap f2)
 
+// Done or failed: nothing to pause or resume. Its card is shown (put) a moment before end() lets it go, and nothing
+// asks again after, so a sent file's card kept Pause and Cancel under "Sent · Saved in their Downloads".
+static bool over(const QString &state)
+{
+    return state == QLatin1String("done") || state == QLatin1String("failed");
+}
+
 bool FileLink::canPause(const QString &id) const
 {
     const Xfer *x = m_x.value(id);
-    return x && (x->moving || (x->onTor && x->stream)) && !x->paused;
+    return x && !over(x->state) && (x->moving || (x->onTor && x->stream)) && !x->paused;
 }
 
 bool FileLink::canResume(const QString &id) const
 {
     const Xfer *x = m_x.value(id);
-    return x && x->paused;
+    return x && !over(x->state) && x->paused;
 }
 
 void FileLink::pause(const QString &id)

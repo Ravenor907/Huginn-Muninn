@@ -2630,7 +2630,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun queueMx(peerKey: String, plain: String) {
         val env = UUID.randomUUID().toString()
         mxOut[env] = peerKey to System.currentTimeMillis()
-        tries[env] = Tries(0, 0)
+        // Not due until it's sealed: the retry loop (woken just below) found it due at once, found no envelope yet and
+        // dropped it, so the reaction, edit or vote never left. attemptMx, once the envelope is made, sets the next try.
+        tries[env] = Tries(0, NetLogic.NEVER)
         wakeRetry()
         saveMx()
         bg {
@@ -2640,11 +2642,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     private fun attemptMx(env: String) {
-        val (k, _) = mxOut[env] ?: return
+        val (k, at) = mxOut[env] ?: return
         val t = tries.getOrPut(env) { Tries(0, 0) }
         t.count++
         schedule(t)
-        val body = outbox.get(env) ?: run { mxOut.remove(env); saveMx(); return }
+        // Not sealed yet: a refresh or someone coming nearby can make it due while queueMx is still making the envelope
+        // (that try follows on its own). Only one with no envelope a minute on is dropped.
+        val body = outbox.get(env) ?: run { if (System.currentTimeMillis() - at < 60_000L) return; mxOut.remove(env); saveMx(); return }
         spread(k, body, false, t.count, contacts.get(k)?.mailbox ?: _met.value[k]?.mailbox, publishNow(t), heldBy(t))
     }
 

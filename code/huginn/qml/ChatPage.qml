@@ -314,8 +314,11 @@ Rectangle {
         // The first time this chat opens: how long its messages are kept (said once).
         if (openKey !== "" && !tour && !locked) { const keep = Chat.keepNoteOnce(openKey); if (keep !== "") Ui.say(keep) }
     }
-    // Read only counts when someone is actually looking: not while a game is in front.
-    onMessagesChanged: if (openKey !== "" && !locked && Qt.application.state === Qt.ApplicationActive) Chat.markRead(openKey)
+    // Read only counts when someone is actually looking: not while a game is in front. A moment later, not inside the
+    // list's own update: marking read says the chats changed at once, which asked for this list again while it was
+    // still being set (a binding loop on messages).
+    onMessagesChanged: Qt.callLater(page.markOpenRead)
+    function markOpenRead() { if (openKey !== "" && !locked && Qt.application.state === Qt.ApplicationActive) Chat.markRead(openKey) }
     onSideSelChanged: if (sideSel >= 0) sideList.positionViewAtIndex(sideSel, ListView.Contain)
     onSideChanged: {
         sideSel = -1
@@ -340,8 +343,9 @@ Rectangle {
     }
 
     // ============================================================= middle column: the list
-    // The desktop can hide it (Ctrl+Shift+L); the controller still opens it with Left.
-    readonly property bool listHidden: !middle.visible
+    // The desktop can hide it (Ctrl+Shift+L); the controller still opens it with Left. Saved media, the camera, a photo
+    // or the Shared page cover it too: then your panel at the bottom left goes (it hid the start of Saved media's bar).
+    readonly property bool listHidden: !middle.visible || moreLayer.busy
     Rectangle {
         id: middle
         // Portrait: the list on its own, until a chat opens (the lock shows in the main column).
@@ -924,6 +928,7 @@ Rectangle {
             // Files on their way to or from them (cap f1).
             FileStrip {
                 id: fileStrip
+                z: 1   // over the messages: a row that runs past the list's foot was drawn over the file's card
                 peer: page.tour ? "" : page.openKey
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                 anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
@@ -931,6 +936,7 @@ Rectangle {
             // Find in this chat: over the messages, which start under it.
             FindBar {
                 id: finder
+                z: 1
                 anchors.top: keep.visible ? keep.bottom : parent.top
                 anchors.left: parent.left; anchors.right: parent.right
                 anchors.margins: Theme.px(12)
@@ -948,17 +954,34 @@ Rectangle {
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
                 spacing: 0
                 model: messageModel
-                onCountChanged: positionViewAtEnd()
+                onCountChanged: { positionViewAtEnd(); atNewest = true }
+                // At the end, it stays there when the newest grows after it came (an album filling in, a link preview):
+                // a sent or received album was left half under the message box. Scrolled up (or a Find jump), nothing
+                // moves. (While the rows are still being laid out the height reads 0: that move says nothing.)
+                property bool atNewest: true
+                onContentYChanged: if (contentHeight > 0) atNewest = atYEnd
+                // (atYEnd still reads true here: the end is worked out from the new height.)
+                onContentHeightChanged: if (atNewest && contentY + height < originY + contentHeight - 1) positionViewAtEnd()
+                // A file's card or Find opening under or over it (or a smaller window) doesn't hide the newest either.
+                onHeightChanged: if (atNewest && contentY + height < originY + contentHeight - 1) positionViewAtEnd()
                 delegate: Rectangle {
                     id: msg
-                    readonly property bool picked: page.active && page.zone === "messages" && page.sel === index
+                    // index is -1 once the row is gone from the chat (another chat opened, old messages expired): such a
+                    // row is never picked and never the first unread one (page.sel and page.newFrom are -1 for "none").
+                    readonly property bool picked: index >= 0 && page.active && page.zone === "messages" && page.sel === index
                     // The "New messages" line sits over the first unread one.
-                    readonly property int lineH: index === page.newFrom ? Theme.px(30) : 0
+                    readonly property int lineH: index >= 0 && index === page.newFrom ? Theme.px(30) : 0
                     // Grouped under the one before (same person within 7 minutes): no name or picture again.
                     readonly property bool grouped: page.groupedAt(index)
                     readonly property int gap: grouped ? Theme.px(1) : Theme.px(Theme.compact ? 4 : Theme.spacious ? 16 : 10)
                     width: list.width
-                    height: modelData.system ? note.height + Theme.px(12) : lineH + gap + Math.max(face.visible ? face.height : 0, col.implicitHeight) + Theme.px(grouped ? 2 : 4)
+                    // A row on its way out keeps its height: a removed row that changed size (index -1 is never grouped)
+                    // was lost by the list, never taken away, and stayed drawn over the next chat's rows.
+                    Binding on height {
+                        when: index >= 0
+                        value: !!modelData && modelData.system ? note.height + Theme.px(12) : msg.lineH + msg.gap + Math.max(face.visible ? face.height : 0, col.implicitHeight) + Theme.px(msg.grouped ? 2 : 4)
+                        restoreMode: Binding.RestoreNone
+                    }
                     radius: 0
                     // Find in this chat: every match lit, the one shown more.
                     readonly property bool found: finder.visible && finder.hits.indexOf(index) >= 0
@@ -1474,15 +1497,18 @@ Rectangle {
                    t => { Chat.sendPrivate(k, t, re); page.replyId = "" })
         }
     }
-    // The + beside the title (and the rail's): New chat, New group and Add someone, the same as Muninn's +.
+    // The + beside the title (and the rail's): New chat, New group, Join a group and Add someone, as Muninn's + (a
+    // copied invite says "choose + then Join a group").
     function addMenu() {
         if (locked) return
         Ui.pickFrom("Add", [{ header: "", items: [{ name: "New chat", icon: "thread", url: "chat" },
                                                  { name: "New group", icon: "people", url: "group" },
+                                                 { name: "Join a group", icon: "forward", url: "join" },
                                                  { name: "Add someone", icon: "plus", url: "add" }] }], a => {
             if (tour) return
             if (a === "chat") newChat()
             else if (a === "group") { if (Ui.main) Ui.main.newGroup() }
+            else if (a === "join") joinGroup()
             else if (a === "add") addPage(() => page.addMenu())
         })
     }

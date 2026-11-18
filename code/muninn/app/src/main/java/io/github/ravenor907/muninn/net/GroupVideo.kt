@@ -225,7 +225,7 @@ object GroupVideo {
     const val FULL = "full"
     /** The 720p copy through FileLink. New apps only. */
     const val SMALL = "small"
-    /** The old relay copy, paced. Older apps only. */
+    /** The old relay copy, paced: older apps, and a new app with no other way to it now (a short video only). */
     const val RELAY = "relay"
     /** Gets nothing: an older app and a video over 20 seconds, or over 5 minutes with no direct path. */
     const val NONE = "none"
@@ -272,7 +272,8 @@ object GroupVideo {
         return listOfNotNull(
             full.takeIf { it.isNotEmpty() }?.let { "Full quality to ${names(it)}." },
             small.takeIf { it.isNotEmpty() }?.let { "A 720p copy to ${names(it)}." },
-            relay.takeIf { it.isNotEmpty() }?.let { "A smaller copy (720p, up to 20 seconds) to ${names(it)}, whose app is older." },
+            // Not "whose app is older": a new app with no direct way to it (a Folk contact far away) gets this copy too.
+            relay.takeIf { it.isNotEmpty() }?.let { "A smaller copy (720p, up to 20 seconds) to ${names(it)}." },
             none.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: their app is older. Ask them to update." },
             unreached.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: no way to reach them with this one now. Try on the same Wi-Fi." },
         ).joinToString(" ").ifEmpty { "Nobody else is here yet." }

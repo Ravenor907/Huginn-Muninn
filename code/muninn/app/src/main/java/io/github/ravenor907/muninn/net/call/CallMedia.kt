@@ -952,6 +952,11 @@ class CallMedia(
         // per call (and the read errors' gap) only hold that way. A quiet TV room used to reopen it every 4 seconds.
         val errors = CallLogic.MicErrors()
         val zeros = CallLogic.ZeroRun()
+        // 1.56: a phone's zeros, the same way: only a long run, each later one twice as long, a few per call. 1.54-1.55
+        // took the audio mode back and restarted the recorder after every 250 ms of zeros; a phone whose microphone gives
+        // zeros while it starts (or its noise suppressor in a quiet room) restarted it three times a second, and each
+        // restart's own zeros began the next: no sound either way for the whole call.
+        val phoneZeros = CallLogic.phoneZeroRun()
         try {
             while (live(g)) {
                 if (rec == null) {
@@ -961,7 +966,9 @@ class CallMedia(
                     record = rec
                     tvGain?.delay(echoDelay())
                 }
-                val why = captureLoop(rec, g, errors, zeros)
+                val why = captureLoop(rec, g, errors, zeros, phoneZeros)
+                // A new recorder starts a new run of zeros (errors or a stuck read in between aren't zeros).
+                phoneZeros.frame(false, System.currentTimeMillis())
                 try { rec.stop() } catch (_: Exception) {}
                 try { rec.release() } catch (_: Exception) {}
                 if (record === rec) record = null
@@ -981,7 +988,11 @@ class CallMedia(
         }
     }
 
-    private fun captureLoop(rec: AudioRecord, g: Long, errors: CallLogic.MicErrors, zeros: CallLogic.ZeroRun): MicEnd {
+    /** When a phone last took the call's audio mode back from another app (captureLoop). */
+    @Volatile private var modeRetakenAt = 0L
+
+    private fun captureLoop(rec: AudioRecord, g: Long, errors: CallLogic.MicErrors, zeros: CallLogic.ZeroRun,
+                            phoneZeros: CallLogic.ZeroRun): MicEnd {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         val enc = try { Opus.Encoder() } catch (e: Throwable) { return MicEnd.STOPPED }
         val pcm = ShortArray(Opus.FRAME)
@@ -1022,15 +1033,23 @@ class CallMedia(
                     val reopen = zeros.frame(allZero, now)
                     if (zeros.seen) health.zerosSeen = true
                     if (reopen) return MicEnd.ZEROS
-                } else if (allZero) {
-                    // A phone: after about 250 ms of exact zeros, quietly take the call's audio mode back and restart the
-                    // same recorder. No message: it must not interrupt.
-                    if (++zeroFrames == 12) try {
-                        audio.mode = AudioManager.MODE_IN_COMMUNICATION
-                        rec.stop(); rec.startRecording()
-                    } catch (_: Exception) {}
-                    if (zeroFrames > 12) zeroFrames = 0
-                } else zeroFrames = 0
+                } else {
+                    // A phone, quietly (no message: it must not interrupt). After 250 ms of exact zeros the audio mode is
+                    // looked at once: another app took it (not a network call: that keeps it), so it's taken back and the
+                    // recorder restarted, at most every 2 seconds. Setting a mode that's still ours re-routes the call's
+                    // sound, so a mode that's fine is left alone and only a long run of zeros restarts the recorder.
+                    if (allZero) zeroFrames++ else zeroFrames = 0
+                    var restart = phoneZeros.frame(allZero, now)
+                    if (zeroFrames == 12) {
+                        val mode = try { audio.mode } catch (_: Exception) { AudioManager.MODE_IN_COMMUNICATION }
+                        if (mode != AudioManager.MODE_IN_COMMUNICATION && mode != AudioManager.MODE_IN_CALL && now - modeRetakenAt >= 2_000L) {
+                            modeRetakenAt = now
+                            try { audio.mode = AudioManager.MODE_IN_COMMUNICATION } catch (_: Exception) {}
+                            restart = true
+                        }
+                    }
+                    if (restart) try { rec.stop(); rec.startRecording() } catch (_: Exception) {}
+                }
                 if (tv != null && !tv.capture(raw, pcm)) continue
                 // A video shared into the call: its sound goes out under the voice (lower while this side talks).
                 val shared = CallShare.sendQ.poll()

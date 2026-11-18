@@ -166,6 +166,9 @@ internal fun KeepChoices(app: Muninn, key: String, name: String, folders: List<F
         DetailChip(r, if (r == "None") inRole == null else inRole == r, m) { setRole(app, key, if (r == "None") null else r) }
     }
     Text(roleWords(inRole), style = Type.small, modifier = Modifier.padding(top = 6.dp))
+    // Read here so a tap on 7, 14 or 30 days (and their answer) redraws: both numbers come from the contact, which
+    // nothing else on this page watches, so the old choice stayed lit until the page was opened again.
+    app.chat.contacts.all.collectAsState().value
     if (app.chat.contacts.contact(key) == null) return
     val days = app.chat.chatDays(key)
     if (app.chat.isClose(key)) {

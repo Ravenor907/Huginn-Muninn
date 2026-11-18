@@ -482,6 +482,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val reaskedAt = ConcurrentHashMap<String, Long>()
     /** Sockets that already asked again once after an "auth-required" CLOSED (as Huginn does, once per socket). */
     private val authRetried: MutableSet<WebSocket> = ConcurrentHashMap.newKeySet<WebSocket>()
+    /** Sign-in challenges answered, per socket (each once). */
+    private val signIns = SignIns()
 
     /** Signs in again (when the relay asked) and asks for the inbox again, on the socket open now. */
     private fun reaskInbox(url: String, ws: WebSocket, now: Long = android.os.SystemClock.elapsedRealtime()) {
@@ -743,11 +745,17 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 }
                 // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
                 "AUTH" -> {
+                    if (sockets[url] !== webSocket) return   // an old socket, closing
                     val challenge = a.optString(1)
                     challenges[url] = challenge
                     if (secret == null && ring == null && nudgeKey == null) return
-                    signIn(url, webSocket, challenge)
-                    subscribe(url, webSocket)
+                    // Once per challenge and socket: a relay that sends it again with every refused request (and takes no
+                    // sign-in) otherwise brings a new round of sign-ins and requests for each one, without end (SignIns).
+                    when (signIns.challenge(webSocket, challenge)) {
+                        SignIns.Answer.NONE -> {}
+                        SignIns.Answer.SIGN_IN -> signIn(url, webSocket, challenge)
+                        SignIns.Answer.SIGN_IN_AND_ASK -> { signIn(url, webSocket, challenge); subscribe(url, webSocket) }
+                    }
                 }
                 "OK" -> if (a.optBoolean(2)) storedAt(url, a.optString(1))
             }
@@ -811,6 +819,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         askedAt.remove(url)
         reaskedAt.remove(url)
         authRetried.remove(ws)
+        signIns.ended(ws)
         liveSince.remove(url)?.let { since -> relayMs.merge(url, android.os.SystemClock.elapsedRealtime() - since, { a, b -> a + b }) }
     }
 

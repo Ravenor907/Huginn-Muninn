@@ -186,7 +186,11 @@ bool AudioIO::startInput()
     m_inFormat = pick(dev);
     m_down.setRates(m_inFormat.sampleRate(), AudioDsp::kRate);
     m_source = new QAudioSource(dev, m_inFormat, this);
-    m_source->setBufferSize(m_inFormat.bytesForDuration(40000));
+    // 160 ms of room: the microphone is read on the main thread, and a busy moment there (a chat's list redrawn, a
+    // slower PC drawing without a graphics card) longer than the old 40 ms lost sound. The frames left were stamped as
+    // if no time had passed (the call's clock counts frames), so the other side found nearly all of them late and
+    // played silence. Reading more at once costs no delay: each frame goes out as soon as it's read.
+    m_source->setBufferSize(m_inFormat.bytesForDuration(160000));
     m_in = m_source->start();
     if (!m_in) {
         delete m_source;

@@ -77,8 +77,9 @@ Item {
     Connections { target: Vault; function onChanged() { panel.wait = Vault.waitSeconds } }
     // Round 19 (M3 handheld): a wait that just ended leaves no "Wait 5 minutes" behind: the live line says what's next.
     onWaitChanged: if (wait === 0 && bad && asks) { note = ""; bad = false }
-    // Both fields emptied, so A starts again from the first prompt (round 19, B1 handheld).
-    function clearFields() { pw.text = ""; pw2.text = "" }
+    // Both fields emptied, so A starts again from the first prompt (round 19, B1 handheld). Typing does too: Enter in
+    // Type it again left the keys there, so the new password went into the second box and failed as too short.
+    function clearFields() { pw.text = ""; pw2.text = ""; if (pw2.typing) pw.forceActiveFocus() }
 
     function saveSecret(secret, pattern, spare) {
         if (practice) {
@@ -339,7 +340,8 @@ Item {
                 id: pad
                 visible: panel.usePattern
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: Math.min(Theme.px(260), room.height, parent.width); height: width
+                // Never below 0: the room is negative for a moment while the panel is laid out (a dot can't be drawn smaller than nothing).
+                width: Math.max(0, Math.min(Theme.px(260), room.height, parent.width)); height: width
                 error: panel.bad
                 enabled: panel.wait === 0 && !panel.busy
                 onDone: d => panel.onPattern(d)
@@ -474,6 +476,7 @@ Item {
         property string placeholder
         signal enter()
         function forceActiveFocus() { input.forceActiveFocus() }
+        readonly property bool typing: input.activeFocus
         width: parent ? parent.width : 0
         height: Theme.px(40)
         radius: Theme.radius

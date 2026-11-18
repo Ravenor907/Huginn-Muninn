@@ -490,7 +490,11 @@ FocusScope {
                                         visible: !!row.e.detail && !row.e.slider
                                         anchors.right: endIcon.visible ? endIcon.left : parent.right; anchors.rightMargin: Theme.px(8)
                                         anchors.verticalCenter: parent.verticalCenter
-                                        width: Math.min(implicitWidth, line.width * 0.45)
+                                        // All the room the name doesn't need (widthFor made the menu wide enough for both), at
+                                        // least nearly half: "Removes it for both" was cut to "Removes it for..." beside Unsend.
+                                        width: Math.min(implicitWidth, Math.max(line.width * 0.45, line.width - label.implicitWidth - Theme.px(16)
+                                                        - (rowIcon.visible ? rowIcon.x + rowIcon.width + Theme.px(10) : Theme.px(8))
+                                                        - (endIcon.visible ? endIcon.width + Theme.px(6) : 0)))
                                         elide: Text.ElideRight
                                         text: row.e.detail && !row.e.slider ? String(row.e.detail) : ""
                                         color: Theme.textMuted

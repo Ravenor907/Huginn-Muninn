@@ -661,6 +661,9 @@ Rectangle {
                                 Text {
                                     textFormat: Text.PlainText
                                     width: parent.width
+                                    // A section's name takes a second line at a large Text size ("Battery and d..." was cut).
+                                    wrapMode: navRow.card ? Text.NoWrap : Text.Wrap
+                                    maximumLineCount: navRow.card ? 1 : 2
                                     elide: Text.ElideRight
                                     text: navRow.card && Ui.myName !== "" ? Ui.myName : modelData.title
                                     color: Theme.text

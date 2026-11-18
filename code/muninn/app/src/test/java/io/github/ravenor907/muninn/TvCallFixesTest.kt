@@ -71,6 +71,27 @@ class TvCallFixesTest {
     }
 
     @Test
+    fun phoneZerosNeverRetakeInALoop() {
+        // A phone microphone that gives nothing but zeros (or zeros after every restart) for a minute: a few retakes,
+        // never one every 250 ms.
+        val z = CallLogic.phoneZeroRun()
+        var t = 0L
+        val at = ArrayList<Long>()
+        repeat(60_000 / 20) { if (z.frame(true, t)) at += t; t += 20 }
+        assertEquals(1_500L, at.first())
+        assertTrue(at.size <= 3)
+        assertTrue(at.zipWithNext().all { (a, b) -> b - a >= 3_000 })
+    }
+
+    @Test
+    fun phoneQuietMomentsNeverRetake() {
+        // Short silences between words (zeros from a noise suppressor) never restart the microphone.
+        val z = CallLogic.phoneZeroRun()
+        var t = 0L
+        repeat(100) { repeat(60) { assertFalse(z.frame(true, t)); t += 20 }; assertFalse(z.frame(false, t)); t += 20 }
+    }
+
+    @Test
     fun soundBreaksAZeroRun() {
         val z = CallLogic.ZeroRun()
         var t = 0L

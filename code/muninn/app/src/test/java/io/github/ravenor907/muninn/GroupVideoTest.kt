@@ -143,7 +143,7 @@ class GroupVideoTest {
         val plan = GroupVideo.plan(listOf(wifi, trusted, far, oldFar), unmetered = false, ms = 15_000)
         assertEquals(mapOf("a" to GroupVideo.FULL, "b" to GroupVideo.SMALL, "c" to GroupVideo.SMALL, "h" to GroupVideo.RELAY), plan)
         val said = GroupVideo.summary(plan) { it.uppercase() }
-        assertTrue(said, said.contains("Full quality to A") && said.contains("720p copy to B and C.") && said.contains("to H, whose app is older"))
+        assertTrue(said, said.contains("Full quality to A") && said.contains("720p copy to B and C.") && said.contains("(720p, up to 20 seconds) to H.") && !said.contains("whose app is older"))
         assertEquals("Nobody else is here yet.", GroupVideo.summary(emptyMap()) { it })
         assertEquals("A, B and 3 more", GroupVideo.names(listOf("A", "B", "C", "D", "E")))
         // Never cut: over 5 minutes asks only when someone isn't direct; bigger than 720p asks only when someone gets a copy.

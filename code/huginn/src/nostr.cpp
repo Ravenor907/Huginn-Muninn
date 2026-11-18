@@ -373,6 +373,8 @@ private:
     QHash<QString, Page> m_pages;
     QSet<QString> m_signedIn, m_authClosed, m_askedAgain;
     QHash<QString, QString> m_challenges;
+    // Per relay: the challenge already signed for on the socket open now (each one is answered once).
+    QHash<QString, QString> m_answered;
 };
 
 void NostrWorker::deliverSoon()
@@ -471,6 +473,7 @@ void NostrWorker::open(const QString &url)
     m_signedIn.remove(url);
     m_authClosed.remove(url);
     m_askedAgain.remove(url);
+    m_answered.remove(url);
     m_eosed.remove(url);
     m_ringEosed.remove(url);
     m_liveEosed.remove(url);
@@ -899,10 +902,16 @@ void NostrWorker::onMessage(const QString &url, QWebSocket *ws, const QString &t
     } else if (type == QLatin1String("AUTH")) {
         // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
         Busy::count("relay sign-in requests");
-        m_challenges.insert(url, a.at(1).toString());
+        const QString challenge = a.at(1).toString();
+        m_challenges.insert(url, challenge);
         if (m_keys.secret.isEmpty() && m_keys.ringSecrets.isEmpty())
             return;
-        signIn(url, ws, a.at(1).toString());
+        // Once per challenge and socket: relay.damus.io sends the same one again with every request it refuses (and
+        // can't take a sign-in at all), so each of those cost another round of signatures for nothing.
+        if (m_answered.value(url) != challenge) {
+            m_answered.insert(url, challenge);
+            signIn(url, ws, challenge);
+        }
         m_signedIn.insert(url);
         // The inbox request went out when the relay opened. Asked for once more after the sign-in (a relay may hand
         // out the mailbox's events only now), unless it already sent everything it held on it.

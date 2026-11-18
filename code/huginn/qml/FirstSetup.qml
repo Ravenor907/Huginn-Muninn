@@ -427,7 +427,7 @@ Item {
                     focused: setup.lit(setup.codeShown ? "copyLink" : "showCode")
                     onClicked: setup.run(setup.codeShown ? "copyLink" : "showCode")
                 }
-                Field { id: pasteInput; focusId: "pasteField"; placeholder: "Paste a code or invite link"; onEnter: setup.addCode() }
+                Field { id: pasteInput; focusId: "pasteField"; placeholder: "Paste a code or invite link"; maximumLength: 4000; onEnter: setup.addCode() }
                 Row {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: Theme.px(8)
@@ -658,6 +658,9 @@ Item {
         property alias text: input.text
         property string placeholder
         property string focusId
+        // A name is short, but a friend's copied link is over 400 letters (its key, inbox and name), so the paste box
+        // takes more (cut short, the link fails as "That code didn't work").
+        property alias maximumLength: input.maximumLength
         signal enter()
         function forceActiveFocus() { input.forceActiveFocus() }
         // Setup's Paste (X on a controller): what's copied replaces what's typed. The on-screen keyboard has no paste.

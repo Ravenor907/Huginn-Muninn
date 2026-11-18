@@ -41,7 +41,13 @@ Rectangle {
     readonly property bool mine: !!m && !!m.mine
     // Settings › Look: Compact drops the pictures and the room between messages; Spacious adds room.
     readonly property int pad: grouped ? Theme.px(1) : Theme.px(Theme.compact ? 2 : Theme.spacious ? 8 : 5)
-    height: m.system ? note.height + Theme.px(12) : folded ? lineH + foldBox.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
+    // A row on its way out (at is its index, -1 once a list took it away) keeps its height: a removed row that changed
+    // size was lost by the list, never taken away, and stayed drawn over the next channel's rows.
+    Binding on height {
+        when: msg.at >= 0
+        value: msg.m.system ? note.height + Theme.px(12) : msg.folded ? msg.lineH + foldBox.height + Theme.px(12) : msg.lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + msg.pad * 2
+        restoreMode: Binding.RestoreNone
+    }
     // What this message has, worked out once for the parts below.
     readonly property bool live: !!m && !m.system && !m.unsent
     readonly property bool hasPhoto: !!m && !!m.photo && !m.voice && !m.file && !m.unsent && !m.video && !m.album

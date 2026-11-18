@@ -436,6 +436,13 @@ object CallLogic {
     }
 
     /**
+     * 1.56: a phone's microphone zeros (see [ZeroRun]): the first retake after 1.5 s of nothing but zeros, then 3 s, 6 s,
+     * three at most per call. A phone's microphone may give zeros while it starts, or its noise suppressor in a quiet
+     * room; a retake every 250 ms kept it starting, and the whole call silent both ways.
+     */
+    fun phoneZeroRun() = ZeroRun(runMs = 1_500L, max = 3)
+
+    /**
      * 1.54: speaker writes that fail (a dead AudioTrack after an input switch, a soundbar change or HDMI-CEC). True when
      * the speaker should be made again now: after [after] failed writes in a row, at most once every [gapMs].
      */

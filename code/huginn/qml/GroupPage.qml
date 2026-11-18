@@ -245,13 +245,16 @@ Rectangle {
     }
     // The first time this group is made or opened: how long its messages are kept (said once).
     function tellKeep() { if (!locked && !isTour && gid !== "") { const keep = Chat.keepNoteOnce("g:" + gid); if (keep !== "") Ui.say(keep) } }
-    onMessagesChanged: if (!locked && !isTour && gid !== "" && Qt.application.state === Qt.ApplicationActive) Chat.markGroupRead(gid, channelId)
+    // A moment later, not inside the list's own update (marking read says the chats changed at once: a binding loop).
+    onMessagesChanged: Qt.callLater(page.markOpenRead)
+    function markOpenRead() { if (!locked && !isTour && gid !== "" && Qt.application.state === Qt.ApplicationActive) Chat.markGroupRead(gid, channelId) }
     Component.onCompleted: { if (!locked && !isTour && gid !== "") { Chat.openChat = chatKey; Chat.markGroupRead(gid, channelId); tellKeep() } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
 
     // ============================================================= channel column
     // The desktop can hide the channel list (Ctrl+Shift+L); the controller still opens it with Left.
-    readonly property bool listHidden: !chanCol.visible
+    // Covered by Saved media, the camera, a photo or the Shared page too (your panel at the bottom left goes then).
+    readonly property bool listHidden: !chanCol.visible || moreLayer.busy
     readonly property bool membersVisible: memberCol.visible
     Rectangle {
         id: chanCol
@@ -626,6 +629,7 @@ Rectangle {
             // Find in this channel: over the messages, which start under it.
             FindBar {
                 id: finder
+                z: 1
                 anchors.top: aboutBox.visible ? aboutBox.bottom : gone.visible ? gone.bottom : parent.top
                 anchors.left: parent.left; anchors.right: parent.right
                 anchors.margins: Theme.px(12)
@@ -638,6 +642,7 @@ Rectangle {
             // Files on their way in this group (cap f2), the same cards as in Transfers.
             FileStrip {
                 id: groupFileStrip
+                z: 1   // over the messages: a row that runs past the list's foot was drawn over the file's card
                 where: page.isTour || page.gid === "" ? "" : "g:" + page.gid
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                 anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
@@ -649,16 +654,26 @@ Rectangle {
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
                 spacing: 0
                 model: messageModel
-                onCountChanged: positionViewAtEnd()
+                onCountChanged: { positionViewAtEnd(); atNewest = true }
+                // At the end, it stays there when the newest grows after it came (an album filling in, a link preview):
+                // a sent or received album was left half under the message box. Scrolled up (or a Find jump), nothing
+                // moves. (While the rows are still being laid out the height reads 0: that move says nothing.)
+                property bool atNewest: true
+                onContentYChanged: if (contentHeight > 0) atNewest = atYEnd
+                // (atYEnd still reads true here: the end is worked out from the new height.)
+                onContentHeightChanged: if (atNewest && contentY + height < originY + contentHeight - 1) positionViewAtEnd()
+                // A file's card or Find opening under or over it (or a smaller window) doesn't hide the newest either.
+                onHeightChanged: if (atNewest && contentY + height < originY + contentHeight - 1) positionViewAtEnd()
                 delegate: MessageRow {
                     host: page
                     width: list.width
                     m: modelData
                     at: index
-                    picked: page.active && page.zone === "messages" && page.sel === index
+                    // index is -1 once the row is gone (another channel opened): never picked, never the first unread one.
+                    picked: index >= 0 && page.active && page.zone === "messages" && page.sel === index
                     found: finder.visible && finder.hits.indexOf(index) >= 0 ? (finder.current === index ? 2 : 1) : 0
                     flash: page.flashId !== "" && page.flashId === modelData.id
-                    lineH: index === page.newFrom ? Theme.px(30) : 0
+                    lineH: index >= 0 && index === page.newFrom ? Theme.px(30) : 0
                     grouped: page.groupedAt(index)
                     hoverTools: !page.readOnly
                     onChosen: { page.zone = "messages"; page.sel = index }

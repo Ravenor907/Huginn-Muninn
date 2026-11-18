@@ -3,6 +3,7 @@ package io.github.ravenor907.muninn
 import io.github.ravenor907.muninn.net.ChangedOnly
 import io.github.ravenor907.muninn.net.InboxPaging
 import io.github.ravenor907.muninn.net.SeenIds
+import io.github.ravenor907.muninn.net.SignIns
 import io.github.ravenor907.muninn.net.Lru
 import io.github.ravenor907.muninn.net.MemoryBudget
 import io.github.ravenor907.muninn.net.NetBackoff
@@ -86,6 +87,36 @@ class ReliabilityTest {
         // In a call or a voice room: at once, however often the network changes.
         assertEquals(0L, NetBackoff.waitMs(50, inCall = true))
         assertEquals(NetBackoff.CAP_MS, NetBackoff.waitMs(50, inCall = false))
+    }
+
+    // ------------------------------------------------------------------ sign-in requests (NIP-42)
+
+    @Test
+    fun aChallengeSentAgainWithEveryRefusedRequestIsAnsweredOnce() {
+        // relay.damus.io: every inbox request brings its challenge again, and no sign-in is ever taken. Each one answered
+        // with sign-ins and the inbox asked again (three more requests, three more challenges) kept a core busy all day.
+        val s = SignIns()
+        val ws = Any()
+        assertEquals(SignIns.Answer.SIGN_IN_AND_ASK, s.challenge(ws, "c1"))
+        repeat(1000) { assertEquals(SignIns.Answer.NONE, s.challenge(ws, "c1")) }
+        // A new challenge on the same socket is signed for, but the inbox isn't asked again from here (the keepalive
+        // check and the "auth-required" close still ask, each at its own pace).
+        assertEquals(SignIns.Answer.SIGN_IN, s.challenge(ws, "c2"))
+        assertEquals(SignIns.Answer.NONE, s.challenge(ws, "c2"))
+        assertEquals(SignIns.Answer.SIGN_IN, s.challenge(ws, "c1"))
+    }
+
+    @Test
+    fun aNewSocketSignsInAndAsksAgain() {
+        val s = SignIns()
+        val a = Any()
+        val b = Any()
+        assertEquals(SignIns.Answer.SIGN_IN_AND_ASK, s.challenge(a, "c"))
+        // Another relay (or the next socket to the same one) with the same challenge text: its own first answer.
+        assertEquals(SignIns.Answer.SIGN_IN_AND_ASK, s.challenge(b, "c"))
+        s.ended(a)
+        assertEquals(SignIns.Answer.SIGN_IN_AND_ASK, s.challenge(a, "c"))
+        assertEquals(SignIns.Answer.NONE, s.challenge(b, "c"))
     }
 
     // ------------------------------------------------------------------ inbox pages
